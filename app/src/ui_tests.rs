@@ -269,6 +269,7 @@ fn render_at(port: u16, name: &str, shot: Option<(&Path, &str)>, (w, h): (u32, u
             .arg("--no-default-browser-check")
             .arg("--hide-scrollbars")
             .arg("--default-background-color=00000000") // the popover's window is transparent around its card
+            .arg("--lang=en-GB") // dates read the same on every machine ("11 Nov")
             .arg(format!("--user-data-dir={}", dir.join("profile").display()))
             .arg("--virtual-time-budget=10000");
     };

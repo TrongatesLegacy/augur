@@ -1,5 +1,7 @@
 //! The seeded store every test uses: 19 made-up calls (fixtures/calls.jsonl) plus saved palduels.com pages
 //! (engine/tests/pages): Bushi Noct's species page and duel #4702 (Chillet Lux vs Chikipi Ryu) with its fight tape.
+//! The picks pages (picks-page-1..3.html) are made-up bets on the seed's calls in the signed-in picks list's markup;
+//! `bets` tests import them.
 //! No network, no local data, the same on every machine and in CI.
 
 use crate::{calls, db, site};
@@ -19,6 +21,17 @@ pub fn page(name: &str) -> String {
 /// A saved live state.
 pub fn state(name: &str) -> site::State {
     serde_json::from_str(&page(name)).unwrap()
+}
+
+/// When the seed's picks list was read (ms): after every seeded call.
+pub const BETS_READ_AT: u64 = 1_794_400_000_000;
+
+/// Imports the seed's picks list (picks-page-1..3.html) into a store.
+pub fn import_bets(conn: &Connection) {
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let ctl = crate::backfill::Control { stop: &stop, busy: &|| false, progress: &|_| {} };
+    let mut pages = |n: u32, _: &mut crate::backfill::Progress| Some(page(&format!("picks-page-{n}.html")));
+    crate::bets::import(conn, &mut pages, &ctl, BETS_READ_AT).unwrap();
 }
 
 /// An in-memory store with the seed loaded.

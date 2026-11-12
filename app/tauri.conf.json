@@ -27,7 +27,7 @@
         "title": "Augur",
         "url": "tray.html",
         "width": 340,
-        "height": 480,
+        "height": 540,
         "visible": false,
         "decorations": false,
         "resizable": false,

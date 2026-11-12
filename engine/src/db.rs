@@ -1,8 +1,8 @@
 //! The SQLite store: calls (picks made live, with the fighters as seen before the bell), finished duels with their
-//! fight tapes, and every species' types, base stats and listed moves. Same schema as the research tools.
+//! fight tapes, every species' types, base stats and listed moves, and the developer's own bets.
 
 use crate::model::{Fighter, Move};
-use crate::site::{Duel, Hit, Recent, Species};
+use crate::site::{Duel, Hit, Pick, Recent, Species};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -60,7 +60,9 @@ CREATE TABLE IF NOT EXISTS predictions (   -- Augur's calls
     pal_h2h_home INTEGER, pal_h2h_away INTEGER,
     model TEXT,                        -- JSON of the model settings used
     status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'settled', 'skipped')),
-    duel_id INTEGER REFERENCES duels (id)
+    duel_id INTEGER REFERENCES duels (id),
+    stake INTEGER,                     -- credits Augur suggested betting on the pick (0: sit it out)
+    stake_cmd TEXT                     -- the chat command it suggested, e.g. !h all
 );
 CREATE TABLE IF NOT EXISTS fighters (  -- each side of a call as seen before the bell
     prediction_id INTEGER NOT NULL REFERENCES predictions (id) ON DELETE CASCADE,
@@ -74,6 +76,17 @@ CREATE TABLE IF NOT EXISTS fighters (  -- each side of a call as seen before the
     speed REAL DEFAULT 1,
     PRIMARY KEY (prediction_id, side)
 );
+CREATE TABLE IF NOT EXISTS bets (     -- the developer's own bets, from their picks list on palduels.com (signed in)
+    seq INTEGER PRIMARY KEY,           -- place in their picks history, 1 = their first bet (stable as bets are added)
+    duel_id INTEGER,                   -- recent rows link their duel; older ones don't
+    home_owner TEXT, away_owner TEXT,
+    home_pal TEXT, away_pal TEXT,
+    backed TEXT CHECK (backed IN ('home', 'away')),
+    winner TEXT,
+    stake INTEGER,                     -- credits bet
+    result INTEGER,                    -- credits won (+) or lost (-); NULL while the fight is on
+    seen_at INTEGER                    -- when Augur first read it (ms)
+);
 CREATE TABLE IF NOT EXISTS meta (      -- small key/value state: backfill progress and the like
     key TEXT PRIMARY KEY,
     value TEXT
@@ -81,7 +94,22 @@ CREATE TABLE IF NOT EXISTS meta (      -- small key/value state: backfill progre
 CREATE INDEX IF NOT EXISTS predictions_status ON predictions (status);
 CREATE INDEX IF NOT EXISTS duels_home_pal ON duels (home_pal);
 CREATE INDEX IF NOT EXISTS duels_away_pal ON duels (away_pal);
+CREATE INDEX IF NOT EXISTS bets_duel ON bets (duel_id);
 "#;
+
+/// Columns added since the first release, for stores made before them.
+const ADDED: &[(&str, &str, &str)] = &[("predictions", "stake", "INTEGER"), ("predictions", "stake_cmd", "TEXT")];
+
+fn migrate(conn: &Connection) -> Result<()> {
+    for (table, column, kind) in ADDED {
+        let has: i64 =
+            conn.query_row(&format!("SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = ?"), [column], |r| r.get(0))?;
+        if has == 0 {
+            conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind}"))?;
+        }
+    }
+    Ok(())
+}
 
 pub fn open(path: &Path) -> Result<Connection> {
     if let Some(dir) = path.parent() {
@@ -92,12 +120,14 @@ pub fn open(path: &Path) -> Result<Connection> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.execute_batch(SCHEMA)?;
+    migrate(&conn)?;
     Ok(conn)
 }
 
 pub fn open_memory() -> Result<Connection> {
     let conn = Connection::open_in_memory()?;
     conn.execute_batch(SCHEMA)?;
+    migrate(&conn)?;
     Ok(conn)
 }
 
@@ -410,6 +440,8 @@ pub struct CallRecord {
     pub fought_at: Option<String>,
     pub ko: Option<String>,
     pub winner_hp_left: Option<u32>,
+    /// what Augur suggested betting when it made the call (None for calls made before it suggested stakes)
+    pub stake: Option<u64>,
     pub fighters: Option<(CallFighter, CallFighter)>,
 }
 
@@ -467,7 +499,7 @@ pub fn settled(conn: &Connection) -> Result<Vec<CallRecord>> {
     let mut st = conn.prepare(
         "SELECT p.id, COALESCE(p.seen_at, 0), p.home_owner, p.away_owner, p.home_pal, p.away_pal, p.pick, p.prob, p.p_stats, p.p_species,
                 p.p_h2h, p.home_species_w, p.home_species_l, p.away_species_w, p.away_species_l, p.pal_h2h_home, p.pal_h2h_away,
-                p.duel_id, d.winner, d.fought_at, d.ko, d.winner_hp_left
+                p.duel_id, d.winner, d.fought_at, d.ko, d.winner_hp_left, p.stake
          FROM predictions p LEFT JOIN duels d ON d.id = p.duel_id WHERE p.status = 'settled' AND d.winner IS NOT NULL ORDER BY p.id",
     )?;
     let calls: Vec<CallRecord> = st
@@ -495,6 +527,7 @@ pub fn settled(conn: &Connection) -> Result<Vec<CallRecord>> {
                 fought_at: r.get(19)?,
                 ko: r.get(20)?,
                 winner_hp_left: r.get(21)?,
+                stake: r.get::<_, Option<i64>>(22)?.map(|v| v.max(0) as u64),
                 fighters: None,
             })
         })?
@@ -506,6 +539,74 @@ pub fn settled(conn: &Connection) -> Result<Vec<CallRecord>> {
             Ok(c)
         })
         .collect()
+}
+
+/// Saves the stake Augur suggested with a call.
+pub fn set_call_stake(conn: &Connection, id: i64, amount: u64, command: &str) -> Result<()> {
+    conn.execute("UPDATE predictions SET stake = ?1, stake_cmd = ?2 WHERE id = ?3", params![amount as i64, command, id])?;
+    Ok(())
+}
+
+// --- the developer's bets ---
+
+/// Stores picks from the picks list. Returns how many were new or changed (a result coming in).
+pub fn save_picks(conn: &Connection, picks: &[Pick], now_ms: u64) -> Result<usize> {
+    let mut changed = 0;
+    for p in picks {
+        let before: Option<(Option<i64>, Option<i64>)> =
+            conn.query_row("SELECT result, duel_id FROM bets WHERE seq = ?", [p.seq as i64], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+        if before.is_some_and(|(result, duel)| result == p.result && duel.map(|d| d as u64) == p.duel_id) {
+            continue;
+        }
+        conn.execute(
+            "INSERT INTO bets (seq, duel_id, home_owner, away_owner, home_pal, away_pal, backed, winner, stake, result, seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) ON CONFLICT (seq) DO UPDATE SET
+             duel_id = excluded.duel_id, winner = excluded.winner, result = excluded.result",
+            params![
+                p.seq as i64,
+                p.duel_id.map(|d| d as i64),
+                p.home_owner,
+                p.away_owner,
+                p.home_pal,
+                p.away_pal,
+                p.backed,
+                p.winner,
+                p.stake as i64,
+                p.result,
+                now_ms as i64
+            ],
+        )?;
+        changed += 1;
+    }
+    Ok(changed)
+}
+
+/// Every stored bet, newest first.
+pub fn bets(conn: &Connection) -> Result<Vec<Pick>> {
+    let mut st = conn.prepare(
+        "SELECT seq, duel_id, home_owner, away_owner, home_pal, away_pal, backed, winner, stake, result FROM bets ORDER BY seq DESC",
+    )?;
+    let rows = st.query_map([], |r| {
+        Ok(Pick {
+            seq: r.get::<_, i64>(0)? as u64,
+            duel_id: r.get::<_, Option<i64>>(1)?.map(|d| d as u64),
+            home_owner: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+            away_owner: r.get::<_, Option<String>>(3)?.unwrap_or_default(),
+            home_pal: r.get::<_, Option<String>>(4)?.unwrap_or_default(),
+            away_pal: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
+            backed: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
+            winner: r.get(7)?,
+            stake: r.get::<_, Option<i64>>(8)?.unwrap_or(0).max(0) as u64,
+            result: r.get(9)?,
+            ago: String::new(),
+        })
+    })?;
+    Ok(rows.collect::<Rq<_>>()?)
+}
+
+/// The oldest stored bet's place in the history (1 once everything is in), None before any import.
+pub fn oldest_bet(conn: &Connection) -> Result<Option<u64>> {
+    Ok(conn.query_row("SELECT MIN(seq) FROM bets", [], |r| r.get::<_, Option<i64>>(0))?.map(|v| v as u64))
 }
 
 /// The open call for this fight, if Augur has made one.

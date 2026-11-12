@@ -16,7 +16,7 @@ cargo run -q --release -p augur -- predict
 Lead with the pick, then:
 
 1. **Paste for chat:** all five voice lines, each under its own bold label (Yoda, Gollum, Dr. Rockso, Scooby-Doo, Daffy Duck) as a blockquote. Always all five.
-2. **Pick:** `## Pick: <pal> (<side>, <owner>), <chance>`.
+2. **Pick:** `## Pick: <pal> (<side>, <owner>), <chance>`, then the `STAKE:` line as **Bet:** the command to type and why (e.g. `!a all`, "capped at the 5,000 max", or "no bet").
 3. **A stats table:** types, HP, Attack, Defence, passives if any, species record. Bold the better value.
 4. **Three to five bullets** on what decides it: stats, type edge (count the super-effective moves), records, pal and owner head-to-head, unlisted moves if they matter.
 5. **The risk to the pick**, when there is a real one.

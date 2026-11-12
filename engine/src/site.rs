@@ -559,6 +559,123 @@ pub fn roster(user_key: &str) -> Result<Vec<BoxPal>> {
     Ok(parse_roster(&fetch(&format!("{BASE}/u/{user_key}"))?))
 }
 
+// --- your picks (/u/<name>?bp=<page>#bets, only shown when signed in) ---
+
+/// One of your bets as the picks list shows it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Pick {
+    /// its place in your whole picks history, 1 = your first bet ever (doesn't move as new bets are added)
+    pub seq: u64,
+    /// recent rows link their duel; older ones don't
+    pub duel_id: Option<u64>,
+    pub home_owner: String,
+    pub away_owner: String,
+    pub home_pal: String,
+    pub away_pal: String,
+    /// "home" or "away"
+    pub backed: String,
+    pub winner: Option<String>,
+    pub stake: u64,
+    /// credits won (+) or lost (-), None while the fight is on
+    pub result: Option<i64>,
+    /// "5h ago": the list has no dates
+    pub ago: String,
+}
+
+/// A page of the picks list. The site shows 5 a page, newest first, and has no other way to list them.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct PicksPage {
+    pub picks: Vec<Pick>,
+    pub page: u32,
+    pub pages: u32,
+    pub total: u64,
+}
+
+/// None when the page has no picks list: it's only there when signed in.
+pub fn parse_picks(page: &str) -> Option<PicksPage> {
+    let sect = between(page, r#"<section class="panel" id="bets">"#, &["</section>"])?;
+    let counts = regex!(r#"<span class="muted">([\d,]+)-([\d,]+) of ([\d,]+)</span>"#).captures(sect);
+    let n = |c: &regex::Captures, i: usize| c[i].replace(',', "").parse::<u64>().unwrap_or(0);
+    let (first, total) = counts.as_ref().map(|c| (n(c, 1), n(c, 3))).unwrap_or((1, 0));
+    let at = regex!(r"Page (\d+) of (\d+)").captures(sect);
+    let picks = sect
+        .split(r#"<li class="dl-row">"#)
+        .skip(1)
+        .enumerate()
+        .filter_map(|(i, row)| {
+            // each side from its opening tag's remaining classes ("is-won is-mark") to the end of its block
+            let half = |side: &str, until: &str| {
+                let start = format!(r#"<div class="dl-f dl-{side} "#);
+                between(row, &start, &[until]).map(|h| &h[start.len()..]).unwrap_or("")
+            };
+            let (home, away) = (half("home", r#"<span class="dl-vs">"#), half("away", r#"<div class="dl-out">"#));
+            let who = |h: &str| regex!(r#"<a class="dl-n[^"]*" href="/u/[^"]*"[^>]*>(.*?)</a>"#).captures(h).map(|c| text(&c[1]));
+            let pal = |h: &str| regex!(r#"<span class="dl-paln"[^>]*><a href="/pal/[^"]*">(.*?)</a>"#).captures(h).map(|c| text(&c[1]));
+            let classes = |h: &str| regex!(r#"^([^"]*)""#).captures(h).map(|c| c[1].to_string()).unwrap_or_default();
+            let (hc, ac) = (classes(home), classes(away));
+            let fig = |k: &str| {
+                Regex::new(&format!(r#"<span class="dl-k">{k}</span><span class="dl-v[^"]*">([^<]*)</span>"#))
+                    .unwrap()
+                    .captures(row)
+                    .map(|c| text(&c[1]).replace([',', '+'], "").replace('\u{2212}', "-"))
+            };
+            Some(Pick {
+                seq: (total + 1).saturating_sub(first + i as u64),
+                duel_id: regex!(r#"data-clip="(\d+)""#).captures(row).and_then(|c| c[1].parse().ok()),
+                home_owner: who(home)?,
+                away_owner: who(away)?,
+                home_pal: pal(home)?,
+                away_pal: pal(away)?,
+                backed: if hc.contains("is-mark") {
+                    "home"
+                } else if ac.contains("is-mark") {
+                    "away"
+                } else {
+                    return None;
+                }
+                .into(),
+                winner: if hc.contains("is-won") {
+                    Some("home".into())
+                } else if ac.contains("is-won") {
+                    Some("away".into())
+                } else {
+                    None
+                },
+                stake: fig("Credits")?.parse().ok()?,
+                result: fig("Result").and_then(|r| r.parse().ok()),
+                ago: regex!(r#"<span class="dl-when">(.*?)</span>"#).captures(row).map(|c| squash(&c[1])).unwrap_or_default(),
+            })
+        })
+        .collect();
+    Some(PicksPage {
+        picks,
+        page: at.as_ref().and_then(|c| c[1].parse().ok()).unwrap_or(1),
+        pages: at.as_ref().and_then(|c| c[2].parse().ok()).unwrap_or(1),
+        total,
+    })
+}
+
+/// Your balance from the signed-in page header ("248k credits"), to the nearest thousand when that's all it shows.
+pub fn parse_balance(page: &str) -> Option<u64> {
+    let link = regex!(r##"(?s)href="/u/[^"#]+#balance"[^>]*>(.*?)</a>"##).captures(page)?;
+    let shown = squash(&link[1]);
+    let c = regex!(r"([\d.,]+)\s*([kKmM]?)").captures(&shown)?;
+    let v: f64 = c[1].replace(',', "").parse().ok()?;
+    Some(
+        (v * match &c[2] {
+            "k" | "K" => 1e3,
+            "m" | "M" => 1e6,
+            _ => 1.0,
+        }) as u64,
+    )
+}
+
+/// A page of your picks, with the session cookie. Ok(None) when the site didn't show them (signed out).
+pub fn picks(user_key: &str, page: u32, cookie: &str) -> Result<Option<(PicksPage, Option<u64>)>> {
+    let body = fetch_once(&format!("{BASE}/u/{user_key}?bp={page}"), Some(cookie))?;
+    Ok(parse_picks(&body).map(|p| (p, parse_balance(&body))))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -621,5 +738,22 @@ mod tests {
         let nyafia = pals.iter().find(|p| p.pal == "Nyafia Primo").unwrap();
         assert_eq!(nyafia.stats["HP"], (7518.0, 89.0));
         assert_eq!(nyafia.rerolls, 0);
+    }
+
+    #[test]
+    fn picks_pages() {
+        let p = parse_picks(&page("picks-page-1.html")).unwrap();
+        assert_eq!((p.page, p.pages, p.total, p.picks.len()), (1, 3, 13, 5));
+        let newest = &p.picks[0];
+        assert_eq!((newest.seq, newest.duel_id, newest.backed.as_str()), (13, Some(9020), "home"));
+        assert_eq!((newest.stake, newest.result, newest.winner.as_deref()), (500, Some(277), Some("home")));
+        assert_eq!((newest.home_pal.as_str(), newest.away_owner.as_str(), newest.ago.as_str()), ("Lamball", "player-66", "5h ago"));
+        assert_eq!((p.picks[1].backed.as_str(), p.picks[1].result), ("away", Some(-5000)));
+        assert_eq!(p.picks[4].seq, 9);
+        assert_eq!(parse_balance(&page("picks-page-1.html")), Some(248_000));
+        let oldest = parse_picks(&page("picks-page-3.html")).unwrap();
+        assert_eq!(oldest.picks.iter().map(|p| p.seq).collect::<Vec<_>>(), [3, 2, 1]);
+        assert!(oldest.picks.iter().all(|p| p.duel_id.is_none()), "older rows have no duel link");
+        assert!(parse_picks(&page("user-trongateslegacy.html")).is_none(), "signed out, the profile has no picks list");
     }
 }

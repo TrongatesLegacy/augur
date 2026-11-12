@@ -15,7 +15,7 @@ pub const TAPES_FROM: u64 = 2980;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Progress {
-    /// "species", "duels" or "done"
+    /// "species", "duels", "bets" or "done"
     pub phase: String,
     pub done: usize,
     pub total: usize,
@@ -34,11 +34,13 @@ pub struct Control<'a> {
 /// Fetches one page at a time, with a delay that grows on every 429 and never shrinks during a run.
 pub struct Pacer {
     pub delay: Duration,
+    /// a signed-in session's Cookie header, for pages that need it (your picks)
+    pub cookie: Option<String>,
 }
 
 impl Pacer {
     pub fn new(delay: Duration) -> Self {
-        Pacer { delay }
+        Pacer { delay, cookie: None }
     }
 
     /// parse(page) for the page at url; None on 404 or when stopped.
@@ -47,7 +49,7 @@ impl Pacer {
             if ctl.stop.load(Ordering::Relaxed) {
                 return None;
             }
-            match site::fetch_once(url, None) {
+            match site::fetch_once(url, self.cookie.as_deref()) {
                 Ok(page) => {
                     std::thread::sleep(self.delay);
                     return Some(parse(&page));
@@ -78,7 +80,7 @@ fn sleep_unless_stopped(d: Duration, stop: &AtomicBool) {
 }
 
 /// Waits while a duel is up on stream, checking every 15 seconds. Returns false if stopped.
-fn wait_while_busy(ctl: &Control, p: &mut Progress) -> bool {
+pub fn wait_while_busy(ctl: &Control, p: &mut Progress) -> bool {
     while (ctl.busy)() {
         if !p.paused {
             p.paused = true;

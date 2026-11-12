@@ -123,7 +123,7 @@ The main window lays out for 1280×720 and zooms to fit any other size, so it lo
 
 Hidden stats (an owner with several of the pal) are estimated from base stats at an average IV until the bell. The crowd's picks are never used.
 
-**It tunes itself.** A few minutes after new results come in (25 more past duels or 3 more settled calls), Augur re-fits every setting: types, move power and the records on every past duel, the stat settings and cooldown passives on real calls (they're the only ones with each pal's actual stats; they wait for 60). The newest quarter of each is held back, and a change is kept only if it predicts those better. The Model tab shows each setting, what it learned from and what it changed. Settings > Model turns this off to use your own values; it keeps learning meanwhile. Owners aren't in the model: an owner's record predicted no better than a coin flip over 4,702 duels, and added nothing to the species records.
+**It tunes itself.** Straight after each result, and whenever the backfill brings in 25 more past duels, Augur re-fits every setting: types, move power and the records on every past duel, the stat settings and cooldown passives on real calls (they're the only ones with each pal's actual stats; they wait for 60). The newest quarter of each is held back, and a change is kept only if it predicts those better. The Model tab shows each setting, what it learned from and what it changed. Settings > Model turns this off to use your own values; it keeps learning meanwhile. Owners aren't in the model: an owner's record predicted no better than a coin flip over 4,702 duels, and added nothing to the species records.
 
 ## Bets
 

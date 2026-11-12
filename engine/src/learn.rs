@@ -220,13 +220,13 @@ pub fn save(conn: &Connection, l: &Learned) -> R<()> {
     Ok(())
 }
 
-/// Whether there's new evidence since the last run: 25 more past duels or 3 more settled calls (or no run yet).
+/// Whether there's new evidence since the last run: a newly settled call, or 25 more past duels (or no run yet).
 pub fn due(conn: &Connection, last: Option<&Learned>) -> bool {
     let Some(l) = last else { return true };
     let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0) as usize;
     let duels = count("SELECT COUNT(*) FROM duels WHERE winner IS NOT NULL");
     let calls = count("SELECT COUNT(*) FROM predictions WHERE status = 'settled'");
-    duels >= l.past_duels + 25 || calls >= l.live_calls + 3
+    duels >= l.past_duels + 25 || calls > l.live_calls
 }
 
 #[cfg(test)]

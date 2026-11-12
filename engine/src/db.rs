@@ -111,6 +111,9 @@ const ADDED: &[(&str, &str, &str)] = &[
     ("predictions", "stats_from", "TEXT"),
     // the Augur version that made the call, to compare results across algorithm changes
     ("predictions", "app_version", "TEXT"),
+    // its pre-fight call was overwritten after the fight (before 0.1.5): counted right or wrong, but its stake
+    // isn't one you were shown, so it's left out of the money comparison
+    ("predictions", "damaged", "INTEGER DEFAULT 0"),
 ];
 
 fn migrate(conn: &Connection) -> Result<()> {
@@ -548,6 +551,9 @@ pub struct CallRecord {
     pub version: String,
     #[serde(default)]
     pub model: String,
+    /// overwritten after the fight: left out of the money comparison
+    #[serde(default)]
+    pub damaged: bool,
 }
 
 impl CallRecord {
@@ -620,7 +626,7 @@ fn settled_where(conn: &Connection, and: &str, args: impl rusqlite::Params) -> R
         "SELECT p.id, COALESCE(p.seen_at, 0), p.home_owner, p.away_owner, p.home_pal, p.away_pal, p.pick, p.prob, p.p_stats, p.p_species,
                 p.p_h2h, p.home_species_w, p.home_species_l, p.away_species_w, p.away_species_l, p.pal_h2h_home, p.pal_h2h_away,
                 p.duel_id, d.winner, d.fought_at, d.ko, d.winner_hp_left, p.stake, p.late_pick, p.late_prob, COALESCE(p.late_only, 0),
-                COALESCE(p.app_version, ''), COALESCE(p.model, '')
+                COALESCE(p.app_version, ''), COALESCE(p.model, ''), COALESCE(p.damaged, 0)
          FROM predictions p LEFT JOIN duels d ON d.id = p.duel_id WHERE p.status = 'settled' AND d.winner IS NOT NULL {and} ORDER BY p.id"
     ))?;
     let calls: Vec<CallRecord> = st
@@ -654,6 +660,7 @@ fn settled_where(conn: &Connection, and: &str, args: impl rusqlite::Params) -> R
                 late_only: r.get::<_, i64>(25)? == 1,
                 version: r.get(26)?,
                 model: r.get(27)?,
+                damaged: r.get::<_, i64>(28)? == 1,
             })
         })?
         .collect::<Rq<_>>()?;

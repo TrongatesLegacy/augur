@@ -188,6 +188,10 @@ pub fn compare(calls: &[CallRecord], bets: &[Pick], s: &StakeSettings, odds: &Od
         if let Some(b) = bet {
             used.insert(b.seq);
         }
+        // its call was overwritten after the fight, so its stake isn't one you were shown: left out of the money
+        if call.damaged {
+            continue;
+        }
         let suggested = stake::suggest(&call.pick, call.prob, s, odds);
         let amount = call.stake.unwrap_or(suggested.amount);
         let won = call.winner.as_deref() == Some(call.pick.as_str());
@@ -320,6 +324,22 @@ mod tests {
         assert_eq!(o.wins, 8);
         assert!((o.rate - (0.512 + 0.554) / 2.0).abs() < 1e-9, "{}", o.rate);
         assert_eq!(odds(&db::open_memory().unwrap()).unwrap(), Odds::assumed());
+    }
+
+    /// A call marked damaged (overwritten after the fight) is left out of the money comparison, and its bet isn't
+    /// counted as one on a fight Augur didn't call.
+    #[test]
+    fn damaged_calls_stay_out_of_the_money() {
+        let conn = seeded();
+        let mut calls = db::settled(&conn).unwrap();
+        let bets = db::bets(&conn).unwrap();
+        let (s, o) = (StakeSettings::default(), Odds { rate: 0.5, wins: 8 });
+        let all = compare(&calls, &bets, &s, &o, crate::seed::BETS_READ_AT);
+        let hit = calls.iter_mut().find(|c| c.duel_id == Some(9019)).unwrap();
+        hit.damaged = true;
+        let some = compare(&calls, &bets, &s, &o, crate::seed::BETS_READ_AT);
+        assert!(some.fights.iter().all(|f| f.duel_id != Some(9019)));
+        assert_eq!(some.fights.len(), all.fights.len() - 1, "its bet doesn't reappear as a no-call fight");
     }
 
     #[test]

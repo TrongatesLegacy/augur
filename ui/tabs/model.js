@@ -1,12 +1,36 @@
-// Model: the settings and what they were fitted on, a suggested change, the species with secret moves, data health.
+// Model: the settings it has learned and what it changed, the species with secret moves, data health.
 import { backfillState } from '../lib/backfill.js';
 import { invoke } from '../lib/bridge.js';
 import { ago, esc, fmt, pct } from '../lib/format.js';
 import { empty, icon, ring } from '../lib/viz.js';
 
-// a setting as a position on its range, with the range's ends under it
-const slider = (label, v, lo, hi, shown) =>
-  `<div class="set"><span>${label}</span><div class="slw"><div class="sl"><b style="width:${((v - lo) / (hi - lo)) * 100}%"></b><i style="left:${((v - lo) / (hi - lo)) * 100}%"></i></div><div class="se"><span>${lo}</span><span>${hi}</span></div></div><span class="v">${shown}</span></div>`;
+// a setting as a position on its range, with what the learner last did with it under the name
+const slider = (label, v, lo, hi, shown, note = '') =>
+  `<div class="set"><span>${label}${note}</span><div class="slw"><div class="sl"><b style="width:${((v - lo) / (hi - lo)) * 100}%"></b><i style="left:${((v - lo) / (hi - lo)) * 100}%"></i></div><div class="se"><span>${lo}</span><span>${hi}</span></div></div><span class="v">${shown}</span></div>`;
+
+// every setting: label, range, how its value reads
+export const KNOBS = {
+  TYPE_BONUS: ['Type edge bonus', 1, 2.5, (v) => `${v}×`],
+  TYPE_RESIST: ['Resisted moves', 1, 2.5, (v) => `÷${v}`],
+  POWER_EXP: ['Move power weight', 0, 1, (v) => `^${v}`],
+  STATS_STEEPNESS: ['Stats → chance', 1, 6, (v) => `${v}`],
+  SPECIES_WEIGHT: ['Species records', 0, 2.5, (v) => `${v}`],
+  PAL_H2H_WEIGHT: ['Pal head to head', 0, 1.5, (v) => `${v}`],
+  COOLDOWN_EXP: ['Cooldown passives', 0, 1, (v) => `^${v}`],
+};
+
+// what the learner last did with a setting, as a line under its name
+function knobNote(k, auto) {
+  if (!k) return '';
+  const from = k.source === 'past_duels' ? 'past duels' : 'real calls';
+  const [label, text] =
+    k.status === 'changed'
+      ? ['ok', `learned: was ${KNOBS[k.key][3](k.was)}`]
+      : k.status === 'waiting'
+        ? ['muted', `waits for ${from}: ${fmt(k.have)} of ${fmt(k.need)}`]
+        : ['', `holds on ${from}`];
+  return `<small class="kn ${auto ? label : 'muted'}">${text}</small>`;
+}
 
 // a headline number with its picture on the left
 const kpi = (pic, label, value, sub) => `<div class="panel kp">${pic}<div><span class="label">${label}</span><b>${value}</b><small>${sub}</small></div></div>`;
@@ -25,11 +49,18 @@ export async function render(app) {
   if (state.tab !== 'model') return;
   const s = m.settings;
   const b = m.backfill || {};
-  const sug = m.suggestion;
   const fit = m.calibration ? m.calibration[3].toFixed(2) : null;
-  const suggestion = sug
-    ? `<div class="sug"><div class="label gold">Suggested by the re-test</div><div class="cond" style="font-size:20px;font-weight:700;margin:8px 0 4px">Type edge ${s.TYPE_BONUS}× → ${sug[2].TYPE_BONUS}×</div><div class="small" style="color:var(--t2)">Live calls ${m.live_right} → ${sug[1]} right of ${m.live_total}, log loss ${m.live_loss.toFixed(3)} → ${sug[0].toFixed(3)}. Scored on the same calls it was fitted to, so small gains may be chance.</div><div style="display:flex;gap:8px;margin-top:10px"><button class="btn ghost" id="keep">Keep ${s.TYPE_BONUS}×</button><button class="btn" id="try">Try ${sug[2].TYPE_BONUS}×</button></div></div>`
-    : `<div class="panel"><div class="ph"><h3>Re-test</h3><span class="ok">✓ settings hold</span></div><div class="small" style="color:var(--t2)">No setting change does clearly better on the ${m.live_total} real calls. Augur keeps the current settings.</div></div>`;
+  const l = m.learned;
+  const c = l?.check;
+  const gain = c && c.past_n ? c.past_right_after - c.past_right_before : 0;
+  const learning = !m.auto
+    ? `<div class="sug"><div class="label gold">Set by you</div><div class="small" style="color:var(--t2);margin-top:6px">Augur is using your own settings (Settings › Model) and keeps learning in the background, so you can switch back any time.</div><div style="display:flex;gap:8px;margin-top:10px"><button class="btn" id="auto">Let it tune itself</button></div></div>`
+    : `<div class="panel"><div class="ph"><h3>Learning</h3><span>${l ? `checked ${ago(l.at_ms)}` : 'first check soon'}</span></div>${
+        l
+          ? `<div class="lrn"><div><b class="cond">${fmt(l.past_duels)}</b><small>past duels</small></div><div><b class="cond">${fmt(l.live_calls)}</b><small>real calls</small></div><div><b class="cond ${gain > 0 ? 'ok' : ''}">${(c.past_right_after * 100).toFixed(1)}%</b><small>right on the ${fmt(c.past_n)} newest${gain > 0 ? `, up ${(gain * 100).toFixed(1)}` : ''}</small></div></div>
+             <div class="small" style="color:var(--t2);margin-top:8px">Re-fits every setting when 25 more duels or 3 more calls are in, and keeps a change only if it predicts the newest duels better than before.</div>`
+          : `<div class="small" style="color:var(--t2)">Augur re-fits its settings on your duels and calls a minute after it starts, then whenever new results come in.</div>`
+      }</div>`;
   const bt = m.backtest;
   // the per-hit fit and the model's own value on one scale (1× to 2.5×)
   const at = (x) => `${Math.max(0, Math.min(100, ((x - 1) / 1.5) * 100))}%`;
@@ -37,17 +68,18 @@ export async function render(app) {
   const health = (label, value, ok) => `<div class="hb"><span class="hdot ${ok === 'bad' ? 'bad' : ok ? 'ok' : ''}" aria-hidden="true"></span><span class="small">${label}</span><span>${value}</span></div>`;
   const maxShare = Math.max(...m.unlisted.map((u) => u.share), 0.01);
   main.innerHTML =
-    header('Model · settings, learning and data', `<button class="btn ghost ml" id="rt">Re-test now</button>`) +
+    header('Model · learns from every result', `<button class="btn ghost ml" id="rt">Learn now</button>`) +
     `<div class="g4">
       ${kpi(ring(m.live_total ? m.calls_right / m.live_total : null, { size: 64 }), 'Live calls', `${m.calls_right} / ${m.live_total}`, `today's logic would get ${m.live_right}`)}
       ${kpi(ring(bt?.duels ? bt.accuracy : null, { size: 64, tone: 'home', label: bt?.duels ? `${(bt.accuracy * 100).toFixed(0)}%` : '—' }), 'History test', bt?.duels ? (bt.accuracy * 100).toFixed(1) + '%' : '—', `${bt ? fmt(bt.duels) : 0} past duels, base stats only`)}
       <div class="panel kp kfit"><div><span class="label">Per-hit fit</span><b>${fit ? fit + '×' : '—'}</b><small>real value of a type edge (model ${s.TYPE_BONUS}×)</small></div>${fitScale}</div>
       ${kpi(`<span class="kic">${icon('chart', 26)}</span>`, 'Data', fmt(m.hits), `hits from ${fmt(m.tapes)} fight tapes`)}</div>
     <div class="g3 grow">
-      <div class="panel col"><div class="ph"><h3>Settings</h3><span>fitted on logged fights</span></div><div class="sets">
-        ${slider('Type edge bonus', s.TYPE_BONUS, 1, 2.5, s.TYPE_BONUS + '×')}${slider('Resisted moves', s.TYPE_RESIST, 1, 2, '÷' + s.TYPE_RESIST)}${slider('Move power weight', s.POWER_EXP, 0, 1, '^' + s.POWER_EXP)}
-        ${slider('Stats → chance', s.STATS_STEEPNESS, 1, 5, s.STATS_STEEPNESS)}${slider('Species records', s.SPECIES_WEIGHT, 0, 2, s.SPECIES_WEIGHT)}${slider('Pal head to head', s.PAL_H2H_WEIGHT, 0, 2, s.PAL_H2H_WEIGHT)}</div></div>
-      <div class="stackc">${suggestion}
+      <div class="panel col"><div class="ph"><h3>Settings</h3><span>${m.auto ? 'learned from your duels' : 'set by you'}</span></div><div class="sets">
+        ${Object.entries(KNOBS)
+          .map(([key, [label, lo, hi, show]]) => slider(label, s[key], lo, hi, show(s[key]), knobNote(l?.knobs.find((k) => k.key === key), m.auto)))
+          .join('')}</div></div>
+      <div class="stackc">${learning}
         <div class="panel col grow"><div class="ph"><h3>Pals with secret moves</h3><span>share of damage</span></div>${
           m.unlisted.length
             ? `<div class="fillin bars">${m.unlisted.map((u) => `<div class="hbar" title="${esc(u.moves.map((x) => x[0]).join(', '))}"><span>${esc(u.pal)} <span class="muted">· ${u.moves.map((x) => esc(x[0])).join(', ')}</span></span><b class="gold">${pct(u.share)}</b><div class="b"><i style="width:${(100 * u.share) / maxShare}%"></i></div></div>`).join('')}</div>`
@@ -61,18 +93,25 @@ export async function render(app) {
           ${health('Backfill', backfillLine(b), b.last_error ? 'bad' : true)}
           ${b.phase && b.phase !== 'done' && b.total ? `<div class="progress"><i style="width:${(b.done / b.total) * 100}%"></i></div>` : ''}
           ${b.last_error ? `<div class="small bad">${esc(b.last_error)}</div>` : ''}</div>
-        <div class="panel col grow"><div class="ph"><h3>Open questions</h3></div><div class="oq fillin">
-          <div><span>${icon('star', 16)}</span><p>Is a type edge worth anything? The per-hit fit says ${fit ?? '?'}×.</p></div>
-          <div><span>${icon('chart', 16)}</span><p>Do cooldown passives mean more attacks? Counted at half strength.</p></div>
-          <div><span>${icon('eye', 16)}</span><p>Owners matter but aren't in the model yet.</p></div></div></div></div>
+        <div class="panel col grow"><div class="ph"><h3>What it changed</h3><span>newest first</span></div>${
+          m.changes.length
+            ? `<div class="oq fillin">${m.changes
+                .map((x) => {
+                  const [label, , , show] = KNOBS[x.key] || [x.key, 0, 1, String];
+                  return `<div><span>${icon(x.to > x.from ? 'chart' : 'star', 16)}</span><p><b>${esc(label)}</b> ${show(x.from)} → ${show(x.to)} <span class="muted">· ${ago(x.at_ms)}</span><br><small>log loss ${x.loss[0].toFixed(3)} → ${x.loss[1].toFixed(3)} on the ${fmt(x.n)} newest</small></p></div>`;
+                })
+                .join('')}</div>`
+            : empty('star', 'Nothing yet', 'Every check so far says the settings hold. Changes show here when the results say so.')
+        }</div></div>
     </div>`;
-  document.getElementById('rt').onclick = () => render(app);
-  if (sug) {
-    document.getElementById('try').onclick = async () => {
-      state.settings.model = sug[2];
-      await invoke('save_settings', { settings: state.settings });
-      render(app);
-    };
-    document.getElementById('keep').onclick = (e) => (e.target.closest('.sug').style.display = 'none');
-  }
+  document.getElementById('rt').onclick = async (e) => {
+    e.target.disabled = true;
+    await invoke('learn_now').catch(() => {});
+    render(app);
+  };
+  document.getElementById('auto')?.addEventListener('click', async () => {
+    state.settings.model_auto = true;
+    await invoke('save_settings', { settings: state.settings });
+    render(app);
+  });
 }

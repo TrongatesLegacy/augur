@@ -537,6 +537,10 @@ table.sticky thead th { position: sticky; top: 0; background: #17142a; z-index: 
 .hb:last-of-type { border: 0; }
 .hdot { width: 8px; height: 8px; border-radius: 50%; background: var(--t3); }
 .hdot.ok { background: var(--ok); box-shadow: 0 0 8px var(--ok); } .hdot.bad { background: var(--bad); box-shadow: 0 0 8px var(--bad); }
+.set > span:first-child { display: grid; gap: 2px; } .kn { font-size: 10.5px; color: var(--t3); } .kn.ok { color: var(--ok); }
+.lrn { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.lrn > div { display: grid; gap: 2px; min-width: 0; } .lrn b { font-size: 24px; line-height: 1; } .lrn small { font-size: 11px; color: var(--t3); }
+.oq small { color: var(--t3); }
 .oq { display: grid; gap: 10px; align-content: start; }
 .oq > div { display: grid; grid-template-columns: 30px 1fr; gap: 10px; align-items: start; }
 .oq > div > span { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; color: var(--gold); background: rgba(255,207,107,.08); }

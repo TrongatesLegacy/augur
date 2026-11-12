@@ -12,7 +12,7 @@ use augur_engine::predict;
 use augur_engine::site::{self, State};
 use augur_engine::stake::{self, Stake};
 use augur_engine::sync::{DeviceFile, SyncState};
-use augur_engine::{db, model, rusqlite};
+use augur_engine::{db, learn, model, rusqlite};
 use base64::Engine;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -38,6 +38,8 @@ pub struct Shared {
     /// read the picks list now (a result came in, or the developer asked)
     pub bets_now: AtomicBool,
     pub backtest: Mutex<Option<(model::Settings, Backtest)>>,
+    /// the model's last self-tuning run
+    pub learned: Mutex<Option<learn::Learned>>,
     pub rosters: Mutex<HashMap<String, (Instant, Vec<site::BoxPal>)>>,
     pub busy: AtomicBool,
     pub stop: AtomicBool,
@@ -56,6 +58,12 @@ pub struct Shared {
 impl Shared {
     fn db(&self) -> Result<rusqlite::Connection, String> {
         db::open(&settings::db_path(&self.dir)).map_err(|e| e.to_string())
+    }
+
+    /// The model settings in use: learned, or your own (Settings › Model).
+    pub fn model(&self) -> model::Settings {
+        let learned = self.learned.lock().unwrap().as_ref().map(|l| l.settings.clone());
+        self.settings.lock().unwrap().model_for(learned.as_ref())
     }
 }
 
@@ -216,7 +224,7 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
                         let settings = shared.settings.lock().unwrap().clone();
                         let p = predict::predict(
                             &state,
-                            &predict::Options { lookups: true, db_path: settings::db_path(&shared.dir), settings: settings.model.clone() },
+                            &predict::Options { lookups: true, db_path: settings::db_path(&shared.dir), settings: shared.model() },
                         );
                         let stake = p.as_ref().map(|p| stake_for(&conn, &settings, &p.pick, p.prob));
                         if let (Some(p), Some(st)) = (&p, &stake) {
@@ -291,6 +299,32 @@ fn backfill_loop(app: AppHandle, shared: Arc<Shared>) {
             }
         }
         let end = Instant::now() + Duration::from_secs(6 * 3600);
+        while Instant::now() < end && !shared.stop.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    }
+}
+
+/// The model tunes itself: every 10 minutes, when there are new results (25 more past duels or 3 more settled calls),
+/// it re-fits its settings and keeps a change only if it predicts held-back duels better. Runs between duels.
+fn learn_loop(app: AppHandle, shared: Arc<Shared>) {
+    std::thread::sleep(Duration::from_secs(60));
+    while !shared.stop.load(Ordering::Relaxed) {
+        let idle = !shared.busy.load(Ordering::Relaxed) && !shared.setup_wait.load(Ordering::Relaxed);
+        if let (true, Ok(conn)) = (idle, shared.db()) {
+            let last = shared.learned.lock().unwrap().clone();
+            if learn::due(&conn, last.as_ref()) {
+                let from = last.as_ref().map(|l| l.settings.clone()).unwrap_or_default();
+                if let Ok(l) = learn::learn(&conn, &from, now_ms()) {
+                    if learn::save(&conn, &l).is_ok() {
+                        *shared.learned.lock().unwrap() = Some(l);
+                        *shared.backtest.lock().unwrap() = None;
+                        let _ = app.emit("model", ());
+                    }
+                }
+            }
+        }
+        let end = Instant::now() + Duration::from_secs(600);
         while Instant::now() < end && !shared.stop.load(Ordering::Relaxed) {
             std::thread::sleep(Duration::from_secs(1));
         }
@@ -405,7 +439,7 @@ fn live(shared: tauri::State<'_, Arc<Shared>>) -> LiveView {
 
 #[tauri::command]
 async fn history(shared: tauri::State<'_, Arc<Shared>>, range: String) -> Cmd<HistoryView> {
-    let s = shared.settings.lock().unwrap().model.clone();
+    let s = shared.model();
     views::history_view(&shared.db()?, &s, &range, now_ms() / 1000).map_err(|e| e.to_string())
 }
 
@@ -469,17 +503,36 @@ async fn player(shared: tauri::State<'_, Arc<Shared>>, name: String) -> Cmd<Play
             shared.rosters.lock().unwrap().insert(key, (Instant::now(), r.clone()));
         }),
     };
-    let s = shared.settings.lock().unwrap().model.clone();
+    let s = shared.model();
     views::player_view(&shared.db()?, &s, &name, roster).map_err(|e| e.to_string())
+}
+
+/// What the model has learned (the built-in values before its first run), to start your own settings from.
+#[tauri::command]
+fn learned_settings(shared: tauri::State<'_, Arc<Shared>>) -> model::Settings {
+    shared.learned.lock().unwrap().as_ref().map(|l| l.settings.clone()).unwrap_or_default()
+}
+
+/// Model tab › Learn now: re-fit straight away, even with no new results.
+#[tauri::command]
+async fn learn_now(shared: tauri::State<'_, Arc<Shared>>) -> Cmd<()> {
+    let conn = shared.db()?;
+    let from = shared.learned.lock().unwrap().as_ref().map(|l| l.settings.clone()).unwrap_or_default();
+    let l = learn::learn(&conn, &from, now_ms()).map_err(|e| e.to_string())?;
+    learn::save(&conn, &l).map_err(|e| e.to_string())?;
+    *shared.learned.lock().unwrap() = Some(l);
+    *shared.backtest.lock().unwrap() = None;
+    Ok(())
 }
 
 #[tauri::command]
 async fn model_view(shared: tauri::State<'_, Arc<Shared>>) -> Cmd<ModelView> {
-    let s = shared.settings.lock().unwrap().model.clone();
+    let s = shared.model();
     let cached = shared.backtest.lock().unwrap().clone().filter(|(cs, _)| *cs == s).map(|(_, b)| b);
     let backfill = shared.backfill.lock().unwrap().clone();
     let synced_at = shared.live.lock().unwrap().synced_at;
-    let v = views::model_view(&shared.db()?, &s, cached, backfill, synced_at).map_err(|e| e.to_string())?;
+    let auto = shared.settings.lock().unwrap().model_auto;
+    let v = views::model_view(&shared.db()?, &s, auto, cached, backfill, synced_at).map_err(|e| e.to_string())?;
     *shared.backtest.lock().unwrap() = v.backtest.clone().map(|b| (s, b));
     Ok(v)
 }
@@ -694,6 +747,7 @@ pub fn run() {
     if sync_state.name.is_empty() {
         sync_state.name = crate::sync::default_name();
     }
+    let learned = db::open(&settings::db_path(&dir)).ok().and_then(|c| learn::load(&c));
     let shared = Arc::new(Shared {
         settings: Mutex::new(AppSettings::load(&dir)),
         dir,
@@ -702,6 +756,7 @@ pub fn run() {
         bets: Mutex::new(Progress::default()),
         bets_now: AtomicBool::new(false),
         backtest: Mutex::new(None),
+        learned: Mutex::new(learned),
         rosters: Mutex::new(HashMap::new()),
         busy: AtomicBool::new(false),
         stop: AtomicBool::new(false),
@@ -737,6 +792,8 @@ pub fn run() {
             save_settings,
             pal_image,
             player_image,
+            learned_settings,
+            learn_now,
             open_window,
             hide_popover,
             fit_popover,
@@ -822,6 +879,8 @@ pub fn run() {
             std::thread::spawn(move || bets_loop(h3, s3));
             let (h4, s4) = (app.handle().clone(), shared.clone());
             std::thread::spawn(move || crate::sync::sync_loop(h4, s4));
+            let (h6, s6) = (app.handle().clone(), shared.clone());
+            std::thread::spawn(move || learn_loop(h6, s6));
             let started = crate::updates::UpdateView::at_start(&shared);
             if let Some(from) = &started.updated_from {
                 notify(

@@ -48,6 +48,9 @@ pub struct AppSettings {
     /// read your picks list (signed in) to track your bets against Augur's calls
     pub import_bets: bool,
     pub staking: StakeSettings,
+    /// the model tunes itself from the duels and calls (Model tab); off: it uses `model` as you set it
+    pub model_auto: bool,
+    /// your own model settings, used only while `model_auto` is off
     pub model: ModelSettings,
 }
 
@@ -72,12 +75,23 @@ impl Default for AppSettings {
             auto_update: true,
             import_bets: true,
             staking: StakeSettings::default(),
+            model_auto: true,
             model: ModelSettings::default(),
         }
     }
 }
 
 impl AppSettings {
+    /// The model settings to predict with: what the model learned (built-in values until its first run), or your
+    /// own while self-tuning is off.
+    pub fn model_for(&self, learned: Option<&ModelSettings>) -> ModelSettings {
+        if self.model_auto {
+            learned.cloned().unwrap_or_default()
+        } else {
+            self.model.clone()
+        }
+    }
+
     /// How long to wait before the next check while a duel is up: `poll_secs`, or a random time in the range.
     /// `roll` is a random number in 0..1.
     pub fn poll_wait(&self, roll: f64) -> std::time::Duration {

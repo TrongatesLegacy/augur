@@ -102,24 +102,7 @@ pub fn evaluate(calls: &[CallRecord], s: &Settings) -> (f64, usize, usize) {
 pub fn tune(calls: &[CallRecord], base: &Settings, grid: &[(&str, Vec<f64>)]) -> Vec<(f64, usize, Settings)> {
     let mut combos = vec![base.clone()];
     for (key, values) in grid {
-        combos = combos
-            .into_iter()
-            .flat_map(|c| {
-                values.iter().map(move |v| {
-                    let mut c = c.clone();
-                    match *key {
-                        "TYPE_BONUS" => c.type_bonus = *v,
-                        "TYPE_RESIST" => c.type_resist = *v,
-                        "POWER_EXP" => c.power_exp = *v,
-                        "STATS_STEEPNESS" => c.stats_steepness = *v,
-                        "SPECIES_WEIGHT" => c.species_weight = *v,
-                        "PAL_H2H_WEIGHT" => c.pal_h2h_weight = *v,
-                        _ => {}
-                    }
-                    c
-                })
-            })
-            .collect();
+        combos = combos.into_iter().flat_map(|c| values.iter().map(move |v| c.with(key, *v))).collect();
     }
     let mut out: Vec<(f64, usize, Settings)> = combos
         .into_iter()
@@ -162,10 +145,20 @@ pub struct Backtest {
     pub accuracy: f64,
 }
 
-/// The model on every past duel, with fighters rebuilt from species base stats at an average roll and species
-/// records and pal head-to-heads as they stood before each duel. No IVs, passives or hidden moves, so it tests
-/// types, move strength and records, not the stat settings.
-pub fn backtest(conn: &Connection, s: &Settings) -> R<Backtest> {
+/// A past duel as the history test sees it: fighters rebuilt from species base stats at an average roll, and the
+/// species records and pal head-to-head as they stood before it.
+#[derive(Clone, Debug)]
+pub struct PastDuel {
+    pub id: u64,
+    pub home: Fighter,
+    pub away: Fighter,
+    pub species_rec: [[f64; 2]; 2],
+    pub pal_h2h: [f64; 2],
+    pub home_won: bool,
+}
+
+/// Every past duel whose two species are known, oldest first.
+pub fn past_duels(conn: &Connection) -> R<Vec<PastDuel>> {
     let mut species: HashMap<String, (Vec<String>, [f64; 3])> = HashMap::new();
     for row in
         conn.prepare("SELECT pal, types, base_hp, base_atk, base_def FROM species WHERE base_hp IS NOT NULL")?.query_map([], |r| {
@@ -179,10 +172,15 @@ pub fn backtest(conn: &Connection, s: &Settings) -> R<Backtest> {
     for pal in species.keys() {
         moves.insert(pal.clone(), db::moves_of(conn, pal)?);
     }
-    let duels: Vec<(String, String, String)> = conn
-        .prepare("SELECT home_pal, away_pal, winner FROM duels WHERE winner IS NOT NULL ORDER BY id")?
+    let duels: Vec<(u64, String, String, String)> = conn
+        .prepare("SELECT id, home_pal, away_pal, winner FROM duels WHERE winner IS NOT NULL ORDER BY id")?
         .query_map([], |r| {
-            Ok((r.get::<_, Option<String>>(0)?.unwrap_or_default(), r.get::<_, Option<String>>(1)?.unwrap_or_default(), r.get(2)?))
+            Ok((
+                r.get::<_, i64>(0)? as u64,
+                r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                r.get(3)?,
+            ))
         })?
         .collect::<Rq<_>>()?;
     let fighter = |pal: &str| -> Option<Fighter> {
@@ -208,18 +206,14 @@ pub fn backtest(conn: &Connection, s: &Settings) -> R<Backtest> {
     };
     let mut rec: HashMap<String, [f64; 2]> = HashMap::new();
     let mut h2h: HashMap<(String, String), [f64; 2]> = HashMap::new();
-    let (mut loss, mut right, mut n) = (0.0, 0usize, 0usize);
-    for (hp, ap, win) in &duels {
-        if let (Some(h), Some(a)) = (fighter(hp), fighter(ap)) {
+    let mut out = vec![];
+    for (id, hp, ap, win) in &duels {
+        if let (Some(home), Some(away)) = (fighter(hp), fighter(ap)) {
             let key = if hp <= ap { (hp.clone(), ap.clone()) } else { (ap.clone(), hp.clone()) };
             let pair = h2h.get(&key).copied().unwrap_or([0.0; 2]);
-            let pair = if &key.0 == hp { pair } else { [pair[1], pair[0]] };
-            let p =
-                model::score(s, &h, &a, [rec.get(hp).copied().unwrap_or([0.0; 2]), rec.get(ap).copied().unwrap_or([0.0; 2])], pair).p_home;
-            let q = if win == "home" { p } else { 1.0 - p };
-            loss -= q.clamp(1e-6, 1.0 - 1e-6).ln();
-            right += (q > 0.5) as usize;
-            n += 1;
+            let pal_h2h = if &key.0 == hp { pair } else { [pair[1], pair[0]] };
+            let species_rec = [rec.get(hp).copied().unwrap_or([0.0; 2]), rec.get(ap).copied().unwrap_or([0.0; 2])];
+            out.push(PastDuel { id: *id, home, away, species_rec, pal_h2h, home_won: win == "home" });
         }
         let (w, l) = if win == "home" { (hp, ap) } else { (ap, hp) };
         rec.entry(w.clone()).or_insert([0.0; 2])[0] += 1.0;
@@ -227,11 +221,26 @@ pub fn backtest(conn: &Connection, s: &Settings) -> R<Backtest> {
         let key = if w <= l { (w.clone(), l.clone()) } else { (l.clone(), w.clone()) };
         h2h.entry(key.clone()).or_insert([0.0; 2])[if &key.0 == w { 0 } else { 1 }] += 1.0;
     }
-    Ok(Backtest {
-        duels: n,
-        log_loss: if n > 0 { loss / n as f64 } else { 0.0 },
-        accuracy: if n > 0 { right as f64 / n as f64 } else { 0.0 },
-    })
+    Ok(out)
+}
+
+/// Log loss and accuracy of settings on some past duels.
+pub fn score_past(duels: &[PastDuel], s: &Settings) -> Backtest {
+    let (mut loss, mut right) = (0.0, 0usize);
+    for d in duels {
+        let p = model::score(s, &d.home, &d.away, d.species_rec, d.pal_h2h).p_home;
+        let q = if d.home_won { p } else { 1.0 - p };
+        loss -= q.clamp(1e-6, 1.0 - 1e-6).ln();
+        right += (q > 0.5) as usize;
+    }
+    let n = duels.len();
+    Backtest { duels: n, log_loss: if n > 0 { loss / n as f64 } else { 0.0 }, accuracy: if n > 0 { right as f64 / n as f64 } else { 0.0 } }
+}
+
+/// The model on every past duel (see `PastDuel`). No IVs, passives or hidden moves, so it tests types, move
+/// strength and records, not the stat settings.
+pub fn backtest(conn: &Connection, s: &Settings) -> R<Backtest> {
+    Ok(score_past(&past_duels(conn)?, s))
 }
 
 // --- species ---

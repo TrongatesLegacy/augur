@@ -11,6 +11,7 @@ pub mod bets;
 pub mod calls;
 pub mod db;
 pub mod history;
+pub mod learn;
 pub mod predict;
 pub mod site;
 pub mod stake;

@@ -21,7 +21,7 @@ function headline(d) {
 }
 
 // each side's HP over the fight as steps, from the tape: home cyan, away pink; the hardest hits ringed, the K.O. marked
-function hpChart(f, c) {
+function hpChart(f, c, m) {
   const W = 520;
   const H = 150;
   const L = 38;
@@ -43,11 +43,23 @@ function hpChart(f, c) {
     })
     .join('');
   const ticks = [...new Set([0, Math.round(end / 3), Math.round((2 * end) / 3)])].filter((t) => f.ko_secs == null || x(f.ko_secs) - x(t) > 46 || t === 0);
+  // Augur's projected race, faint behind the real one: each side's HP falling at the rate the model gave it. The
+  // model's times aren't seconds, so its first K.O. is put at the real one; a miss shows where the fight left it
+  const sc = m?.score;
+  const first = sc && Math.min(sc.t_home, sc.t_away);
+  const proj =
+    first > 0 && Number.isFinite(first) && f.ko_secs
+      ? SIDES.map((s) => {
+          // a side falls as fast as the other knocks it out (t: each side's time to land its K.O.)
+          const t = s === 'home' ? sc.t_away : sc.t_home;
+          return `<path class="proj ${s}" d="M${x(0)} ${y(100)} L${x(f.ko_secs)} ${y(100 * (1 - first / t))}"><title>Augur's projection: ${esc(pal(c, s))} ${t === first ? 'knocked out first' : `left with ${Math.round(100 * (1 - first / t))}% HP`}</title></path>`;
+        }).join('')
+      : '';
   const ko = f.ko_secs != null ? `<line class="ko" x1="${x(f.ko_secs)}" x2="${x(f.ko_secs)}" y1="4" y2="${H - B}"/><text class="kot" x="${x(f.ko_secs)}" y="${H - 4}" text-anchor="end">K.O. ${esc(f.ko)}</text>` : '';
   return `<svg class="hpc" viewBox="0 0 ${W} ${H}" role="img" aria-label="Each side's HP over the fight: ${esc(pal(c, c.winner))} won${f.ko ? ` by K.O. at ${esc(f.ko)}` : ''}">
     <g class="grid">${[100, 50, 0].map((v) => `<line x1="${L}" x2="${W - 6}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 6}" y="${+y(v) + 4}" text-anchor="end">${v}%</text>`).join('')}</g>
     <g class="grid">${ticks.map((t) => `<text x="${x(t)}" y="${H - 4}" text-anchor="middle">${clock(t)}</text>`).join('')}</g>
-    ${ko}
+    ${ko}${proj}
     ${SIDES.map((s, i) => `<path class="area ${s}" d="${path(f.hp[i])} V${y(0)} H${x(0)} Z"/><path class="line ${s}" d="${path(f.hp[i])}"/>`).join('')}
     ${dots}</svg>`;
 }
@@ -59,13 +71,14 @@ function howItWent(d) {
   if (!f || !f.hits.length) {
     return `<div class="panel col chart"><div class="ph"><h3>How it went</h3><span>${casts}</span></div>${empty('chart', f ? 'No fight tape for this duel' : 'The duel isn’t stored', f ? 'Only the result was kept: older duels came without their tape.' : 'Its result came from the live feed.')}</div>`;
   }
-  const lg = SIDES.map((s) => `<span><i class="${s}"></i>${esc(pal(c, s))}</span>`).join('');
+  const projected = d.model?.score ? '<span class="lgp" title="Augur’s projected race, its first K.O. put at the real one"><i></i>Projected</span>' : '';
+  const lg = SIDES.map((s) => `<span><i class="${s}"></i>${esc(pal(c, s))}</span>`).join('') + projected;
   const top = f.biggest
     .slice(0, 3)
     .map((h) => `<span class="chip ${h.side}" title="${clock(h.t)} · ${esc(pal(c, h.side))}"><b>${h.pct}%</b> ${esc(h.move)}</span>`)
     .join('');
   return `<div class="panel chart"><div class="ph"><h3>How it went</h3><div class="lg">${lg}</div></div>
-    ${hpChart(f, c)}
+    ${hpChart(f, c, d.model)}
     <div class="crow chips"><span class="label">Top hits</span>${top}</div></div>`;
 }
 

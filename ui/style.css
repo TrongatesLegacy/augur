@@ -864,3 +864,8 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 .unn { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .unn i { font-style: normal; font-size: 11px; color: var(--t3); }
 .lgrid .fillin.more { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent); }
+
+/* the breakdown's HP chart: Augur's projected race, faint behind the real one */
+.hpc .proj { fill: none; stroke-width: 1.8; stroke-dasharray: 2 4; stroke-linecap: round; opacity: .7; }
+.hpc .proj.home { stroke: var(--home); } .hpc .proj.away { stroke: var(--away); }
+.lg .lgp i { width: 13px; height: 2px; border-radius: 1px; background: repeating-linear-gradient(90deg, var(--t3) 0 2px, transparent 2px 5px); }

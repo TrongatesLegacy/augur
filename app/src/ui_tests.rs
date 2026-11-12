@@ -383,7 +383,7 @@ const MAIN_DRIVER: &str = r#"
       if (tab === 'call') {
         document.querySelector('#main tr[data-call]')?.click();
         await sleep(400);
-        out.chart = { lines: document.querySelectorAll('.hpc path.line').length, hits: document.querySelectorAll('.hpc circle').length, ko: !!document.querySelector('.hpc .ko') };
+        out.chart = { lines: document.querySelectorAll('.hpc path.line').length, proj: document.querySelectorAll('.hpc path.proj').length, hits: document.querySelectorAll('.hpc circle').length, ko: !!document.querySelector('.hpc .ko') };
         out.fits = document.getElementById('main').scrollHeight <= document.getElementById('main').clientHeight + 1;
       }
       const visible = () => [...document.querySelectorAll('.tgrp')].filter((g) => !g.hidden).map((g) => g.querySelector('h4').textContent);
@@ -692,6 +692,7 @@ fn every_tab_renders_headless() {
     assert_eq!(r["chart"]["lines"], json!(2), "an HP line per side");
     assert_eq!(r["chart"]["hits"].as_u64().unwrap() as usize, d["fight"]["hits"].as_array().unwrap().len(), "a dot per hit");
     assert_eq!(r["chart"]["ko"], json!(true), "the K.O. is marked");
+    assert_eq!(r["chart"]["proj"], json!(2), "with Augur's projected race behind it");
     assert_eq!(r["fits"], json!(true), "the breakdown fits the window without scrolling");
     let bare = r["callBare"].as_str().unwrap().to_lowercase();
     assert!(

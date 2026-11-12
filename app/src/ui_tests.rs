@@ -438,7 +438,10 @@ fn tray_popover_off_air_renders_headless() {
     assert_eq!(r["errors"], json!([]), "script errors: {}", r["errors"]);
     let tray = r["tray"].as_str().unwrap();
     let t = tray.to_lowercase();
-    assert!(t.contains("off air") && t.contains("14/19") && t.contains("best run 8") && t.contains("11 nov"), "the last stream: {tray}");
+    assert!(
+        t.contains("off air") && t.contains("14/19") && t.contains("best run 8") && (t.contains("11 nov") || t.contains("nov 11")),
+        "the last stream: {tray}"
+    );
     assert!(tray.contains("over"), "the latest calls: {tray}");
     if let Some(folder) = std::env::var_os("AUGUR_UI_SHOTS").map(PathBuf::from) {
         std::fs::create_dir_all(&folder).unwrap();

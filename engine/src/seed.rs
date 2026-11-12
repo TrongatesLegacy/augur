@@ -34,6 +34,12 @@ pub fn import_bets(conn: &Connection) {
     crate::bets::import(conn, &mut pages, &ctl, BETS_READ_AT).unwrap();
 }
 
+/// Stores the seed's pet and Hall pages (pet.html, hall.html) the way the app keeps them.
+pub fn store_pet_and_hall(conn: &Connection) {
+    db::meta_set(conn, "pet_page", &serde_json::to_string(&site::parse_pet(&page("pet.html"))).unwrap()).unwrap();
+    db::meta_set(conn, "hall_page", &serde_json::to_string(&site::parse_hall(&page("hall.html"))).unwrap()).unwrap();
+}
+
 /// An in-memory store with the seed loaded.
 pub fn store() -> Connection {
     let conn = db::open_memory().unwrap();

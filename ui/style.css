@@ -271,6 +271,25 @@ main a { color: var(--gold); text-decoration: none; } main a:hover { text-decora
 .badge b { color: var(--gold); font-weight: 700; }
 .badge.rare { color: var(--gold); border-color: rgba(255,207,107,.45); background: linear-gradient(160deg, rgba(255,207,107,.16), rgba(255,207,107,.03)); }
 
+.g2.even { grid-template-columns: 1fr 1fr; }
+.yp { display: flex; gap: 16px; align-items: center; }
+.yp b { font: 800 26px var(--cond); letter-spacing: .03em; }
+.path { display: flex; gap: 4px; margin: 6px 0 8px; flex-wrap: wrap; }
+.path span { font: 600 10.5px var(--sans); letter-spacing: .06em; text-transform: uppercase; padding: 3px 7px; border-radius: 6px; color: var(--t3); background: rgba(255,255,255,.04); }
+.path span.done { color: var(--t2); background: rgba(255,207,107,.08); }
+.path span.now { color: #2a1d00; background: linear-gradient(180deg, #ffe09a, #ffc04d); }
+.plog { display: grid; gap: 5px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--t2); }
+.plog div { display: grid; grid-template-columns: 34px 1fr; }
+.plog b { font: 700 14px var(--cond); }
+.htiers { display: grid; gap: 7px; }
+.htiers > div { display: grid; grid-template-columns: 26px 1fr 52px; gap: 10px; align-items: center; }
+.htiers small { color: var(--t3); text-align: right; }
+.htiers .mb { background: rgba(255,255,255,.07); }
+.htiers .mb i { background: linear-gradient(90deg, rgba(255,207,107,.4), var(--gold)); }
+.hpals { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.hpals .chip { display: inline-flex; align-items: center; gap: 6px; }
+.hpals .chip small { color: var(--t3); }
+
 /* pals: matchups */
 .mups { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 18px; }
 .mup { display: grid; grid-template-columns: 1fr 90px 44px; gap: 10px; align-items: center; padding: 6px 8px; border: 0; border-radius: 9px; background: none; color: var(--t1); font-size: 13px; text-align: left; cursor: pointer; }

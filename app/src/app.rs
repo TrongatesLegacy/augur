@@ -318,6 +318,17 @@ fn bets_loop(app: AppHandle, shared: Arc<Shared>) {
             let ctl = backfill::Control { stop: &shared.stop, busy: &busy, progress: &progress };
             let mut page = |n: u32, p: &mut Progress| pacer.get(&format!("{}/u/{user}?bp={n}", site::BASE), |b| b.to_string(), &ctl, p);
             let outcome = bets::import(&conn, &mut page, &ctl, now_ms());
+            // your pet and Hall: two more pages, at most every 30 minutes
+            let last: u64 = db::meta_get(&conn, "pet_page_at").ok().flatten().and_then(|v| v.parse().ok()).unwrap_or(0);
+            if outcome.is_ok() && now_ms().saturating_sub(last) > 30 * 60_000 {
+                if let Some(cookie) = pacer.cookie.as_deref() {
+                    if let Ok((pet, hall)) = site::pet_and_hall(cookie) {
+                        let _ = db::meta_set(&conn, "pet_page", &serde_json::to_string(&pet).unwrap_or_default());
+                        let _ = db::meta_set(&conn, "hall_page", &serde_json::to_string(&hall).unwrap_or_default());
+                        let _ = db::meta_set(&conn, "pet_page_at", &now_ms().to_string());
+                    }
+                }
+            }
             let mut p = shared.bets.lock().unwrap();
             p.phase = "done".into();
             p.last_error = outcome.err().map(|e| e.to_string());

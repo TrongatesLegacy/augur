@@ -186,8 +186,11 @@ pub struct YouView {
     /// when the profile was read (ms)
     pub read_at: Option<u64>,
     pub comparison: Comparison,
-    /// your record from the history of duels (as an owner)
+    /// Augur's calls: right, total
     pub augur_calls: (usize, usize),
+    /// your pet and your Hall, as last read
+    pub pet: Option<augur_engine::site::Pet>,
+    pub hall: Option<augur_engine::site::Hall>,
 }
 
 pub fn you_view(conn: &Connection, s: &StakeSettings) -> R<YouView> {
@@ -203,6 +206,8 @@ pub fn you_view(conn: &Connection, s: &StakeSettings) -> R<YouView> {
         page: page.map(|(p, _)| p),
         comparison,
         augur_calls: (t.right, t.total),
+        pet: db::meta_get(conn, "pet_page")?.and_then(|p| serde_json::from_str(&p).ok()).flatten(),
+        hall: db::meta_get(conn, "hall_page")?.and_then(|h| serde_json::from_str(&h).ok()).flatten(),
     })
 }
 

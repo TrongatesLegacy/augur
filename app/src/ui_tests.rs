@@ -48,6 +48,7 @@ pub fn chrome() -> Option<PathBuf> {
 pub fn fixture_data() -> Value {
     let conn = seed::store();
     seed::import_bets(&conn);
+    seed::store_pet_and_hall(&conn);
     let s = model::Settings::default();
     let state = seed::state("state-leaflit-wumpo.json");
     // sync times two minutes ago, so they read like real ones
@@ -341,7 +342,9 @@ fn every_tab_renders_headless() {
         text("you").contains("248,120")
             && text("you").contains("predictions")
             && text("you").contains("tournament champion")
-            && text("you").contains("16 of 52"),
+            && text("you").contains("16 of 52")
+            && text("you").contains("lamball cryst")
+            && text("you").contains("4 of 356"),
         "You: {}",
         text("you")
     );

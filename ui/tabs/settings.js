@@ -5,6 +5,7 @@ import { copyText } from '../lib/clipboard.js';
 import { ago, esc, fmt, pct } from '../lib/format.js';
 import { notesList } from '../lib/notes.js';
 import { SHORT, VOICES } from '../lib/pal.js';
+import { empty, icon } from '../lib/viz.js';
 
 const PAGES = [
   ['general', 'General'],
@@ -26,7 +27,18 @@ const FOLDER_ICON = { onedrive: '☁', icloud: '☁', gdrive: '▲', dropbox: '�
 const row = (label, sub, control) => `<div class="srow"><div>${label}${sub ? `<small>${sub}</small>` : ''}</div>${control}</div>`;
 const toggle = (attr, on, label) => `<button class="tog ${on ? 'on' : ''}" ${attr} aria-pressed="${!!on}" aria-label="${esc(label)}"></button>`;
 
-function general(s, about) {
+// what the tray and a notification look like with these settings, on the call that's up (or a made-up one)
+function trayPreview(s, live) {
+  const p = live?.prediction;
+  const fav = p ? (p.pick === 'home' ? p.home.pal : p.away.pal) : 'Chillet Lux';
+  const chance = p ? pct(p.prob) : '72%';
+  const logo = '<svg viewBox="0 0 120 120" width="14" height="14" aria-hidden="true"><path d="M10 64 C 34 22, 86 22, 110 64 C 86 40, 34 40, 10 64 Z" fill="#4fe3ff"/><path d="M10 56 C 34 98, 86 98, 110 56 C 86 80, 34 80, 10 56 Z" fill="#ff5ca8"/><circle cx="60" cy="60" r="18" fill="#ffcf6b"/></svg>';
+  return `<div class="tprev" aria-label="Preview"><span class="label">Preview</span>
+    <div class="mbar"><span>${logo}${s.tray_pick ? `<b>${esc(fav)} ${chance}</b>` : ''}</span><span class="muted">12:04</span></div>
+    ${s.notify_new_pick || s.notify_result ? `<div class="toast">${logo}<div><b>Augur</b><small>${s.notify_new_pick ? `${esc(fav)} to win, ${chance}` : `${esc(fav)} won ✓`}</small></div></div>` : '<div class="small">No notifications.</div>'}</div>`;
+}
+
+function general(s, about, live) {
   const ranged = s.poll_max_secs != null;
   const tog = (k, label, sub) => row(label, sub, toggle(`data-k="${k}"`, s[k], label));
   return `<div class="sg">
@@ -39,18 +51,19 @@ function general(s, about) {
     <div class="panel"><div class="ph"><h3>Tray &amp; notifications</h3></div>
       ${tog('tray_pick', 'Show the pick in the tray', 'macOS: name and chance · Windows: confidence ring')}
       ${tog('notify_new_pick', 'Notify on each new pick', 'with the bet to type')}
-      ${tog('notify_result', 'Notify with each result', '"Chillet Lux won ✓"')}</div>
+      ${tog('notify_result', 'Notify with each result', '"Chillet Lux won ✓"')}
+      ${trayPreview(s, live)}</div>
     ${
       about
         ? `<div class="panel about"><div class="ph"><h3>About Augur</h3><span>version ${esc(about.version)}</span></div>
       <div class="kpi five">${[
-        ['calls', about.counts[0]],
-        ['duels', about.counts[1]],
-        ['fight tapes', about.counts[2]],
-        ['species', about.counts[3]],
-        ['your bets', about.counts[4]],
+        ['calls', about.counts[0], 'eye'],
+        ['duels', about.counts[1], 'swords'],
+        ['fight tapes', about.counts[2], 'chart'],
+        ['species', about.counts[3], 'egg'],
+        ['your bets', about.counts[4], 'star'],
       ]
-        .map(([l, n]) => `<div><b>${fmt(n)}</b><small>${l}</small></div>`)
+        .map(([l, n, k]) => `<div>${icon(k, 18)}<b>${fmt(n)}</b><small>${l}</small></div>`)
         .join('')}</div>
       <div class="srow"><div>Data folder<small>${esc(about.data_dir)}</small></div><button class="btn ghost" id="cpdir">Copy path</button></div>
       <div class="small">Calls, duels and settings live here; the sign-in is encrypted for this computer. Settings › Sync &amp; data backs it all up.</div></div>`
@@ -86,7 +99,7 @@ function staking(s, preview) {
       ${row('Bet limits', 'min · max · a bare !h; the site doesn’t publish them', `<div class="st3">${num('min_bet', 'aria-label="Minimum bet"')}${num('max_bet', 'aria-label="Maximum bet"')}${num('default_bet', 'aria-label="Default bet"')}</div>`)}
       ${row('Type the max as "all"', '!h all stays right if the stream changes the max', toggle('data-stk="max_as_all"', st.max_as_all, 'Type the max as all'))}
       ${row('Track your bets', 'signed in, Augur reads your picks list to compare with its calls', toggle('data-k="import_bets"', s.import_bets, 'Track your bets'))}</div>
-    <div class="panel"><div class="ph"><h3>What it would suggest</h3><span>for a call at each chance</span></div>
+    <div class="panel col"><div class="ph"><h3>What it would suggest</h3><span>for a call at each chance</span></div>
       <div class="pvs">${bars}</div>
       <div class="small" style="margin-top:10px">${esc(preview.find(([p]) => p === 0.75)?.[1].why || '')}</div></div>
   </div>`;
@@ -140,11 +153,11 @@ function syncPage(v, flashMsg) {
         ${row('This computer', 'how the others see it', `<input type="text" id="sname" value="${esc(v.name)}" maxlength="40">`)}
         ${row('Settings', 'staking, voices, notifications, the model', toggle('data-what="settings"', v.what.settings, 'Sync settings'))}
         ${row('Augur’s calls', 'so every computer has the same record', toggle('data-what="calls"', v.what.calls, 'Sync calls'))}
-        <div class="small">Stays on each computer: the sign-in, launch at login and background fetching. Duels, species and your bets come from the site on each.</div></div>
+        <div class="small foot">Stays on each computer: the sign-in, launch at login and background fetching. Duels, species and your bets come from the site on each.</div></div>
     </div>
-    <div style="display:grid;gap:14px;align-content:start">
+    <div class="stackc">
       <div class="panel list"><div class="ph"><h3>Other computers</h3></div>${others}</div>
-      <div class="panel list"><div class="ph"><h3>Changes from them</h3></div>${history}</div>
+      <div class="panel col list grow"><div class="ph"><h3>Changes from them</h3></div>${v.history.length ? `<div class="fillin">${history}</div>` : empty('queue', 'No changes yet', 'Nothing has changed here from another computer yet.')}</div>
       <div class="panel"><div class="ph"><h3>Back up &amp; import</h3></div>
         <div class="small" style="margin-bottom:10px">A backup is the whole store: calls, duels, tapes, species and bets. Import one on a new computer to skip the hour-long first fetch. Importing adds what's missing and never overwrites.</div>
         <div style="display:flex;gap:8px"><button class="btn" id="bk">Back up…</button><button class="btn ghost" id="im">Import…</button></div>
@@ -186,14 +199,14 @@ function updates(s, u) {
     <div style="display:grid;gap:14px;align-content:start">
       <div class="panel uhero">${h.ring}<div class="uh"><span class="label">Augur ${esc(u.current)}</span><b>${h.title}</b><small>${h.sub}</small></div>
         <div class="ua">${h.act}<button class="btn ghost" id="uc" ${u.checking || u.progress || u.installing ? 'disabled' : ''}>Check now</button></div></div>
-      <div class="panel">
+      <div class="panel col grow">
         ${row('Check automatically', 'shortly after Augur starts, then every 6 hours', toggle('data-k="check_updates"', s.check_updates, 'Check for updates automatically'))}
         ${row('Download automatically', 'so Restart to update is instant; installing always waits for your click', toggle('data-k="auto_update"', s.auto_update, 'Download updates automatically'))}
-        <div class="small" style="margin-top:4px">Updates come from the project’s GitHub releases and are signed with its own key. Augur refuses one that isn’t.</div></div>
+        <div class="small foot">Updates come from the project’s GitHub releases and are signed with its own key. Augur refuses one that isn’t.</div></div>
     </div>
-    <div style="display:grid;gap:14px;align-content:start">
+    <div class="stackc">
       ${u.updated_from ? `<div class="panel note-card"><div class="ph"><h3>Updated to ${esc(u.current)}</h3><button class="btn ghost" id="us">Got it</button></div><div class="small" style="margin-bottom:8px">from ${esc(u.updated_from)} · here’s what changed</div>${notesList(u.updated_notes)}</div>` : ''}
-      ${r ? `<div class="panel"><div class="ph"><h3>What’s new in ${esc(r.version)}</h3>${r.published ? `<span>${day(r.published)}</span>` : ''}</div>${notesList(r.notes)}</div>` : u.updated_from ? '' : '<div class="panel"><div class="ph"><h3>What’s new</h3></div><div class="small">When a new version is out, its notes show here.</div></div>'}
+      ${r ? `<div class="panel col grow"><div class="ph"><h3>What’s new in ${esc(r.version)}</h3>${r.published ? `<span>${day(r.published)}</span>` : ''}</div>${notesList(r.notes)}</div>` : u.updated_from ? '' : `<div class="panel col grow"><div class="ph"><h3>What’s new</h3></div>${empty('star', 'Nothing new', 'When a new version is out, its notes show here.')}</div>`}
     </div>
   </div>`;
 }
@@ -217,7 +230,7 @@ export async function render(app) {
   ]);
   if (state.tab !== 'settings' || state.settingsPage !== page) return;
   const tabs = `<div class="seg ml">${PAGES.map(([k, l]) => `<button class="${page === k ? 'on' : ''}" data-page="${k}">${l}</button>`).join('')}</div>`;
-  const body = { general: () => general(s, about), staking: () => staking(s, preview), chat: () => chat(s, state.live), account: () => account(s, acct), sync: () => syncPage(sync, state.syncFlash), updates: () => updates(s, upd) }[page]();
+  const body = { general: () => general(s, about, state.live), staking: () => staking(s, preview), chat: () => chat(s, state.live), account: () => account(s, acct), sync: () => syncPage(sync, state.syncFlash), updates: () => updates(s, upd) }[page]();
   main.innerHTML = header('Settings', tabs) + body;
   state.syncFlash = null;
 

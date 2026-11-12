@@ -1,6 +1,8 @@
 // Players: anyone's record, rivals and pals used, and their pal box with reroll advice.
 import { invoke } from '../lib/bridge.js';
 import { esc, fmt, pct } from '../lib/format.js';
+import { orb } from '../lib/pal.js';
+import { empty, icon, ring, stack } from '../lib/viz.js';
 
 const TAG = { Keep: 'keep', Reroll: 'rr', Maybe: 'rr', Replace: 'no' };
 const ivColour = (x) => (x >= 80 ? '#3ddc97' : x >= 50 ? '#ffcf6b' : '#ff5f6d');
@@ -12,9 +14,20 @@ function boxPal(p) {
       return `<div class="iv"><span>${k}</span><div class="b"><i style="width:${iv}%;background:${ivColour(iv)}"></i></div><span>${fmt(iv)}</span></div>`;
     })
     .join('');
-  return `<div class="pcd" title="Beats a typical opponent ${pct(p.rating)} of the time on stats"><div class="t"><b>${esc(p.pal)}</b><span class="tag ${TAG[p.advice] || 'no'}">${esc(p.advice)}</span></div>${ivs}
-    <div class="small">${pct(p.rating)} vs typical${p.rerolls ? ` · rerolled ×${p.rerolls}` : ''}${p.passives.length ? ` · ${esc(p.passives.join(', '))}` : ''}</div></div>`;
+  return `<div class="pcd" title="Beats a typical opponent ${pct(p.rating)} of the time on stats"><div class="t">${orb(p.pal, p.slug, 'h av', 22)}<b>${esc(p.pal)}</b></div>${ivs}
+    <div class="pft"><b class="cond rt">${pct(p.rating)}</b> <span class="small">vs typical</span><span class="tag ${TAG[p.advice] || 'no'}">${esc(p.advice)}</span></div>
+    ${p.rerolls || p.passives.length ? `<div class="small">${[p.rerolls ? `rerolled ×${p.rerolls}` : '', esc(p.passives.join(', '))].filter(Boolean).join(' · ')}</div>` : ''}</div>`;
 }
+
+// a record per rival or pal: name, W–L and the share won as a bar
+const records = (rows, withOrb) =>
+  rows
+    .map(([name, w, n]) => {
+      const r = w / n;
+      const tone = r < 0.45 ? 'bad' : r > 0.55 ? 'ok' : '';
+      return `<div class="rec">${withOrb ? orb(name, null, 'h av', 24) : ''}<div class="hbar"><span>${esc(name)}</span><b class="${tone}">${w}–${n - w}</b><div class="b"><i class="${tone}" style="width:${100 * r}%"></i></div></div></div>`;
+    })
+    .join('');
 
 export async function render(app) {
   const { state, main, header } = app;
@@ -22,8 +35,8 @@ export async function render(app) {
   main.innerHTML =
     header(
       `Players · <b style="color:var(--t1)">${esc(state.player)}</b>`,
-      `<form id="pf" class="ml" style="display:flex;gap:6px"><input type="text" id="pn" placeholder="Find a player…" value=""><button class="btn ghost">Go</button></form>`,
-    ) + '<div class="panel empty">Loading…</div>';
+      `<form id="pf" class="ml" style="display:flex;gap:6px"><input type="text" id="pn" placeholder="Find a player…" value="" aria-label="Find a player"><button class="btn ghost">Go</button></form>`,
+    ) + `<div class="panel col grow">${empty('eye', 'Loading…')}</div>`;
   document.getElementById('pf').onsubmit = (e) => {
     e.preventDefault();
     const name = document.getElementById('pn').value.trim();
@@ -36,24 +49,30 @@ export async function render(app) {
   try {
     v = await invoke('player', { name: state.player });
   } catch (e) {
-    main.lastElementChild.innerHTML = esc(e);
+    main.lastElementChild.innerHTML = empty('eye', 'Couldn’t load that player', esc(e));
     return;
   }
   if (state.tab !== 'players') return;
   const d = v.detail;
   const best = d.pals_used.filter(([, , n]) => n >= 3).sort((a, b) => b[1] / b[2] - a[1] / a[2])[0];
   const most = d.pals_used[0];
-  main.lastElementChild.outerHTML = `<div class="tiles">
-      <div class="tile"><span class="label">Duel record</span><b>${d.wins}–${d.duels - d.wins}</b><small>${d.duels ? pct(d.wins / d.duels) : '—'} · ${d.duels} ranked duels</small></div>
-      <div class="tile"><span class="label">Best pal for them</span><b class="ok">${best ? esc(best[0]) : '—'}</b><small>${best ? `${best[1]}–${best[2] - best[1]}` : 'needs 3+ duels with a pal'}</small></div>
-      <div class="tile"><span class="label">Most used</span><b>${most ? esc(most[0]) : '—'}</b><small>${most ? `${most[1]}–${most[2] - most[1]}` : ''}</small></div>
-      <div class="tile"><span class="label">Pal box</span><b>${v.roster.length}</b><small>${v.rerolled_pals} rerolled</small></div></div>
-    <div class="g2"><div class="panel"><div class="ph"><h3>Pal box</h3><span>talents are fixed at hatch; a reroll redraws all three</span></div>
+  const advice = (k) => v.roster.filter((p) => p.advice === k).length;
+  const palStat = (label, x, tone, none) =>
+    `<div class="pst">${x ? orb(x[0], null, 'h av', 40) : `<span class="pst-o">${icon('egg', 18)}</span>`}<div><span class="label">${label}</span><b class="${x ? tone : 'muted'}">${x ? esc(x[0]) : '—'}</b><small>${x ? `${x[1]}–${x[2] - x[1]} · ${pct(x[1] / x[2])}` : none}</small></div></div>`;
+  main.lastElementChild.outerHTML = `<div class="panel phero">
+      ${orb(state.player, null, 'a', 64)}
+      <div class="pwho"><b>${esc(d.owner || state.player)}</b><small>${d.duels ? `${fmt(d.duels)} ranked duels` : 'no ranked duels logged yet'}</small></div>
+      ${ring(d.duels ? d.wins / d.duels : null, { size: 76, tone: d.duels && d.wins / d.duels < 0.45 ? 'bad' : 'ok', label: `${d.wins}–${d.duels - d.wins}`, sub: d.duels ? `${pct(d.wins / d.duels)} won` : 'duel record', title: 'Duel record' })}
+      ${palStat('Best pal for them', best, 'ok', 'needs 3+ duels with a pal')}
+      ${palStat('Most used', most, '', 'no duels yet')}
+      <div class="pboxs"><div class="yhead"><b class="bn">${v.roster.length}</b><span>in the pal box · ${v.rerolled_pals} rerolled</span></div>
+        ${v.roster.length ? stack([[advice('Keep'), 'keep', 'ok'], [advice('Reroll') + advice('Maybe'), 'reroll / maybe', 'gold'], [advice('Replace'), 'replace', 'dim']]) : ''}</div></div>
+    <div class="pgrid grow"><div class="panel col"><div class="ph"><h3>Pal box</h3><span>talents are fixed at hatch; a reroll redraws all three</span></div>
       ${v.roster_error ? `<div class="small bad">Couldn't load the box: ${esc(v.roster_error)}</div>` : ''}
-      <div class="box">${v.roster.sort((a, b) => b.rating - a.rating).map(boxPal).join('')}</div>
-      <div class="small" style="margin-top:8px">Advice is rough until the reroll cost is set in Settings: Keep strong pals, Reroll good species let down by one roll, Replace weak species no roll can fix.</div></div>
-      <div style="display:grid;gap:14px;align-content:start">
-        <div class="panel"><div class="ph"><h3>Rivals</h3><span>most met</span></div><table><tbody>${d.rivals.map(([r, w, n]) => `<tr><td>${esc(r)}</td><td class="num ${w / n < 0.45 ? 'bad' : w / n > 0.55 ? 'ok' : ''}">${w}–${n - w}</td></tr>`).join('') || '<tr><td class="muted">No duels yet.</td></tr>'}</tbody></table></div>
-        <div class="panel"><div class="ph"><h3>Pals used</h3></div><table><tbody>${d.pals_used.map(([p, w, n]) => `<tr><td>${esc(p)}</td><td class="num">${w}–${n - w}</td></tr>`).join('')}</tbody></table></div>
+      ${v.roster.length ? `<div class="fillin"><div class="box">${v.roster.sort((a, b) => b.rating - a.rating).map(boxPal).join('')}</div>
+      <div class="small" style="margin-top:10px">Advice is rough until the reroll cost is set in Settings: Keep strong pals, Reroll good species let down by one roll, Replace weak species no roll can fix.</div></div>` : empty('box', 'No pals in the box', 'Their pal box shows here once it can be read.')}</div>
+      <div class="stackc">
+        <div class="panel col grow"><div class="ph"><h3>Rivals</h3><span>most met</span></div>${d.rivals.length ? `<div class="fillin bars">${records(d.rivals)}</div>` : empty('swords', 'No duels yet', 'Who they meet most, and how it goes.')}</div>
+        <div class="panel col grow"><div class="ph"><h3>Pals used</h3></div>${d.pals_used.length ? `<div class="fillin bars">${records(d.pals_used, true)}</div>` : empty('egg', 'No pals used yet', 'The pals they duel with, and their record on each.')}</div>
       </div></div>`;
 }

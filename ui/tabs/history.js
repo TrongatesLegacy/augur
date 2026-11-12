@@ -2,6 +2,7 @@
 // the developer's bets next to Augur's calls and stakes, with missed fights kept apart from deviations.
 import { invoke } from '../lib/bridge.js';
 import { ago, esc, fmt, pct, signed } from '../lib/format.js';
+import { columns, empty, ring, signedBar, spark, stack } from '../lib/viz.js';
 
 const RANGES = [
   ['today', 'Today'],
@@ -44,25 +45,35 @@ async function renderBets(app, controls) {
     ? 'Sign in (Settings › Account) and Augur reads your picks list: it’s only shown to you when signed in.'
     : `${fmt(b.stored)} bets read${reading ? ` of ${fmt(imp.total)}${imp.paused ? ' · paused while a duel is up' : ''}` : ''} · last read ${ago(b.synced_at)}${imp.last_error ? `<br><span class="bad">${esc(imp.last_error)}</span>` : ''}`;
   const lead = c.augur - c.yours;
+  const max = Math.max(Math.abs(c.augur), Math.abs(c.yours), 1);
+  const bet = c.followed + c.deviated;
   main.innerHTML =
     header('History · your bets', controls) +
-    `<div class="tiles">
-      <div class="tile hero"><span class="label">Following Augur</span><b>${signed(c.augur)}</b><small>${lead === 0 ? 'same as you' : `${signed(lead)} vs what you did`}</small></div>
-      <div class="tile"><span class="label">What you did</span><b>${signed(c.yours)}</b><small>on the ${c.bet_on} calls you bet</small></div>
-      <div class="tile"><span class="label">Followed · deviated</span><b>${c.followed} · ${c.deviated}</b><small>${c.followed + c.deviated ? pct(c.followed / (c.followed + c.deviated)) + ' followed' : 'no calls bet yet'}</small></div>
-      <div class="tile"><span class="label">Missed</span><b>${c.missed}</b><small>${c.missed ? `${signed(c.missed_augur)} left on the table · not deviations` : 'none'}</small></div>
-      <div class="tile"><span class="label">No call</span><b>${c.no_call}</b><small>${c.no_call ? `${signed(c.no_call_yours)} on fights Augur didn't call` : 'none'}</small></div>
+    `<div class="hrow bets">
+      <div class="panel bvs"><div class="ph"><h3>Augur vs you</h3><span>${lead === 0 ? 'same as you' : `${signed(lead)} vs what you did`}</span></div>
+        ${signedBar('Following Augur', c.augur, max)}${signedBar('What you did', c.yours, max)}
+        <div class="small">on the ${c.bet_on} calls you bet</div></div>
+      <div class="panel"><div class="ph"><h3>Followed · deviated</h3><span>${bet ? pct(c.followed / bet) + ' followed' : 'no calls bet yet'}</span></div>
+        <div class="yrow">${ring(bet ? c.followed / bet : null, { size: 70, tone: 'ok', sub: 'followed' })}
+          ${stack([
+            [c.followed, 'followed', 'ok'],
+            [c.deviated, 'deviated', 'gold'],
+          ])}</div></div>
+      <div class="panel bleft"><div><span class="label">Missed</span><b class="bn">${c.missed}</b><small>${c.missed ? `${signed(c.missed_augur)} left on the table · not deviations` : 'none'}</small></div>
+        <div><span class="label">No call</span><b class="bn">${c.no_call}</b><small>${c.no_call ? `${signed(c.no_call_yours)} on fights Augur didn't call` : 'none'}</small></div></div>
     </div>
-    <div class="g2">
-      <div class="panel"><table><thead><tr><th>Fight</th><th>Augur</th><th>You</th><th></th><th>You made</th><th>Augur's way</th></tr></thead><tbody>
-        ${c.fights.slice(0, 60).map(betRow).join('') || '<tr><td colspan="6" class="muted">No bets or calls in this range yet.</td></tr>'}
-      </tbody></table></div>
-      <div style="display:grid;gap:14px;align-content:start">
+    <div class="g2 grow">
+      <div class="panel col">${c.fights.length ? `<div class="fillin"><table class="sticky"><thead><tr><th>Fight</th><th>Augur</th><th>You</th><th></th><th>You made</th><th>Augur's way</th></tr></thead><tbody>
+        ${c.fights.slice(0, 200).map(betRow).join('')}
+      </tbody></table></div>` : empty('star', 'No bets or calls in this range yet', 'Your bets show here next to Augur’s calls.')}</div>
+      <div class="stackc">
         <div class="panel"><div class="ph"><h3>Your picks list</h3><button class="btn ghost" id="rb" ${acct.signed_in ? '' : 'disabled'}>Read now</button></div>
           <div class="small">${status}</div>${reading ? `<div class="progress"><i style="width:${Math.min(100, (100 * b.stored) / imp.total)}%"></i></div>` : ''}</div>
-        <div class="panel"><div class="ph"><h3>How it's worked out</h3></div><div class="small">
-          <b>Followed</b>: you bet Augur's pick (any amount) · <b>Deviated</b>: the other side, or a bet when Augur said sit out · <b>Missed</b>: no bet on a call Augur would have bet on, kept out of the comparison.<br>
-          Augur's way uses the stake it suggested. On the side you backed it's your real payout scaled to that stake; a win on the other side is estimated at your usual <b>${c.odds.rate.toFixed(2)}</b> a credit (${c.odds.wins ? `median of your last ${c.odds.wins} wins` : 'assumed until you have wins'}).${b.balance ? ` Balance: <b>${fmt(b.balance)}</b>.` : ''}</div></div>
+        <div class="panel col grow"><div class="ph"><h3>How it's worked out</h3></div><div class="fillin hwo">
+          <div><span class="lab followed">Followed</span><p>you bet Augur's pick (any amount)</p></div>
+          <div><span class="lab deviated">Deviated</span><p>the other side, or a bet when Augur said sit out</p></div>
+          <div><span class="lab missed">Missed</span><p>no bet on a call Augur would have bet on, kept out of the comparison</p></div>
+          <p class="small">Augur's way uses the stake it suggested. On the side you backed it's your real payout scaled to that stake; a win on the other side is estimated at your usual <b>${c.odds.rate.toFixed(2)}</b> a credit (${c.odds.wins ? `median of your last ${c.odds.wins} wins` : 'assumed until you have wins'}).${b.balance ? ` Balance: <b>${fmt(b.balance)}</b>.` : ''}</p></div></div>
       </div>
     </div>`;
   document.getElementById('rb')?.addEventListener('click', async (e) => {
@@ -99,27 +110,38 @@ export async function render(app) {
   const t = h.tally;
   const miss = t.biggest_miss;
   const label = RANGES.find(([k]) => k === state.range)?.[1] || 'All calls';
+  // oldest first: each call right or not, and the hit rate as it ran
+  const results = h.calls.map((c) => c.winner === c.pick).reverse();
+  let hits = 0;
+  const running = results.map((r, i) => (hits += r) / (i + 1));
+  const rate = t.total ? t.right / t.total : null;
+  const strip = results.slice(-40);
+  const vs = (name, x, cls) => `<div class="hbar"><span>${name}</span><b>${x == null ? '—' : pct(x)}</b><div class="b"><i class="${cls}" style="width:${(x || 0) * 100}%"></i></div></div>`;
   main.innerHTML =
     header("History · Augur's own calls", seg) +
-    `<div class="tiles">
-      <div class="tile hero"><span class="label">${state.range === 'all' ? 'All calls' : label}</span><b>${t.right} / ${t.total}</b><small>${t.total ? pct(t.right / t.total) + ' right' : 'no calls yet'}</small></div>
-      <div class="tile"><span class="label">Best run</span><b>${t.best_run}</b><small>right in a row</small></div>
-      <div class="tile"><span class="label">Current run</span><b>${t.current_run}</b><small>right in a row now</small></div>
-      <div class="tile"><span class="label">Avg confidence</span><b>${t.total ? pct(t.avg_confidence) : '—'}</b><small>vs ${t.total ? pct(t.right / t.total) : '—'} hit rate</small></div>
-      <div class="tile"><span class="label">Today's logic</span><b>${h.rescored_right} / ${h.rescored_total}</b><small>re-scored with current settings</small></div>
+    `<div class="hrow">
+      <div class="panel hhero">${ring(rate, { size: 92, sub: 'right' })}
+        <div class="ycol"><span class="label">${state.range === 'all' ? 'All calls' : label}</span><b class="bn gold">${t.right} / ${t.total}</b><small class="small">${t.total ? `${t.total - t.right} missed · ${pct(t.right / t.total)} right` : 'no calls yet'}</small></div>
+        <div class="htrend">${running.length > 1 ? `${spark(running, { label: 'Hit rate as the calls went' })}<span class="small">hit rate as the calls went</span>` : ''}
+          <div class="strip" aria-label="The last ${strip.length} calls">${strip.map((r) => `<i class="${r ? 'w' : 'l'}" title="${r ? 'Right' : 'Missed'}"></i>`).join('')}</div></div></div>
+      <div class="panel hruns"><div><span class="label">Best run</span><b class="bn">${t.best_run}</b><small>right in a row</small></div><div><span class="label">Current run</span><b class="bn ${t.current_run ? 'ok' : ''}">${t.current_run}</b><small>right in a row now</small></div></div>
+      <div class="panel hconf"><div class="bars">${vs('Avg confidence', t.total ? t.avg_confidence : null, '')}${vs('Hit rate', rate, 'ok')}</div>
+        <div class="hlog"><span class="label">Today's logic</span><b>${h.rescored_right} / ${h.rescored_total}</b><small>re-scored with current settings</small></div></div>
     </div>
-    <div class="g2">
-      <div class="panel"><table><thead><tr><th></th><th>Fight</th><th>Called</th><th>Chance</th><th>Result</th><th>K.O.</th></tr></thead><tbody>
-        ${h.calls.map(callRow).join('') || '<tr><td colspan="6" class="muted">No calls in this range yet.</td></tr>'}
-      </tbody></table></div>
-      <div style="display:grid;gap:14px;align-content:start">
+    <div class="g2 grow">
+      <div class="panel col">${h.calls.length ? `<div class="fillin"><table class="sticky"><thead><tr><th></th><th>Fight</th><th>Called</th><th>Chance</th><th>Result</th><th>K.O.</th></tr></thead><tbody>
+        ${h.calls.map(callRow).join('')}
+      </tbody></table></div>` : empty('swords', 'No calls in this range yet', 'Augur logs every fight it calls; try This week or All time.')}</div>
+      <div class="stackc">
         <div class="panel"><div class="ph"><h3>Calibration</h3><span>said vs won</span></div><div class="cal">
           ${t.calibration.map(([band, won, n, promised]) => `<span>${band}</span><div class="cb"><i style="width:${(won / n) * 100}%"></i><s style="left:${promised * 100}%"></s></div><span>${won}/${n}</span>`).join('') || '<span class="muted">—</span>'}
         </div><div class="small" style="margin-top:10px">Bar: how often it won · tick: what it promised. Trustworthy after a few hundred calls.</div></div>
-        <div class="panel"><div class="ph"><h3>By stream</h3><span>one bar per day</span></div><div class="days">
-          ${t.by_day.slice(-12).map(([d, r, n]) => `<div title="${esc(d)}: ${r}/${n}"><i style="height:${Math.max(4, (r / n) * 80)}px"></i>${esc(d.slice(5))}</div>`).join('') || '<span class="muted">—</span>'}
-        </div></div>
-        ${miss ? `<div class="panel"><div class="ph"><h3>Biggest miss</h3></div>${esc(miss.pick === 'home' ? miss.home_pal : miss.away_pal)} at ${pct(miss.prob)}, beaten by ${esc(miss.pick === 'home' ? miss.away_pal : miss.home_pal)}</div>` : ''}
+        <div class="panel col grow"><div class="ph"><h3>By stream</h3><span>one bar per day${rate != null ? ` · dashed: ${pct(rate)}` : ''}</span></div>${
+          t.by_day.length
+            ? columns(t.by_day.slice(-30).map(([d, r, n]) => ({ v: r / n, label: d ? d.slice(5).replace('-', '/') : '—', top: `${r}/${n}`, title: `${d || 'undated'}: ${r}/${n}`, tone: r / n >= 0.5 ? '' : 'bad' })), rate)
+            : empty('chart', 'No streams yet')
+        }</div>
+        ${miss ? `<div class="panel hmiss"><span class="res x">✕</span><div><span class="label">Biggest miss</span><div>${esc(miss.pick === 'home' ? miss.home_pal : miss.away_pal)} at <b class="gold">${pct(miss.prob)}</b>, beaten by ${esc(miss.pick === 'home' ? miss.away_pal : miss.home_pal)}</div></div></div>` : ''}
       </div>
     </div>`;
   wire(app);

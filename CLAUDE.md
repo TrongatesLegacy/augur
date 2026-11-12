@@ -33,5 +33,6 @@ CI enforces the mechanical ones (`cargo fmt --check`, `cargo clippy -- -D warnin
 ## Git and GitHub
 
 - The repo is `TrongatesLegacy/augur` (public). Commits use TrongatesLegacy with the noreply email (set in this repo's config and by `~/.gitconfig-trongates`); never another identity.
+- **No AI credit in commits or pull requests:** no `Co-Authored-By: Claude` (or any Claude/Anthropic) trailer or "Generated with" line. Commits are TrongatesLegacy's alone.
 - `gh` here needs `GH_TOKEN="$(gh auth token --user TrongatesLegacy)"` (a hook enforces it); never `gh auth switch`.
 - Changes go on a branch and end as a pull request; don't change the version or `CHANGELOG.md` in one. Releases are published from GitHub (see README > Contributing and releases).

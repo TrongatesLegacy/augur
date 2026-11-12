@@ -216,6 +216,9 @@ pub fn fixture_data() -> Value {
                 notes: "## What's Changed\n* Check for updates in the app by @player-01 in https://github.com/TrongatesLegacy/augur/pull/8\n* Faster History by @player-01 in https://github.com/TrongatesLegacy/augur/pull/9\n\n**Full Changelog**: https://github.com/TrongatesLegacy/augur/compare/0.1.1...0.2.0".into(),
                 published: Some(recent as i64),
             }),
+            // updated from two versions back: the card lists both versions from the changelog built in
+            updated_from: Some("0.0.9".into()),
+            changelog: "# What's new in Augur\n\nAn intro line.\n\n## 0.1.1 (current)\n- Calls show their K.O. time\n\n## 0.1.0\n- A tray that says who's up next\n- A line that wraps\n  onto the next one\n\n## 0.0.9\n- The first version\n",
             ..Default::default()
         },
         "update_check": null,
@@ -331,10 +334,12 @@ const MAIN_DRIVER: &str = r#"
       .map((el) => `${el.tagName.toLowerCase()}.${[...el.classList].join('.')} (${el.clientWidth}px, needs ${el.scrollWidth}px): ${el.textContent.trim().replace(/\s+/g, ' ').slice(0, 50)}`);
   if (!window.augur) window.__errors.push('the page never started (a module failed to load)');
   else {
-    for (const tab of only ? [only] : ['live', 'liveedge', 'history', 'call', 'bets', 'pals', 'players', 'you', 'titles', 'titlesone', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'updates', 'offair']) {
+    for (const tab of only ? [only] : ['live', 'liveedge', 'history', 'call', 'bets', 'pals', 'players', 'you', 'titles', 'titlesone', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'changelog', 'updates', 'offair']) {
       // "ownmodel" is Settings › Model with self-tuning off and your own values
       const own = DATA.get_settings;
       if (tab === 'ownmodel') DATA.get_settings = { ...own, model_auto: false };
+      // "changelog" is Settings › Updates when up to date: the changelog built in
+      if (tab === 'changelog') DATA.update_view = { ...DATA.update_ready, latest: null, ready: false, updated_from: null };
       // "updates" is Settings › Updates with a new version downloaded and ready (and its bar over the window)
       if (tab === 'updates') {
         DATA.update_view = DATA.update_ready;
@@ -356,11 +361,22 @@ const MAIN_DRIVER: &str = r#"
         const t = p.pick === 'home' ? { t_home: p.score.t_away * 0.985 } : { t_away: p.score.t_home * 0.985 };
         window.augur.state.live = { ...DATA.live, prediction: { ...p, score: { ...p.score, ...t }, owners: { summary: 'first meeting', since: null, owners: [], meetings: [] }, pal_h2h: { home_wins: 0, away_wins: 0, meetings: [], pages_scanned: 1 } } };
       } else window.augur.state.live = DATA.live;
-      window.augur.state.settingsPage = ['staking', 'sync', 'updates'].includes(tab) ? tab : tab === 'ownmodel' ? 'model' : 'general';
+      window.augur.state.settingsPage = ['staking', 'sync', 'updates'].includes(tab) ? tab : tab === 'ownmodel' ? 'model' : tab === 'changelog' ? 'updates' : 'general';
       // "welcome" is the fresh install's overlay, over Live
-      await window.augur.show(['bets', 'call'].includes(tab) ? 'history' : ['staking', 'sync', 'updates', 'ownmodel'].includes(tab) ? 'settings' : ['welcome', 'offair', 'liveedge'].includes(tab) ? 'live' : ['titles', 'titlesone'].includes(tab) ? 'you' : tab);
+      await window.augur.show(['bets', 'call'].includes(tab) ? 'history' : ['staking', 'sync', 'changelog', 'updates', 'ownmodel'].includes(tab) ? 'settings' : ['welcome', 'offair', 'liveedge'].includes(tab) ? 'live' : ['titles', 'titlesone'].includes(tab) ? 'you' : tab);
       await sleep(300);
       if (tab === 'bets') out.betRows = document.querySelectorAll('#main tr[data-call]').length;
+      // Updates' panels don't run into each other, and their text stays inside them (the changelog scrolls in its own)
+      if (tab === 'updates' || tab === 'changelog') {
+        const ps = [...document.querySelectorAll('#main .stackc > .panel')].map((p) => [p, p.getBoundingClientRect()]);
+        out[tab + 'Apart'] = ps.every(([p, b], i) =>
+          (i === 0 || b.top >= ps[i - 1][1].bottom) &&
+          [...p.querySelectorAll('*')].every((el) => {
+            if (el.parentElement.closest('.fillin')) return true;
+            const r = el.getBoundingClientRect();
+            return !r.height || r.bottom <= b.bottom + 1;
+          }));
+      }
       if (tab === 'live' || tab === 'liveedge') {
         // the head to head and the HP race keep everything inside their panels (a list scrolls inside its own box),
         // and the race's end labels apart. The report's window is shorter than the screenshots' (Chrome's toolbar
@@ -589,6 +605,7 @@ fn big_numbers_fit() {
             "staking",
             "ownmodel",
             "sync",
+            "changelog",
             "updates",
             "offair",
         ] {
@@ -707,6 +724,9 @@ fn every_tab_renders_headless() {
     assert!(r["callBack"].as_str().unwrap().to_lowercase().contains("calibration"), "Back returns to the calls");
     assert_eq!(r["callBackRange"], json!("today"), "in the range it was in");
     assert!(r["betRows"].as_u64().unwrap() > 0, "Your bets rows with a call open its breakdown too");
+    for tab in ["updates", "changelog"] {
+        assert_eq!(r[format!("{tab}Apart")], true, "{tab}: the Updates panels overlap or spill");
+    }
     assert!(
         text("you").contains("248,120")
             && text("you").contains("predictions")
@@ -811,6 +831,21 @@ fn every_tab_renders_headless() {
         text("updates")
     );
     assert!(
+        text("updates").contains("updated to 0.1.1")
+            && text("updates").contains("calls show their k.o. time")
+            && text("updates").contains("a line that wraps onto the next one")
+            && text("updates").contains("this version"),
+        "after an update, what changed comes from the changelog built in: {}",
+        text("updates")
+    );
+    assert!(
+        text("changelog").contains("changelog")
+            && text("changelog").contains("the first version")
+            && text("changelog").contains("this version"),
+        "up to date, Updates shows the changelog built in: {}",
+        text("changelog")
+    );
+    assert!(
         !text("updates").contains("@player-01") && !text("updates").contains("full changelog"),
         "the notes are tidied: {}",
         text("updates")
@@ -837,6 +872,7 @@ fn every_tab_renders_headless() {
             "ownmodel",
             "sync",
             "welcome",
+            "changelog",
             "updates",
             "offair",
         ] {

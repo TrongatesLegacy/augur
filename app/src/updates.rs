@@ -1,7 +1,7 @@
 //! Updates: checking the latest GitHub release for a newer Augur (Tauri's updater, reading the release's latest.json),
 //! downloading it in the background, and installing it when the developer clicks Restart to update. Updates are signed
 //! with the project's update key, and one that isn't is refused. Nothing installs or restarts without that click, so a
-//! duel is never cut off. After a restart, Settings › Updates says what changed.
+//! duel is never cut off. After a restart, Settings › Updates says what changed, from the CHANGELOG.md built into the app.
 
 use crate::app::{now_ms, Shared};
 use crate::settings;
@@ -40,9 +40,10 @@ pub struct UpdateView {
     pub ready: bool,
     /// installing now: Augur is about to restart
     pub installing: bool,
-    /// set after an update, until the developer has seen it: the version it came from and what changed
+    /// set after an update, until the developer has seen it: the version it came from
     pub updated_from: Option<String>,
-    pub updated_notes: Option<String>,
+    /// this version's CHANGELOG.md, built in: what changed in it and every version before
+    pub changelog: &'static str,
 }
 
 /// The newer release and, once downloaded, its files.
@@ -56,12 +57,11 @@ impl UpdateView {
     /// At start: the running version, and whether it's new since the last run (an update just installed).
     pub fn at_start(shared: &Shared) -> Self {
         let current = env!("CARGO_PKG_VERSION").to_string();
-        let mut v = UpdateView { current: current.clone(), ..Default::default() };
+        let mut v = UpdateView { current: current.clone(), changelog: include_str!("../../CHANGELOG.md"), ..Default::default() };
         if let Ok(conn) = db::open(&settings::db_path(&shared.dir)) {
             let last = db::meta_get(&conn, "last_version").ok().flatten();
             if last.as_deref().is_some_and(|l| l != current) {
                 v.updated_from = last;
-                v.updated_notes = db::meta_get(&conn, "update_notes").ok().flatten();
             }
             let _ = db::meta_set(&conn, "last_version", &current);
         }
@@ -199,9 +199,8 @@ pub async fn update_install(app: AppHandle, shared: tauri::State<'_, Arc<Shared>
         fetch(&app, &shared, &update).await?;
     }
     let bytes = shared.pending.lock().unwrap().bytes.clone().ok_or("The update didn't download")?;
-    // kept so the next start can say what changed, and whether to show the window again
+    // kept so the next start can show the window again
     if let Ok(conn) = db::open(&settings::db_path(&shared.dir)) {
-        let _ = db::meta_set(&conn, "update_notes", update.body.as_deref().unwrap_or(""));
         let open = app.get_webview_window("main").is_some_and(|w| w.is_visible().unwrap_or(false));
         let _ = db::meta_set(&conn, "reopen_main", if open { "1" } else { "" });
     }
@@ -224,5 +223,4 @@ pub async fn update_install(app: AppHandle, shared: tauri::State<'_, Arc<Shared>
 pub fn update_seen(shared: tauri::State<'_, Arc<Shared>>) {
     let mut v = shared.update.lock().unwrap();
     v.updated_from = None;
-    v.updated_notes = None;
 }

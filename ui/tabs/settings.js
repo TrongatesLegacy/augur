@@ -4,7 +4,7 @@
 import { invoke } from '../lib/bridge.js';
 import { copyText } from '../lib/clipboard.js';
 import { ago, esc, fmt, pct } from '../lib/format.js';
-import { notesList } from '../lib/notes.js';
+import { changesSince, notesList, parseChangelog, versionsList } from '../lib/notes.js';
 import { SHORT, VOICES } from '../lib/pal.js';
 import { empty, icon } from '../lib/viz.js';
 import { KNOBS } from './model.js';
@@ -210,6 +210,8 @@ function updateHero(u) {
 function updates(s, u) {
   const h = updateHero(u);
   const r = u.latest;
+  // the changelog built into this version, newest first (hidden while the "Updated to" card lists what just changed)
+  const history = parseChangelog(u.changelog).slice(0, 6);
   return `<div class="sg">
     <div style="display:grid;gap:14px;align-content:start">
       <div class="panel uhero">${h.ring}<div class="uh"><span class="label">Augur ${esc(u.current)}</span><b>${h.title}</b><small>${h.sub}</small></div>
@@ -220,8 +222,9 @@ function updates(s, u) {
         <div class="small foot">Updates come from the project’s GitHub releases and are signed with its own key. Augur refuses one that isn’t.</div></div>
     </div>
     <div class="stackc">
-      ${u.updated_from ? `<div class="panel note-card"><div class="ph"><h3>Updated to ${esc(u.current)}</h3><button class="btn ghost" id="us">Got it</button></div><div class="small" style="margin-bottom:8px">from ${esc(u.updated_from)} · here’s what changed</div>${notesList(u.updated_notes)}</div>` : ''}
-      ${r ? `<div class="panel col grow"><div class="ph"><h3>What’s new in ${esc(r.version)}</h3>${r.published ? `<span>${day(r.published)}</span>` : ''}</div>${notesList(r.notes)}</div>` : u.updated_from ? '' : `<div class="panel col grow"><div class="ph"><h3>What’s new</h3></div>${empty('star', 'Nothing new', 'When a new version is out, its notes show here.')}</div>`}
+      ${u.updated_from ? `<div class="panel note-card"><div class="ph"><h3>Updated to ${esc(u.current)}</h3><button class="btn ghost" id="us">Got it</button></div><div class="small" style="margin-bottom:8px">from ${esc(u.updated_from)} · here’s what changed</div>${versionsList(changesSince(u.changelog, u.updated_from, u.current), u.current)}</div>` : ''}
+      ${r ? `<div class="panel col"><div class="ph"><h3>What’s new in ${esc(r.version)}</h3>${r.published ? `<span>${day(r.published)}</span>` : ''}</div>${notesList(r.notes)}</div>` : ''}
+      ${history.length && !u.updated_from ? `<div class="panel col grow"><div class="ph"><h3>Changelog</h3><span>the last ${history.length === 1 ? 'version' : `${history.length} versions`}</span></div><div class="fillin">${versionsList(history, u.current)}</div></div>` : ''}
     </div>
   </div>`;
 }

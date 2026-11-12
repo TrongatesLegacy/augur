@@ -869,3 +869,11 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 .hpc .proj { fill: none; stroke-width: 1.8; stroke-dasharray: 2 4; stroke-linecap: round; opacity: .7; }
 .hpc .proj.home { stroke: var(--home); } .hpc .proj.away { stroke: var(--away); }
 .lg .lgp i { width: 13px; height: 2px; border-radius: 1px; background: repeating-linear-gradient(90deg, var(--t3) 0 2px, transparent 2px 5px); }
+
+/* Settings › Updates: the changelog as a timeline, this version marked */
+.vtl { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+.vtl > li { position: relative; padding-left: 16px; border-left: 2px solid var(--line); }
+.vtl > li.this { border-left-color: rgba(61,220,151,.55); }
+.vtl .vh { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.vtl .vh code { font: 700 15px/1 var(--cond); color: var(--t1); }
+.vtl .vh .pill { color: var(--ok); border-color: rgba(61,220,151,.35); }

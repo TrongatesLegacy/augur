@@ -270,6 +270,24 @@ jobs:
             grep -Eq "$want" assets.txt || { echo "::error::The release is missing a file matching $want"; exit 1; }
           done
 
+      # Tauri's action leaves latest.json's notes empty; installed copies show these under "What's new in" before
+      # they update (latest.json isn't signed: the update files it points to are)
+      - name: Put the notes in latest.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release download "$TAG" --pattern latest.json --dir "$RUNNER_TEMP" --repo "$GITHUB_REPOSITORY"
+          python3 scripts/release_notes.py "$TAG" --changes > "$RUNNER_TEMP/changes.md"
+          python3 - "$RUNNER_TEMP/latest.json" "$RUNNER_TEMP/changes.md" <<'PY'
+          import json, sys
+          path, changes = sys.argv[1], open(sys.argv[2]).read().strip()
+          data = json.load(open(path))
+          data["notes"] = changes
+          json.dump(data, open(path, "w"), indent=2)
+          PY
+          gh release upload "$TAG" "$RUNNER_TEMP/latest.json" --clobber --repo "$GITHUB_REPOSITORY"
+
       - name: Release notes from CHANGELOG.md
         if: github.event.release.body == ''
         env:

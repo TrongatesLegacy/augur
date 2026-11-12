@@ -254,6 +254,12 @@ jobs:
           path: installers
           merge-multiple: true
 
+      # the Mac artifact keeps its bundle folders (dmg/, macos/): bring every installer up to one level
+      - name: Gather the installers
+        run: |
+          find installers -mindepth 2 -type f -exec mv -t installers {} +
+          find installers -mindepth 1 -type d -empty -delete
+
       - name: Check both installers are there
         run: |
           ls -l installers

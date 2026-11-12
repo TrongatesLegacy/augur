@@ -98,6 +98,7 @@ pub fn import(conn: &Connection, path: &Path) -> crate::Result<usize> {
             model: l.model,
             home,
             away,
+            picks_open: true,
         };
         let id = db::add_call(conn, &call)?;
         if let Some(amount) = l.stake {

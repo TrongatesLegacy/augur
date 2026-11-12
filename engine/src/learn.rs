@@ -113,7 +113,7 @@ fn best(knob: &Knob, s: &Settings, loss: &dyn Fn(&Settings) -> f64, margin: f64)
 /// Re-fit the settings, starting from `current`. Changes nothing in the database; `save` keeps the result.
 pub fn learn(conn: &Connection, current: &Settings, now_ms: u64) -> R<Learned> {
     let past = history::past_duels(conn)?;
-    let calls: Vec<CallRecord> = db::settled(conn)?.into_iter().filter(|c| c.fighters.is_some() && c.species_rec.is_some()).collect();
+    let calls: Vec<CallRecord> = db::settled_all(conn)?.into_iter().filter(|c| c.fighters.is_some() && c.species_rec.is_some()).collect();
     Ok(learn_on(&past, &calls, current, now_ms))
 }
 

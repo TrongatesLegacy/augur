@@ -71,6 +71,11 @@ pub fn fixture_data() -> Value {
     let preview: Vec<_> = [0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9]
         .map(|p| (p, stake::suggest("home", p, &StakeSettings::default(), &bets::odds(&conn).unwrap())))
         .to_vec();
+    // the newest call was re-called after picks closed and came out the other way
+    let mut history = views::history_view(&conn, &s, "all", 0).unwrap();
+    if let Some(c) = history.calls.first_mut() {
+        c.late = Some((if c.pick == "home" { "away" } else { "home" }.into(), 0.575));
+    }
     let model_view = {
         // a made-up self-tuning run: one change kept, one held, the stat settings still waiting for calls
         let mut l = learn::learn(&conn, &s, recent - 3_600_000).unwrap();
@@ -104,7 +109,7 @@ pub fn fixture_data() -> Value {
     };
     json!({
         "live": live,
-        "history": views::history_view(&conn, &s, "all", 0).unwrap(),
+        "history": history,
         "bets_view": views::bets_view(&conn, &StakeSettings::default(), "all", 0, Default::default()).unwrap(),
         "import_bets": null,
         "species_list": augur_engine::history::species_records(&conn).unwrap(),
@@ -453,6 +458,7 @@ fn every_tab_renders_headless() {
     // compared lowercased: labels are styled uppercase and innerText reflects that
     let text = |tab: &str| r[tab].as_str().unwrap_or("").to_lowercase();
     assert!(text("live").contains("wumpo"), "Live: {}", text("live"));
+    assert!(text("history").contains("after the bell:"), "History shows a call that changed after picks closed: {}", text("history"));
     let p = &data["live"]["prediction"];
     let chance = format!("{}%", (p["prob"].as_f64().unwrap() * 100.0).round());
     assert!(text("live").contains(&chance), "Live shows the chance {chance}: {}", text("live"));

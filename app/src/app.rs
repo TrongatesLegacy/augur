@@ -54,6 +54,14 @@ impl Shared {
     }
 }
 
+/// A random number in 0..1, for polling at uneven times (no need for a random-number crate).
+fn roll() -> f64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u128(SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+    (h.finish() >> 11) as f64 / (1u64 << 53) as f64
+}
+
 pub fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
@@ -150,7 +158,7 @@ fn notify(app: &AppHandle, title: &str, body: &str) {
 fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
     let mut last_key = String::new();
     while !shared.stop.load(Ordering::Relaxed) {
-        let poll = shared.settings.lock().unwrap().poll_secs.max(2);
+        let poll = shared.settings.lock().unwrap().poll_wait(roll());
         let mut has_duel = false;
         match State::fetch() {
             Ok(state) => {
@@ -240,7 +248,7 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
         let view = shared.live.lock().unwrap().clone();
         let _ = app.emit("live", &view);
         update_tray(&app, &shared);
-        let wait = if has_duel { Duration::from_secs(poll) } else { Duration::from_secs(30) };
+        let wait = if has_duel { poll } else { Duration::from_secs(30) };
         let end = Instant::now() + wait;
         while Instant::now() < end && !shared.stop.load(Ordering::Relaxed) {
             std::thread::sleep(Duration::from_millis(250));

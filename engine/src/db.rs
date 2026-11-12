@@ -277,6 +277,20 @@ pub fn get_duel(conn: &Connection, id: u64) -> Result<Option<Duel>> {
     Ok(Some(d))
 }
 
+/// Whether a duel is stored (an import may have filled it in since a backfill made its list).
+pub fn has_duel(conn: &Connection, id: u64) -> Result<bool> {
+    Ok(conn.query_row("SELECT COUNT(*) FROM duels WHERE id = ?", [id as i64], |r| r.get::<_, i64>(0))? > 0)
+}
+
+pub fn has_species(conn: &Connection, slug: &str) -> Result<bool> {
+    Ok(conn.query_row("SELECT COUNT(*) FROM species WHERE slug = ?", [slug], |r| r.get::<_, i64>(0))? > 0)
+}
+
+/// Nothing in the store yet: no calls and no duels (a fresh install).
+pub fn is_empty(conn: &Connection) -> Result<bool> {
+    Ok(conn.query_row("SELECT (SELECT COUNT(*) FROM duels) + (SELECT COUNT(*) FROM predictions)", [], |r| r.get::<_, i64>(0))? == 0)
+}
+
 pub fn duel_ids(conn: &Connection) -> Result<std::collections::HashSet<u64>> {
     let mut st = conn.prepare("SELECT id FROM duels")?;
     let ids = st.query_map([], |r| r.get::<_, i64>(0))?;
@@ -790,6 +804,16 @@ mod tests {
         assert_eq!((again.calls, again.duels, again.bets), (0, 0, 0), "merging twice adds nothing");
         assert!(merge_from(&pc, &dir.join("missing.db")).is_err());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn what_the_store_has() {
+        let conn = open_memory().unwrap();
+        assert!(is_empty(&conn).unwrap());
+        let seeded = crate::seed::store();
+        assert!(!is_empty(&seeded).unwrap());
+        assert!(has_duel(&seeded, 4702).unwrap() && !has_duel(&seeded, 1).unwrap());
+        assert!(has_species(&seeded, "bushi-noct").unwrap() && !has_species(&seeded, "lamball").unwrap());
     }
 
     #[test]

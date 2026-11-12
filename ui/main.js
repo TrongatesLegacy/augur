@@ -1,5 +1,7 @@
 // The main window: the sidebar, the shared state the tabs read, and the events from the Rust side.
+import { backfillState } from './lib/backfill.js';
 import { invoke, listen } from './lib/bridge.js';
+import { esc } from './lib/format.js';
 import * as history from './tabs/history.js';
 import * as live from './tabs/live.js';
 import * as model from './tabs/model.js';
@@ -18,15 +20,28 @@ const app = {
     document.querySelectorAll('.nav').forEach((n) => n.classList.toggle('on', n.dataset.tab === tab));
     return TABS[tab].render(app);
   },
-  // a short message at the top of the page, e.g. when saving settings fails
-  flash(msg) {
-    const d = Object.assign(document.createElement('div'), { className: 'panel bad', textContent: String(msg) });
+  // a short message at the top of the page: an error (saving settings failed), or `good` news (an import's result)
+  flash(msg, good) {
+    const d = Object.assign(document.createElement('div'), { className: `panel ${good ? 'note' : 'bad'}`, textContent: String(msg) });
     app.main.prepend(d);
     setTimeout(() => d.remove(), 5000);
   },
 };
 
 document.querySelectorAll('.nav').forEach((n) => (n.onclick = () => app.show(n.dataset.tab)));
+
+// the sidebar's small ring while the background fetch runs (click: the Model tab's details)
+const bf = document.getElementById('bf');
+function showBackfill(p) {
+  const st = backfillState(p);
+  bf.hidden = !st;
+  if (!st) return;
+  bf.title = st.long;
+  bf.classList.toggle('warn', !!st.warn);
+  bf.innerHTML = `<svg viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="15" class="t"/><circle cx="18" cy="18" r="15" class="f" style="stroke-dasharray:${(st.share * 94.2).toFixed(1)} 94.2"/></svg><span>${esc(st.short)}</span><small>${st.warn ? 'Site busy' : 'Fetching'}</small>`;
+}
+bf.onclick = () => app.show('model');
+listen('backfill', showBackfill);
 listen('live', (v) => {
   app.state.live = v;
   if (app.state.tab === 'live') live.render(app);
@@ -53,6 +68,7 @@ listen('account', () => {
 
 app.state.settings = await invoke('get_settings');
 app.state.live = await invoke('live');
+showBackfill(await invoke('backfill_progress'));
 await app.show('live');
 // for the headless UI tests
 window.augur = app;

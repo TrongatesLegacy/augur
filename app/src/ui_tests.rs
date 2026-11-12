@@ -61,6 +61,7 @@ pub fn fixture_data() -> Value {
         queue: state.queue.iter().filter(|q| q.pos > 0).take(3).cloned().collect(),
         synced_at: 1,
         today: (14, 19),
+        first_run: true,
         ..Default::default()
     };
     let roster = Ok(site::parse_roster(&page("user-trongateslegacy.html")));
@@ -105,6 +106,8 @@ pub fn fixture_data() -> Value {
             }],
         },
         "account": { "signed_in": false, "name": null },
+        "start_fresh": null,
+        "backfill_progress": augur_engine::backfill::Progress { phase: "duels".into(), done: 1200, total: 4702, ..Default::default() },
         "pal_image": null,
     })
 }
@@ -188,6 +191,7 @@ const MAIN_DRIVER: &str = r#"
       out[tab] = document.getElementById('main').innerText;
     }
   }
+  out.sidebar = document.querySelector('.side').innerText;
   out.errors = window.__errors;
   document.getElementById('report').textContent = JSON.stringify(out);
 })();
@@ -293,6 +297,8 @@ fn every_tab_renders_headless() {
     assert!(text("live").contains(&p["lines"][0].as_str().unwrap().to_lowercase()), "Live shows the Yoda line");
     assert!(text("live").contains("some stats hidden until the bell"), "Live says the home stats are estimated");
     assert!(text("history").contains("14 / 19"), "History: {}", text("history"));
+    assert!(text("live").contains("setting up on a new computer?"), "a fresh install offers the import: {}", text("live"));
+    assert!(text("sidebar").contains("25%") && text("sidebar").contains("fetching"), "the sidebar shows the fetch: {}", text("sidebar"));
     let stake = data["live"]["stake"]["command"].as_str().unwrap();
     assert!(!stake.is_empty() && text("live").contains(&format!("copy {stake}")), "Live offers the bet {stake}: {}", text("live"));
     let b = &data["bets_view"]["comparison"];

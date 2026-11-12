@@ -1,8 +1,40 @@
 // Live: the duel that's up, the call and why, the head-to-heads, what's next and the chat line.
+import { invoke } from '../lib/bridge.js';
 import { copyText } from '../lib/clipboard.js';
 import { esc, pct } from '../lib/format.js';
 import { SHORT, dial, orb, pickVoice, tapeRows, voiceLine, whyLine } from '../lib/pal.js';
 import { betCommand, stakeLine } from '../lib/stake.js';
+
+// a fresh install: bring a backup across from another computer, or start fresh (the background fetch waits)
+function welcome(live) {
+  if (!live?.first_run) return '';
+  return `<div class="panel welcome"><div class="wt"><b>Setting up on a new computer?</b><small>Import a backup from your other computer to bring your calls, bets and every past duel across, and skip the hour-long first fetch. Live calls work either way.</small></div>
+    <div class="wb"><button class="btn" id="wi">Import a backup…</button><button class="btn ghost" id="wf">Start fresh</button></div></div>`;
+}
+
+function wireWelcome(app) {
+  document.getElementById('wf')?.addEventListener('click', async () => {
+    await invoke('start_fresh');
+    app.state.live = await invoke('live');
+    render(app);
+  });
+  document.getElementById('wi')?.addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try {
+      const r = await invoke('import_file');
+      if (r) {
+        const m = r.merged;
+        app.state.live = await invoke('live');
+        render(app);
+        app.flash(`Imported ${r.file}: ${m.calls} calls, ${m.duels} duels, ${m.bets} bets. Only newer duels are left to fetch.`, true);
+        return;
+      }
+    } catch (err) {
+      app.flash(err);
+    }
+    e.target.disabled = false;
+  });
+}
 
 function upNext(live, inline) {
   const q = live?.queue || [];
@@ -38,7 +70,8 @@ export function render(app) {
     const last = r
       ? `Last fight: <span class="${r.right ? 'ok' : 'bad'}">${esc(r.winner_pal)} won ${r.right ? '✓' : '✕'}</span> (${esc(r.home_pal)} vs ${esc(r.away_pal)}${r.ko ? `, K.O. ${esc(r.ko)}` : ''}${r.hp_left != null ? `, ${r.hp_left}% HP left` : ''})`
       : 'Augur checks every few seconds and calls the next fight as soon as it’s up.';
-    main.innerHTML = header('Live · PalDuels', status) + `<div class="panel empty"><b>No duel up right now</b>${last}</div>` + upNext(live);
+    main.innerHTML = header('Live · PalDuels', status) + welcome(live) + `<div class="panel empty"><b>No duel up right now</b>${last}</div>` + upNext(live);
+    wireWelcome(app);
     return;
   }
   const fav = p.pick === 'home' ? p.home : p.away;
@@ -56,6 +89,7 @@ export function render(app) {
   const command = betCommand(p, live.stake);
   main.innerHTML =
     header(`Live · ${esc(p.title || 'PalDuels')}`, status + (command ? `<button class="btn ghost" id="cmd">Copy ${esc(command)}</button>` : '')) +
+    welcome(live) +
     `<div class="stage">${side(p.home, 'h', p.pick === 'home')}
       <div class="center">${dial(p.prob, 112)}<div class="cond" style="font-weight:800;font-size:24px;letter-spacing:.06em;margin-top:4px;text-transform:uppercase">${esc(fav.pal)}</div><div class="small" style="color:var(--t2)">${esc(whyLine(p))}</div>${p.home.estimated || p.away.estimated ? '<div class="small gold">Some stats hidden until the bell: estimated</div>' : ''}${stakeLine(live.stake)}</div>
       ${side(p.away, 'a', p.pick === 'away')}</div>
@@ -94,4 +128,5 @@ export function render(app) {
   });
   document.getElementById('cp').onclick = (e) => copyText(document.getElementById('vq').textContent, e.target);
   document.getElementById('cmd')?.addEventListener('click', (e) => copyText(command, e.target));
+  wireWelcome(app);
 }

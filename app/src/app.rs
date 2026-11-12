@@ -237,8 +237,11 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
                     let day = civil_date(today);
                     let calls = db::settled(&conn).unwrap_or_default();
                     let t = history::tally(&calls, Some(&day));
+                    let staking = shared.settings.lock().unwrap().staking.clone();
+                    let off_air = if has_duel { None } else { views::off_air(&conn, &staking).ok() };
                     let mut live = shared.live.lock().unwrap();
                     live.today = (t.right, t.total);
+                    live.off_air = off_air;
                 }
                 let mut live = shared.live.lock().unwrap();
                 live.first_run = shared.setup_wait.load(Ordering::Relaxed);
@@ -359,7 +362,15 @@ fn toggle_popover(app: &AppHandle) {
     }
 }
 
+/// macOS: in the Dock (and ⌘-Tab) while the main window is open, menu bar only while it isn't.
+fn in_dock(app: &AppHandle, shown: bool) {
+    #[cfg(target_os = "macos")]
+    let _ = app.set_activation_policy(if shown { tauri::ActivationPolicy::Regular } else { tauri::ActivationPolicy::Accessory });
+    let _ = (app, shown);
+}
+
 pub fn open_main(app: &AppHandle, tab: Option<&str>) {
+    in_dock(app, true);
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.unminimize();
@@ -468,6 +479,7 @@ fn save_settings(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>, settings
     settings.save(&shared.dir)?;
     let autostart = app.autolaunch();
     let _ = if settings.launch_at_login { autostart.enable() } else { autostart.disable() };
+    let _ = app.emit("settings", &settings);
     *shared.settings.lock().unwrap() = settings;
     // the staking settings may have changed: re-work the stake for the call that's up
     restake(&app, &shared);
@@ -498,6 +510,51 @@ async fn pal_image(shared: tauri::State<'_, Arc<Shared>>, slug: String) -> Cmd<O
 #[tauri::command]
 fn open_window(app: AppHandle, tab: Option<String>) {
     open_main(&app, tab.as_deref());
+}
+
+/// The popover's height follows what it shows (the page measures itself).
+#[tauri::command]
+fn fit_popover(app: AppHandle, height: f64) {
+    if let Some(w) = app.get_webview_window("tray") {
+        let _ = w.set_size(tauri::LogicalSize::new(340.0, height.clamp(160.0, 640.0)));
+        // Windows: the popover sits above the taskbar, so keep its bottom edge there
+        if cfg!(windows) && w.is_visible().unwrap_or(false) {
+            let _ = w.move_window(Position::TrayBottomCenter);
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct About {
+    version: String,
+    data_dir: String,
+    /// calls, duels, fight tapes, species, your bets
+    counts: [i64; 5],
+}
+
+/// Settings › General's About panel: the version, where the data lives and how much there is.
+#[tauri::command]
+fn about(shared: tauri::State<'_, Arc<Shared>>) -> Cmd<About> {
+    let conn = shared.db()?;
+    let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0);
+    Ok(About {
+        version: env!("CARGO_PKG_VERSION").into(),
+        data_dir: shared.dir.display().to_string(),
+        counts: [
+            count("SELECT COUNT(*) FROM predictions WHERE status = 'settled'"),
+            count("SELECT COUNT(*) FROM duels"),
+            count("SELECT COUNT(DISTINCT duel_id) FROM hits"),
+            count("SELECT COUNT(*) FROM species"),
+            count("SELECT COUNT(*) FROM bets"),
+        ],
+    })
+}
+
+/// The popover's power button: quit Augur.
+#[tauri::command]
+fn quit_app(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>) {
+    shared.stop.store(true, Ordering::Relaxed);
+    app.exit(0);
 }
 
 #[tauri::command]
@@ -625,6 +682,9 @@ pub fn run() {
             pal_image,
             open_window,
             hide_popover,
+            fit_popover,
+            quit_app,
+            about,
             account,
             sign_in,
             sign_out,
@@ -685,6 +745,7 @@ pub fn run() {
                     WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
                         let _ = w2.hide();
+                        in_dock(w2.app_handle(), false);
                     }
                     WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => fit_zoom(&w2),
                     _ => {}
@@ -724,6 +785,28 @@ pub fn run() {
             std::thread::spawn(move || crate::updates::check_loop(h5, s5));
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("Augur failed to start");
+        .build(tauri::generate_context!())
+        .expect("Augur failed to start")
+        .run(|app, event| {
+            // macOS: clicking Augur in the Dock brings the window back
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                open_main(app, None);
+            }
+            let _ = (app, event);
+        });
+}
+
+#[cfg(test)]
+mod tests {
+    /// macOS draws the menu bar icon from its transparency alone, so an icon with no transparent pixels shows as a
+    /// white square.
+    #[test]
+    fn the_menu_bar_icon_is_a_shape_on_transparent() {
+        let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-template.png")).unwrap();
+        let alpha: Vec<u8> = icon.rgba().chunks(4).map(|p| p[3]).collect();
+        let clear = alpha.iter().filter(|&&a| a == 0).count();
+        let solid = alpha.iter().filter(|&&a| a > 128).count();
+        assert!(clear > alpha.len() / 2 && solid > alpha.len() / 10, "{clear} clear and {solid} solid of {} pixels", alpha.len());
+    }
 }

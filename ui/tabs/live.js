@@ -1,6 +1,6 @@
 // Live: the duel that's up, the call and why, the head-to-heads, what's next and the chat line.
 import { copyText } from '../lib/clipboard.js';
-import { esc, pct } from '../lib/format.js';
+import { esc, fmt, pct, signed } from '../lib/format.js';
 import { SHORT, dial, orb, pickVoice, tapeRows, voiceLine, whyLine } from '../lib/pal.js';
 import { betCommand, stakeLine } from '../lib/stake.js';
 
@@ -38,7 +38,40 @@ export function render(app) {
     const last = r
       ? `Last fight: <span class="${r.right ? 'ok' : 'bad'}">${esc(r.winner_pal)} won ${r.right ? '✓' : '✕'}</span> (${esc(r.home_pal)} vs ${esc(r.away_pal)}${r.ko ? `, K.O. ${esc(r.ko)}` : ''}${r.hp_left != null ? `, ${r.hp_left}% HP left` : ''})`
       : 'Augur checks every few seconds and calls the next fight as soon as it’s up.';
-    main.innerHTML = header('Live · PalDuels', status) + `<div class="panel empty"><b>No duel up right now</b>${last}</div>` + upNext(live);
+    const o = live?.off_air;
+    const between = (live?.queue || []).length > 0;
+    const ls = o?.last_stream;
+    const day = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+    const stream = ls
+      ? `<div class="panel"><div class="ph"><h3>${between ? 'Today' : 'Last stream'}</h3><span>${esc(day(ls[0]))}</span></div>
+          <div class="qn big"><b>${ls[1]}<i>/${ls[2]}</i></b><span>${pct(ls[1] / ls[2])} right · best run ${ls[3]}</span></div>
+          ${o.last_bets ? `<div class="qb"><span>You <b class="${o.last_bets[0] >= 0 ? 'ok' : 'bad'}">${signed(o.last_bets[0])}</b></span><span>Following Augur <b class="${o.last_bets[1] >= 0 ? 'ok' : 'bad'}">${signed(o.last_bets[1])}</b></span></div>` : ''}
+          ${o.all_time[1] ? `<div class="small" style="margin-top:8px">All time ${o.all_time[0]}/${o.all_time[1]} · ${pct(o.all_time[0] / o.all_time[1])}</div>` : ''}</div>`
+      : '';
+    const recent = o?.recent?.length
+      ? `<div class="panel list"><div class="ph"><h3>Latest calls</h3></div>${o.recent.map(([pick, other, right]) => `<div class="row"><span><span class="res ${right ? 'o' : 'x'}">${right ? '✓' : '✕'}</span> <b>${esc(pick)}</b> <span class="muted">over</span> ${esc(other)}</span><span class="${right ? 'ok' : 'bad'} small">${right ? 'Right' : 'Missed'}</span></div>`).join('')}</div>`
+      : '';
+    const hero = `<div class="panel offair"><b>${live?.error ? 'Can’t reach PalDuels' : between ? 'Between duels' : 'Off air'}</b><span>${last}</span></div>`;
+    const days = o?.days?.length
+      ? `<div class="panel"><div class="ph"><h3>Recent streams</h3><span>calls right, one bar per stream</span></div><div class="days wide">${o.days
+          .map(([d, r, n]) => `<div title="${esc(d)}: ${r}/${n}"><i style="height:${Math.max(4, (r / n) * 84)}px"></i><b>${r}/${n}</b>${esc(d.slice(5))}</div>`)
+          .join('')}</div></div>`
+      : '';
+    const store = o
+      ? `<div class="panel"><div class="ph"><h3>What Augur knows</h3><span>from palduels.com</span></div><div class="kpi four">${[
+          [o.store[0], 'duels'],
+          [o.store[1], 'fight tapes'],
+          [o.store[2], 'species'],
+          [o.store[3], 'your bets'],
+        ]
+          .map(([n, l]) => `<div><b>${fmt(n)}</b><small>${l}</small></div>`)
+          .join('')}</div><div class="small" style="margin-top:12px">Every call stands on stats, types, moves and this history, never on chat.</div></div>`
+      : '';
+    main.innerHTML =
+      header('Live · PalDuels', status) +
+      hero +
+      (stream || recent ? `<div class="g3">${stream}${recent}${upNext(live, true)}</div>` : upNext(live)) +
+      (days || store ? `<div class="g2">${days}${store}</div>` : '');
     return;
   }
   const fav = p.pick === 'home' ? p.home : p.away;
@@ -82,9 +115,13 @@ export function render(app) {
           .join('')}
         <div class="row"><span>${esc(p.home.pal)} vs ${esc(p.away.pal)}</span><b class="gold">${p.pal_h2h.home_wins}–${p.pal_h2h.away_wins}</b></div></div>
       ${upNext(live, true)}
-      <div class="panel"><div class="ph"><h3>Say it in chat</h3><span>${voices.length} voices</span></div>
+      ${
+        state.settings?.chat_lines === false
+          ? ''
+          : `<div class="panel"><div class="ph"><h3>Say it in chat</h3><span>${voices.length} voices</span></div>
         <div class="vo" id="vb">${voices.map((v) => `<button class="${v === voice ? 'on' : ''}" data-v="${esc(v)}">${esc(SHORT[v] || v)}</button>`).join('')}</div>
-        <div class="q" id="vq">${esc(voiceLine(p, voice, state.settings?.include_chance !== false))}</div><button class="btn" id="cp" style="width:100%;margin-top:4px">Copy for chat</button></div>
+        <div class="q" id="vq">${esc(voiceLine(p, voice, state.settings?.include_chance !== false))}</div><button class="btn" id="cp" style="width:100%;margin-top:4px">Copy for chat</button></div>`
+      }
     </div>`;
   main.querySelectorAll('#vb button').forEach((b) => {
     b.onclick = () => {
@@ -92,6 +129,6 @@ export function render(app) {
       render(app);
     };
   });
-  document.getElementById('cp').onclick = (e) => copyText(document.getElementById('vq').textContent, e.target);
+  document.getElementById('cp')?.addEventListener('click', (e) => copyText(document.getElementById('vq').textContent, e.target));
   document.getElementById('cmd')?.addEventListener('click', (e) => copyText(command, e.target));
 }

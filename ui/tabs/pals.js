@@ -1,4 +1,4 @@
-// Pals: every species with duels, and one species in detail: record, moves as they really hit, owners.
+// Pals: every species with duels, and one species in detail: record, moves as they really hit, owners, matchups.
 import { invoke } from '../lib/bridge.js';
 import { esc, fmt, pct } from '../lib/format.js';
 import { orb } from '../lib/pal.js';
@@ -26,7 +26,17 @@ async function detail(app) {
       <div style="display:grid;gap:14px;align-content:start">
         <div class="panel"><div class="ph"><h3>Record by month</h3></div><div class="days">${d.months.map(([m, w, n]) => `<div title="${w}/${n}"><i style="height:${Math.max(4, (w / n) * 80)}px"></i>${esc(m.slice(5))} ${w}/${n}</div>`).join('')}</div></div>
         <div class="panel"><div class="ph"><h3>Who wins with it</h3></div><table><tbody>${d.owners.map(([o, w, n]) => `<tr><td>${esc(o)}</td><td class="num ${w / n >= 0.6 ? 'ok' : ''}">${w}–${n - w}</td></tr>`).join('')}</tbody></table></div>
-      </div></div></div>`;
+      </div></div>
+    <div class="panel"><div class="ph"><h3>Matchups</h3><span>the species it has met most</span></div>
+      ${d.matchups.length ? `<div class="mups">${d.matchups.map(([o, w, n]) => `<button class="mup" data-pal="${esc(o)}"><span>${esc(o)}</span><div class="mb"><i style="width:${(100 * w) / n}%"></i></div><b class="${w / n >= 0.6 ? 'ok' : w / n <= 0.4 ? 'bad' : ''}">${w}–${n - w}</b></button>`).join('')}</div>` : '<div class="small">No duels against other species yet.</div>'}</div></div>`;
+  // a matchup opens that species
+  el.querySelectorAll('.mup').forEach((b) => {
+    b.onclick = () => {
+      state.pal = b.dataset.pal;
+      document.querySelectorAll('#pl .it').forEach((it) => it.classList.toggle('on', it.dataset.p === state.pal));
+      detail(app);
+    };
+  });
 }
 
 export async function render(app) {

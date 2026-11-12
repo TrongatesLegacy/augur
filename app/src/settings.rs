@@ -28,6 +28,8 @@ pub struct AppSettings {
     pub notify_new_pick: bool,
     pub notify_result: bool,
     pub launch_at_login: bool,
+    /// at launch, only the tray icon appears (off: the window opens too)
+    pub start_in_tray: bool,
     /// voices shown, in order: Yoda, Gollum, Dr. Rockso, Scooby-Doo, Daffy Duck
     pub voices: Vec<String>,
     pub default_voice: String,
@@ -63,6 +65,7 @@ impl Default for AppSettings {
             notify_new_pick: false,
             notify_result: true,
             launch_at_login: false,
+            start_in_tray: false,
             voices: augur_engine::voices::VOICES.iter().map(|v| v.to_string()).collect(),
             default_voice: "Yoda".into(),
             chat_lines: true,

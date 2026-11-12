@@ -202,7 +202,7 @@ pub async fn update_install(app: AppHandle, shared: tauri::State<'_, Arc<Shared>
     // kept so the next start can show the window again
     if let Ok(conn) = db::open(&settings::db_path(&shared.dir)) {
         let open = app.get_webview_window("main").is_some_and(|w| w.is_visible().unwrap_or(false));
-        let _ = db::meta_set(&conn, "reopen_main", if open { "1" } else { "" });
+        let _ = db::meta_set(&conn, "reopen_main", if open { "1" } else { "0" });
     }
     shared.update.lock().unwrap().installing = true;
     emit(&app, &shared);

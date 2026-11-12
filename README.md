@@ -36,7 +36,7 @@ The app is free, and it isn't signed with a paid Apple or Microsoft certificate,
 
 **Then:**
 1. The first time, Augur asks whether this is a new computer for an Augur you already use. **Import a backup** brings your calls, bets and every past duel across from your other computer (Settings › Sync & data › Back up… there). **Start fresh** fetches the duel history in the background.
-2. Augur lives in the menu bar (Mac) or the tray (Windows). Click it for the call on the fight that's up, the bet to type and the chat line. The main window has the rest.
+2. Augur lives in the menu bar (Mac) or the tray (Windows). Click it for the call on the fight that's up, the bet to type and the chat line. The main window has the rest. It opens with Augur; to have only the tray icon at launch, turn on **Settings › General › Start in the tray**.
 3. Optional: sign in to PalDuels in **Settings › Account** to track your bets against Augur's calls. Augur only reads your picks and balance; it never picks, chats or spends for you.
 
 Augur updates itself: when there's a new version, it downloads it and offers **Restart to update** (Settings › Updates). Nothing installs until you click it. Copies older than the first version with updates (0.1.1 and before) need the next one installed by hand once.
@@ -92,7 +92,7 @@ Augur updates itself from this repository's GitHub releases:
 - **The folder:** you pick a folder a sync app already moves. Augur finds OneDrive, iCloud Drive, Dropbox and Google Drive, or you can choose another folder. It creates `Augur Sync/` inside it.
 - **No clashes:** each computer writes only its own files there (`devices/<id>.json` and `calls/<id>.jsonl`) and reads the others' every minute. Nothing needs a lock, and the sync app never makes "conflicted copies".
 - **What syncs:** your settings (the latest change to each one wins) and Augur's calls (merged, never duplicated).
-- **What stays on each computer:** the sign-in (it's encrypted for that computer), launch at login and background fetching. Duels, species and your bets come from the site on each computer.
+- **What stays on each computer:** the sign-in (it's encrypted for that computer), launch at login, start in the tray and background fetching. Duels, species and your bets come from the site on each computer.
 
 **Back up… and Import…** cover setting up a new computer:
 - **Back up…** saves a complete copy of the store (calls, duels, tapes, species, bets) wherever you choose, such as OneDrive.

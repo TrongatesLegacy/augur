@@ -8,9 +8,10 @@ edition = "2021"
 license = "UNLICENSED"
 publish = false
 
+# Thin LTO over 16 codegen units: the installers build about 3.5 times faster than with whole-program LTO in one unit
+# (Augur's own crates, which every release rebuilds: 34s against 123s on an M-series Mac), for an app about 5 MB bigger
 [profile.release]
-codegen-units = 1
-lto = true
+lto = "thin"
 opt-level = "s"
 strip = true
 

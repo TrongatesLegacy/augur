@@ -1,7 +1,7 @@
 // You › Titles: every title on PalDuels by category, as Augur last read your profile. What you've earned (the rare
 // ones picked out), what's closest, and each category's titles: ladders as steps, crowns with who holds them, the
 // element ring as its nine elements.
-import { esc, fmt, pct } from '../lib/format.js';
+import { esc, fmt, pct, short } from '../lib/format.js';
 import { face } from '../lib/pal.js';
 import { empty, ring } from '../lib/viz.js';
 
@@ -9,6 +9,8 @@ const ELEMENT = { neutral: '#d8cfb0', fire: '#ff7a45', water: '#4fa8ff', grass: 
 
 const share = (p) => (p && p[1] ? Math.min(1, p[0] / p[1]) : 0);
 const count = (p) => `${fmt(p[0])}<small>/${fmt(p[1])}</small>`;
+// a ladder's rungs are narrow: big numbers as 140k/250k
+const shortCount = (p) => `${short(p[0])}<small>/${short(p[1])}</small>`;
 const bar = (p) => `<div class="tbar"><i style="width:${(100 * share(p)).toFixed(1)}%"></i></div>`;
 // how many chatters hold an earned title, from its badge's tooltip ("…, held by 13 chatters")
 const heldBy = (b) => +(b?.about.match(/held by ([\d,]+) chatter/)?.[1]?.replace(/,/g, '') || 0) || null;
@@ -23,14 +25,14 @@ function card(t, ctx) {
   if (t.kind === 'ring') return elements(t);
   if (t.kind === 'crown') {
     const mine = t.holders.some((h) => key(h) === key(ctx.me));
-    return `<div class="tc tcrown ${mine ? 'got' : ''}" title="${esc(t.about)}"><span class="tci">♛</span>
+    return `<div class="tc tcrown ${mine ? 'got' : ''}" title="${esc(t.name)}: ${esc(t.about)}"><span class="tci">♛</span>
       <div class="tcb"><b>${esc(t.name)}</b><small>${esc(t.about)}</small>
         <span class="thold">${t.holders.length ? (mine ? 'You hold it' : `${face(t.holders[0], 'av', 16)}<span>Held by <b>${esc(t.holders.join(', '))}</b></span>`) : '<span>Nobody holds it yet</span>'}</span></div>
       <span class="tcs">Crown</span></div>`;
   }
   const state = t.earned ? 'got' : t.progress ? 'prog' : 'dim';
   const held = heldBy(badge);
-  return `<div class="tc ${state} ${badge?.rare ? 'rare' : ''}" title="${esc(t.about)}"><span class="tci">${esc(t.icon || '★')}</span>
+  return `<div class="tc ${state} ${badge?.rare ? 'rare' : ''}" title="${esc(t.name)}: ${esc(t.about)}"><span class="tci">${esc(t.icon || '★')}</span>
     <div class="tcb"><b>${esc(t.name)}${badge?.times ? ` <em>×${fmt(badge.times)}</em>` : ''}</b><small>${esc(t.about)}</small>${held ? `<small class="tfew">held by ${fmt(held)}</small>` : ''}</div>
     ${t.earned ? `<span class="tcs ok">${rare || '✓'}</span>` : t.progress ? `<span class="tcs num">${count(t.progress)}</span>` : '<span class="tcs">Locked</span>'}
     ${!t.earned && t.progress ? bar(t.progress) : ''}</div>`;
@@ -45,7 +47,7 @@ function ladder(t, ctx) {
         const rare = ctx.badges.get(key(s.name))?.rare;
         const next = !s.earned && (i === 0 || t.steps[i - 1].earned);
         return `<div class="rung ${s.earned ? 'got' : next ? 'next' : ''} ${rare ? 'rare' : ''}"><i>${esc(s.label)}</i><b>${esc(s.name)}</b>
-          <small>${s.earned ? (rare ? 'Rare' : 'Earned') : s.progress ? count(s.progress) : 'Locked'}</small>${next && s.progress ? bar(s.progress) : ''}</div>`;
+          <small>${s.earned ? (rare ? 'Rare' : 'Earned') : s.progress ? shortCount(s.progress) : 'Locked'}</small>${next && s.progress ? bar(s.progress) : ''}</div>`;
       })
       .join('')}</div></div>`;
 }

@@ -670,6 +670,88 @@ pub fn parse_balance(page: &str) -> Option<u64> {
     )
 }
 
+// --- your profile, signed in (the same page as your picks) ---
+
+/// A panel of numbers on a profile page ("Predictions", "Duel record", "Chaos & spending").
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Panel {
+    pub title: String,
+    /// (label, value as shown, "good" / "bad" / "")
+    pub stats: Vec<(String, String, String)>,
+    /// the last 10, oldest first: true for a win
+    pub form: Vec<bool>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct TitleBadge {
+    pub icon: String,
+    pub name: String,
+    /// what earned it (the badge's tooltip)
+    pub about: String,
+    pub rare: bool,
+    /// earned this many times ("x8"), when more than once
+    pub times: Option<u32>,
+}
+
+/// What the signed-in profile page says about you: your balance (only you see it), your predictions, duels,
+/// spending and titles.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct AccountPage {
+    pub balance: Option<u64>,
+    pub panels: Vec<Panel>,
+    /// (earned, of)
+    pub titles_earned: Option<(u32, u32)>,
+    pub titles: Vec<TitleBadge>,
+}
+
+pub fn parse_account(page: &str) -> AccountPage {
+    let mut out = AccountPage::default();
+    for sect in regex!(r#"(?s)<section class="panel[^"]*"[^>]*>(.*?)</section>"#).captures_iter(page) {
+        let body = &sect[1];
+        let Some(title) = regex!(r"(?s)<h2>(.*?)</h2>").captures(body).map(|c| text(&c[1])) else { continue };
+        if title.eq_ignore_ascii_case("Your balance") {
+            out.balance =
+                regex!(r#"<div class="stat-v[^"]*">([\d,]+)</div>"#).captures(body).and_then(|c| c[1].replace(',', "").parse().ok());
+            continue;
+        }
+        if title.eq_ignore_ascii_case("Titles") {
+            out.titles_earned =
+                regex!(r"(\d+) of (\d+)</strong>").captures(body).and_then(|c| Some((c[1].parse().ok()?, c[2].parse().ok()?)));
+            // each badge: <span class="title-badge[ rare]" title="…"><span class="ico">🥇</span>Name [<b>x3</b>][<span class="tb-rare">Rare</span>]</span>
+            out.titles = body
+                .split(r#"<span class="title-badge"#)
+                .skip(1)
+                .map(|chunk| {
+                    let head = chunk.split('>').next().unwrap_or("");
+                    let inner = chunk.split_once('>').map(|(_, r)| r).unwrap_or("");
+                    let inner = regex!(r#"<span class="tb-rare">[^<]*</span>"#).replace(inner, "");
+                    let icon = regex!(r#"<span class="ico">(.*?)</span>"#).captures(&inner).map(|i| text(&i[1])).unwrap_or_default();
+                    let rest = text(&regex!(r#"<span class="ico">.*?</span>"#).replace(&inner, ""));
+                    let rest = rest.split("</span>").next().unwrap_or("").to_string();
+                    TitleBadge {
+                        icon,
+                        name: regex!(r"\s*x\d+\s*$").replace(&rest, "").trim().to_string(),
+                        about: regex!(r#"title="([^"]*)""#).captures(head).map(|t| text(&t[1])).unwrap_or_default(),
+                        rare: head.starts_with(" rare"),
+                        times: regex!(r"x(\d+)\s*$").captures(&rest).and_then(|t| t[1].parse().ok()),
+                    }
+                })
+                .collect();
+            continue;
+        }
+        let stats: Vec<(String, String, String)> = regex!(r#"<div class="stat-v ?([^"]*)">([^<]*)</div><div class="stat-k">([^<]*)</div>"#)
+            .captures_iter(body)
+            .map(|c| (text(&c[3]), text(&c[2]), c[1].trim().to_string()))
+            .collect();
+        if stats.is_empty() {
+            continue;
+        }
+        let form = regex!(r#"<i class="f([wl])">"#).captures_iter(body).map(|c| &c[1] == "w").collect();
+        out.panels.push(Panel { title, stats, form });
+    }
+    out
+}
+
 /// A page of your picks, with the session cookie. Ok(None) when the site didn't show them (signed out).
 pub fn picks(user_key: &str, page: u32, cookie: &str) -> Result<Option<(PicksPage, Option<u64>)>> {
     let body = fetch_once(&format!("{BASE}/u/{user_key}?bp={page}"), Some(cookie))?;
@@ -755,5 +837,23 @@ mod tests {
         assert_eq!(oldest.picks.iter().map(|p| p.seq).collect::<Vec<_>>(), [3, 2, 1]);
         assert!(oldest.picks.iter().all(|p| p.duel_id.is_none()), "older rows have no duel link");
         assert!(parse_picks(&page("user-trongateslegacy.html")).is_none(), "signed out, the profile has no picks list");
+    }
+
+    #[test]
+    fn signed_in_profile() {
+        let a = parse_account(&page("picks-page-1.html"));
+        assert_eq!(a.balance, Some(248_120));
+        let titles: Vec<&str> = a.panels.iter().map(|p| p.title.as_str()).collect();
+        assert_eq!(titles, ["Duel record", "Predictions", "Chaos & spending"]);
+        let pred = &a.panels[1];
+        assert_eq!(pred.stats[4], ("Net".into(), "+4,310".into(), "good".into()));
+        assert_eq!(pred.form.len(), 10);
+        assert_eq!(a.titles_earned, Some((16, 52)));
+        assert_eq!(a.titles.len(), 4);
+        assert!(a.titles[0].rare && a.titles[0].name == "Tournament champion" && a.titles[0].icon == "🥇");
+        assert_eq!((a.titles[2].name.as_str(), a.titles[2].times), ("Kingslayer", Some(3)));
+        assert_eq!(a.titles[1].about, "Won with every element");
+        let public = parse_account(&page("user-trongateslegacy.html"));
+        assert_eq!(public.balance, None, "signed out, there's no balance");
     }
 }

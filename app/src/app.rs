@@ -429,6 +429,12 @@ fn backfill_progress(shared: tauri::State<'_, Arc<Shared>>) -> Progress {
 }
 
 #[tauri::command]
+async fn you_view(shared: tauri::State<'_, Arc<Shared>>) -> Cmd<views::YouView> {
+    let staking = shared.settings.lock().unwrap().staking.clone();
+    views::you_view(&shared.db()?, &staking).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn import_bets(shared: tauri::State<'_, Arc<Shared>>) {
     shared.bets_now.store(true, Ordering::Relaxed);
 }
@@ -670,6 +676,7 @@ pub fn run() {
             history,
             bets_view,
             import_bets,
+            you_view,
             stake_preview,
             start_fresh,
             backfill_progress,

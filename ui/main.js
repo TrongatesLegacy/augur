@@ -8,8 +8,16 @@ import * as model from './tabs/model.js';
 import * as pals from './tabs/pals.js';
 import * as players from './tabs/players.js';
 import * as settings from './tabs/settings.js';
+import * as you from './tabs/you.js';
 
-const TABS = { live, history, pals, players, model, settings };
+const TABS = { live, history, pals, players, you, model, settings };
+
+// the You tab is there only while signed in to PalDuels
+const youNav = document.querySelector('.nav[data-tab="you"]');
+const showYou = (on) => {
+  youNav.hidden = !on;
+  if (!on && app.state.tab === 'you') app.show('live');
+};
 
 const app = {
   main: document.getElementById('main'),
@@ -142,10 +150,12 @@ listen('update', (u) => {
   if (app.state.tab === 'settings' && app.state.settingsPage === 'updates') settings.render(app);
 });
 listen('bets', (p) => {
-  // redraw Your bets when an import finishes or moves on a page
+  // redraw Your bets (and You) when an import finishes or moves on a page
   if (app.state.tab === 'history' && app.state.view === 'bets' && (p.phase === 'done' || p.done % 25 === 0)) history.render(app);
+  if (app.state.tab === 'you' && p.phase === 'done') you.render(app);
 });
-listen('account', () => {
+listen('account', (name) => {
+  showYou(!!name);
   if (app.state.tab === 'settings') settings.render(app);
 });
 
@@ -153,6 +163,7 @@ app.state.settings = await invoke('get_settings');
 app.state.live = await invoke('live');
 showBackfill(await invoke('backfill_progress'));
 showWelcome(app.state.live);
+showYou((await invoke('account')).signed_in);
 showUpdate(await invoke('update_view'));
 await app.show('live');
 // for the headless UI tests

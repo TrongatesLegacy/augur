@@ -28,10 +28,10 @@ async function detail(app) {
         <div style="display:flex;gap:6px;margin:8px 0">${(sp.types || []).map((t) => `<span class="el">${esc(t)}</span>`).join('')}${sp.power != null ? `<span class="el">Power ${sp.power}</span>` : ''}</div>
         <div class="bsts">${stat('Base HP', sp.base_hp)}${stat('Attack', sp.base_atk)}${stat('Defence', sp.base_def)}</div></div>
       <div class="kpi">
-        <div>${ring(rate, { size: 70, tone: rate != null && rate < 0.45 ? 'bad' : 'ok', label: `${fmt(d.wins)}–${fmt(d.duels - d.wins)}`, sub: 'record', title: rate != null ? `${pct(rate)} won` : '' })}</div>
-        <div>${ring(d.tapes ? d.unlisted_share : null, { size: 70, sub: 'unlisted', title: 'Share of damage from unlisted moves' })}</div>
+        <div>${ring(rate, { size: 100, tone: rate != null && rate < 0.45 ? 'bad' : 'ok', label: `${fmt(d.wins)}–${fmt(d.duels - d.wins)}`, sub: 'record', title: rate != null ? `${pct(rate)} won` : '' })}</div>
+        <div>${ring(d.tapes ? d.unlisted_share : null, { size: 100, sub: 'unlisted', title: 'Share of damage from unlisted moves' })}</div>
         <div class="kv"><b>${esc(d.fastest_ko || '—')}</b><small>Fastest K.O.</small></div>
-        <div class="kv"><b>${d.tapes}</b><small>Tapes</small></div></div></div>
+        <div class="kv"><b>${fmt(d.tapes)}</b><small>Tapes</small></div></div></div>
     <div class="pdg grow">
       <div class="panel col pmoves"><div class="ph"><h3>Moves as they really hit</h3><span>from ${fmt(d.tapes)} fight tapes</span></div>${moves}</div>
       <div class="panel col"><div class="ph"><h3>Record by month</h3><span>share won</span></div>${

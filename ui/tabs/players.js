@@ -63,7 +63,7 @@ export async function render(app) {
   main.lastElementChild.outerHTML = `<div class="panel phero">
       ${face(state.player, 'a', 64)}
       <div class="pwho"><b>${esc(d.owner || state.player)}</b><small>${d.duels ? `${fmt(d.duels)} ranked duels` : 'no ranked duels logged yet'}</small></div>
-      ${ring(d.duels ? d.wins / d.duels : null, { size: 84, tone: d.duels && d.wins / d.duels < 0.45 ? 'bad' : 'ok', label: d.duels ? `${fmt(d.wins)}–${fmt(d.duels - d.wins)}` : '—', sub: d.duels ? `${pct(d.wins / d.duels)} won` : 'duel record', title: 'Duel record' })}
+      ${ring(d.duels ? d.wins / d.duels : null, { size: 96, tone: d.duels && d.wins / d.duels < 0.45 ? 'bad' : 'ok', label: d.duels ? `${fmt(d.wins)}–${fmt(d.duels - d.wins)}` : '—', sub: d.duels ? `${pct(d.wins / d.duels)} won` : 'duel record', title: 'Duel record' })}
       ${palStat('Best pal for them', best, 'ok', 'needs 3+ duels with a pal')}
       ${palStat('Most used', most, '', 'no duels yet')}
       <div class="pboxs"><div class="yhead"><b class="bn">${v.roster.length}</b><span>in the pal box · ${v.rerolled_pals} rerolled</span></div>

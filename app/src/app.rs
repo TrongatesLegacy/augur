@@ -40,6 +40,8 @@ pub struct Shared {
     pub backtest: Mutex<Option<(model::Settings, Backtest)>>,
     /// the model's last self-tuning run
     pub learned: Mutex<Option<learn::Learned>>,
+    /// a result just came in (with its fight tape): learn from it now
+    pub learn_now: AtomicBool,
     pub rosters: Mutex<HashMap<String, (Instant, Vec<site::BoxPal>)>>,
     pub busy: AtomicBool,
     pub stop: AtomicBool,
@@ -181,6 +183,7 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
                     if let Ok(settled) = db::settle(&conn, &state.recent, |id| site::duel(id).ok()) {
                         if !settled.is_empty() {
                             shared.bets_now.store(true, Ordering::Relaxed);
+                            shared.learn_now.store(true, Ordering::Relaxed);
                             if let Some(c) = db::settled(&conn).ok().and_then(|all| all.into_iter().rev().find(|c| settled.contains(&c.id)))
                             {
                                 let winner_pal = if c.winner.as_deref() == Some("home") { c.home_pal.clone() } else { c.away_pal.clone() };
@@ -305,13 +308,14 @@ fn backfill_loop(app: AppHandle, shared: Arc<Shared>) {
     }
 }
 
-/// The model tunes itself: every 10 minutes, when there are new results (25 more past duels or 3 more settled calls),
-/// it re-fits its settings and keeps a change only if it predicts held-back duels better. Runs between duels.
+/// The model tunes itself: straight after each result (its fight tape is stored as it settles), and every 10
+/// minutes for duels the backfill brings in (25 more). It re-fits its settings and keeps a change only if it predicts
+/// held-back duels better. Local only and well under a second, so it doesn't wait for a gap between duels.
 fn learn_loop(app: AppHandle, shared: Arc<Shared>) {
     std::thread::sleep(Duration::from_secs(60));
     while !shared.stop.load(Ordering::Relaxed) {
-        let idle = !shared.busy.load(Ordering::Relaxed) && !shared.setup_wait.load(Ordering::Relaxed);
-        if let (true, Ok(conn)) = (idle, shared.db()) {
+        shared.learn_now.store(false, Ordering::Relaxed);
+        if let (false, Ok(conn)) = (shared.setup_wait.load(Ordering::Relaxed), shared.db()) {
             let last = shared.learned.lock().unwrap().clone();
             if learn::due(&conn, last.as_ref()) {
                 let from = last.as_ref().map(|l| l.settings.clone()).unwrap_or_default();
@@ -325,7 +329,7 @@ fn learn_loop(app: AppHandle, shared: Arc<Shared>) {
             }
         }
         let end = Instant::now() + Duration::from_secs(600);
-        while Instant::now() < end && !shared.stop.load(Ordering::Relaxed) {
+        while Instant::now() < end && !shared.stop.load(Ordering::Relaxed) && !shared.learn_now.load(Ordering::Relaxed) {
             std::thread::sleep(Duration::from_secs(1));
         }
     }
@@ -757,6 +761,7 @@ pub fn run() {
         bets_now: AtomicBool::new(false),
         backtest: Mutex::new(None),
         learned: Mutex::new(learned),
+        learn_now: AtomicBool::new(false),
         rosters: Mutex::new(HashMap::new()),
         busy: AtomicBool::new(false),
         stop: AtomicBool::new(false),

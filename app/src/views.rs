@@ -648,6 +648,8 @@ pub fn live_detail(p: &Prediction, stake: Option<&Stake>) -> CallDetail {
         late_only: !p.picks_open,
         version: n.version,
         model: serde_json::to_string(s).unwrap_or_default(),
+        // a call that's up hasn't been overwritten
+        damaged: false,
     };
     let sides = call.fighters.as_ref().map(|(h, a)| vec![side_detail(s, &h.fighter, &a.fighter), side_detail(s, &a.fighter, &h.fighter)]);
     let slug = |side: &predict::Side| if side.slug.is_empty() { site::slug_for(&side.pal) } else { side.slug.clone() };

@@ -1,8 +1,10 @@
 // History: Augur's own calls (today, this week or all time), calibration and the record by stream; and Your bets:
-// the developer's bets next to Augur's calls and stakes, with missed fights kept apart from deviations.
+// the developer's bets next to Augur's calls and stakes, with missed fights kept apart from deviations. A row with a
+// call opens its breakdown (call.js); Back returns to the list as it was.
 import { invoke } from '../lib/bridge.js';
 import { ago, esc, fmt, pct, short, signed } from '../lib/format.js';
 import { columns, empty, ring, signedBar, spark, stack } from '../lib/viz.js';
+import * as call from './call.js';
 
 const RANGES = [
   ['today', 'Today'],
@@ -18,7 +20,7 @@ const lateNote = (c) =>
 
 function callRow(c) {
   const right = c.winner === c.pick;
-  return `<tr><td><span class="res ${right ? 'o' : 'x'}">${right ? '✓' : '✕'}</span></td><td>${esc(c.home_pal)} <span class="muted">vs</span> ${esc(c.away_pal)}</td><td>${esc(c.pick === 'home' ? c.home_pal : c.away_pal)}${lateNote(c)}</td><td class="num">${pct(c.prob)}</td><td class="${right ? 'ok' : 'bad'}">${right ? 'Right' : 'Missed'}</td><td class="num">${esc(c.ko || '')}</td></tr>`;
+  return `<tr class="go" data-call="${c.id}" tabindex="0" title="See how this duel went and how Augur called it"><td><span class="res ${right ? 'o' : 'x'}">${right ? '✓' : '✕'}</span></td><td>${esc(c.home_pal)} <span class="muted">vs</span> ${esc(c.away_pal)}</td><td>${esc(c.pick === 'home' ? c.home_pal : c.away_pal)}${lateNote(c)}</td><td class="num">${pct(c.prob)}</td><td class="${right ? 'ok' : 'bad'}">${right ? 'Right' : 'Missed'}</td><td class="num">${esc(c.ko || '')}</td><td class="goar" aria-hidden="true">›</td></tr>`;
 }
 
 const VIEWS = [
@@ -37,7 +39,8 @@ const cell = (top, under) => `<div class="two"><span>${top}</span><small>${under
 function betRow(f) {
   const augur = f.pick ? cell(side(f, f.pick), `${pct(f.prob)} · ${f.augur_command ? `<b>${esc(f.augur_command)}</b>` : 'no bet'}`) : '<span class="muted">no call</span>';
   const yours = f.backed ? cell(side(f, f.backed), `${fmt(f.stake)} credits`) : '<span class="muted">no bet</span>';
-  return `<tr><td>${esc(f.home_pal)} <span class="muted">vs</span> ${esc(f.away_pal)}</td><td>${augur}</td><td>${yours}</td><td><span class="lab ${f.label}">${LABELS[f.label]}</span></td><td class="num">${money(f.result)}</td><td class="num">${f.pick ? money(f.augur_result, f.estimated) : money(null)}</td></tr>`;
+  const open = f.call_id != null ? ` class="go" data-call="${f.call_id}" tabindex="0" title="See how this duel went and how Augur called it"` : '';
+  return `<tr${open}><td>${esc(f.home_pal)} <span class="muted">vs</span> ${esc(f.away_pal)}</td><td>${augur}</td><td>${yours}</td><td><span class="lab ${f.label}">${LABELS[f.label]}</span></td><td class="num">${money(f.result)}</td><td class="num">${f.pick ? money(f.augur_result, f.estimated) : money(null)}</td><td class="goar" aria-hidden="true">${open ? '›' : ''}</td></tr>`;
 }
 
 async function renderBets(app, controls) {
@@ -69,7 +72,7 @@ async function renderBets(app, controls) {
         <div><span class="label">No call</span><b class="bn">${fmt(c.no_call)}</b><small>${c.no_call ? `${signed(c.no_call_yours)} on fights Augur didn't call` : 'none'}</small></div></div>
     </div>
     <div class="g2 grow">
-      <div class="panel col">${c.fights.length ? `<div class="fillin"><table class="sticky"><thead><tr><th>Fight</th><th>Augur</th><th>You</th><th></th><th>You made</th><th>Augur's way</th></tr></thead><tbody>
+      <div class="panel col">${c.fights.length ? `<div class="fillin"><table class="sticky"><thead><tr><th>Fight</th><th>Augur</th><th>You</th><th></th><th>You made</th><th>Augur's way</th><th></th></tr></thead><tbody>
         ${c.fights.slice(0, 200).map(betRow).join('')}
       </tbody></table></div>` : empty('star', 'No bets or calls in this range yet', 'Your bets show here next to Augur’s calls.')}</div>
       <div class="stackc">
@@ -92,6 +95,19 @@ async function renderBets(app, controls) {
 
 function wire(app) {
   const { state, main } = app;
+  // a call's row opens its breakdown; Back comes back to the list where it was scrolled
+  const list = main.querySelector('.fillin');
+  if (state.callScroll != null && list) list.scrollTop = state.callScroll;
+  state.callScroll = null;
+  const open = (row) => {
+    state.callScroll = list?.scrollTop ?? 0;
+    state.call = Number(row.dataset.call);
+    render(app);
+  };
+  main.querySelectorAll('tr[data-call]').forEach((row) => {
+    row.onclick = () => open(row);
+    row.onkeydown = (e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), open(row));
+  });
   main.querySelectorAll('.seg button[data-r]').forEach((b) => {
     b.onclick = () => {
       state.range = b.dataset.r;
@@ -108,6 +124,14 @@ function wire(app) {
 
 export async function render(app) {
   const { state, main, header } = app;
+  if (state.call != null) {
+    const scroll = state.callScroll;
+    return call.render(app, () => {
+      state.call = null;
+      state.callScroll = scroll;
+      render(app);
+    });
+  }
   const views = `<div class="seg ml">${VIEWS.map(([k, l]) => `<button class="${state.view === k ? 'on' : ''}" data-v="${k}">${l}</button>`).join('')}</div>`;
   const seg = views + `<div class="seg">${RANGES.map(([k, l]) => `<button class="${state.range === k ? 'on' : ''}" data-r="${k}">${l}</button>`).join('')}</div>`;
   if (state.view === 'bets') return renderBets(app, seg);
@@ -135,7 +159,7 @@ export async function render(app) {
         <div class="hlog"><span class="label">Today's logic</span><b>${fmt(h.rescored_right)} / ${fmt(h.rescored_total)}</b><small>re-scored with current settings</small></div></div>
     </div>
     <div class="g2 grow">
-      <div class="panel col">${h.calls.length ? `<div class="fillin"><table class="sticky"><thead><tr><th></th><th>Fight</th><th>Called</th><th>Chance</th><th>Result</th><th>K.O.</th></tr></thead><tbody>
+      <div class="panel col">${h.calls.length ? `<div class="fillin"><table class="sticky"><thead><tr><th></th><th>Fight</th><th>Called</th><th>Chance</th><th>Result</th><th>K.O.</th><th></th></tr></thead><tbody>
         ${h.calls.map(callRow).join('')}
       </tbody></table></div>` : empty('swords', 'No calls in this range yet', 'Augur logs every fight it calls; try This week or All time.')}</div>
       <div class="stackc">

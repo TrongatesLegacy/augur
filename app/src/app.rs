@@ -491,6 +491,12 @@ async fn history(shared: tauri::State<'_, Arc<Shared>>, range: String) -> Cmd<Hi
     views::history_view(&shared.db()?, &s, &range, now_ms() / 1000).map_err(|e| e.to_string())
 }
 
+/// One call's breakdown, opened from History (None if it isn't a settled call).
+#[tauri::command]
+async fn call_detail(shared: tauri::State<'_, Arc<Shared>>, id: i64) -> Cmd<Option<views::CallDetail>> {
+    views::call_detail(&shared.db()?, id).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn bets_view(shared: tauri::State<'_, Arc<Shared>>, range: String) -> Cmd<BetsView> {
     let staking = shared.settings.lock().unwrap().staking.clone();
@@ -830,6 +836,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             live,
             history,
+            call_detail,
             bets_view,
             import_bets,
             you_view,

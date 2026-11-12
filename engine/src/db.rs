@@ -607,15 +607,24 @@ pub fn settled(conn: &Connection) -> Result<Vec<CallRecord>> {
 
 /// Every finished call, including ones first made after picks closed: what the model learns from.
 pub fn settled_all(conn: &Connection) -> Result<Vec<CallRecord>> {
-    let mut st = conn.prepare(
+    settled_where(conn, "", [])
+}
+
+/// One finished call, by its id (late-only calls too), for its breakdown.
+pub fn settled_call(conn: &Connection, id: i64) -> Result<Option<CallRecord>> {
+    Ok(settled_where(conn, "AND p.id = ?1", [id])?.pop())
+}
+
+fn settled_where(conn: &Connection, and: &str, args: impl rusqlite::Params) -> Result<Vec<CallRecord>> {
+    let mut st = conn.prepare(&format!(
         "SELECT p.id, COALESCE(p.seen_at, 0), p.home_owner, p.away_owner, p.home_pal, p.away_pal, p.pick, p.prob, p.p_stats, p.p_species,
                 p.p_h2h, p.home_species_w, p.home_species_l, p.away_species_w, p.away_species_l, p.pal_h2h_home, p.pal_h2h_away,
                 p.duel_id, d.winner, d.fought_at, d.ko, d.winner_hp_left, p.stake, p.late_pick, p.late_prob, COALESCE(p.late_only, 0),
                 COALESCE(p.app_version, ''), COALESCE(p.model, '')
-         FROM predictions p LEFT JOIN duels d ON d.id = p.duel_id WHERE p.status = 'settled' AND d.winner IS NOT NULL ORDER BY p.id",
-    )?;
+         FROM predictions p LEFT JOIN duels d ON d.id = p.duel_id WHERE p.status = 'settled' AND d.winner IS NOT NULL {and} ORDER BY p.id"
+    ))?;
     let calls: Vec<CallRecord> = st
-        .query_map([], |r| {
+        .query_map(args, |r| {
             let rec: [Option<i64>; 4] = [r.get(11)?, r.get(12)?, r.get(13)?, r.get(14)?];
             Ok(CallRecord {
                 id: r.get(0)?,

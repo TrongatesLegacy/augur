@@ -5,10 +5,10 @@ use augur_engine::backfill::Progress;
 use augur_engine::bets::{self, Comparison};
 use augur_engine::history::{self, Backtest};
 use augur_engine::predict::Prediction;
-use augur_engine::site::{BoxPal, QueueItem};
+use augur_engine::site::{self, BoxPal, QueueItem};
 use augur_engine::stake::{Stake, StakeSettings};
 use augur_engine::{db, learn, model, rusqlite};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
 
 use augur_engine::Result as R;
@@ -324,6 +324,264 @@ pub fn model_view(
     })
 }
 
+// --- one call's breakdown ---
+
+/// A call opened from History: the call and its duel, how the fight went (from its tape), and how the model came to
+/// its pick (the three factors on the log-odds scale, re-run with the settings the call was made with).
+#[derive(Serialize)]
+pub struct CallDetail {
+    /// with its fighters as seen before the bell (None for calls logged before fighters were kept)
+    pub call: db::CallRecord,
+    /// each pal's art: [home, away]
+    pub slugs: [String; 2],
+    /// where each side's stats came from ("shown", "from their box", "guessed (…)"); empty when not recorded
+    pub stats_from: [String; 2],
+    /// some stats were hidden until the bell and guessed
+    pub estimated: bool,
+    /// the chat command Augur suggested, e.g. !h 2300
+    pub stake_cmd: Option<String>,
+    /// the model settings the call was made with (None: not saved with it; today's defaults stand in)
+    pub settings: Option<model::Settings>,
+    pub fight: Option<FightView>,
+    pub model: Option<ModelCall>,
+    /// each side's moves as the model saw them against the other: [home, away] (empty without fighters)
+    pub sides: Vec<SideDetail>,
+}
+
+/// The duel as it was fought.
+#[derive(Serialize)]
+pub struct FightView {
+    pub id: u64,
+    pub fought_at: Option<String>,
+    pub ko: Option<String>,
+    /// the K.O. in seconds, from ko
+    pub ko_secs: Option<u32>,
+    pub winner_hp_left: Option<u32>,
+    pub casts: [u32; 2],
+    /// the tape, one row per hit; empty for duels stored without one
+    pub hits: Vec<site::Hit>,
+    /// each side's HP over the fight, from 100%: [(seconds, % left)] for [home, away]
+    pub hp: [Vec<(u32, f64)>; 2],
+    /// the damage each side dealt, by move, biggest first: [home, away]
+    pub moves: [Vec<MoveDamage>; 2],
+    /// the hardest hits of the fight, biggest first
+    pub biggest: Vec<site::Hit>,
+}
+
+#[derive(Serialize)]
+pub struct MoveDamage {
+    /// "" for unnamed hits (likely damage over time)
+    pub name: String,
+    pub hits: u32,
+    /// % of the other side's HP, all hits together, and the biggest one
+    pub total: f64,
+    pub max: f64,
+    /// from the side's listed moves, when it's one of them
+    pub el: Option<String>,
+    pub power: Option<f64>,
+    /// the type multiplier against the other side (above 1: a type edge)
+    pub mult: Option<f64>,
+}
+
+/// The model's sum: each factor's home win chance and what it adds on the log-odds scale (positive leans home).
+#[derive(Serialize)]
+pub struct ModelCall {
+    pub factors: Vec<Factor>,
+    /// the factors added up (log-odds toward home), and as a chance
+    pub total: f64,
+    pub p_home: f64,
+    /// the model re-run on the call's fighters with its settings (None without fighters or records)
+    pub score: Option<model::Score>,
+    /// the factors came from that re-run, not the call as stored (older calls didn't keep them)
+    pub rescored: bool,
+}
+
+#[derive(Serialize)]
+pub struct Factor {
+    /// "stats", "species" or "h2h"
+    pub key: String,
+    pub p_home: f64,
+    pub weight: f64,
+    /// weight × log-odds of p_home
+    pub logit: f64,
+}
+
+#[derive(Serialize)]
+pub struct SideDetail {
+    /// average hitting power over its usable moves against the other side (the model's move strength)
+    pub strength: f64,
+    pub moves: Vec<MoveLine>,
+}
+
+#[derive(Serialize)]
+pub struct MoveLine {
+    pub name: String,
+    pub el: String,
+    pub power: f64,
+    pub lv: u32,
+    /// the type multiplier against the other side
+    pub mult: f64,
+    /// unlocked by Lv 70 (the fights are at Lv 70)
+    pub usable: bool,
+    /// how hard it really hits in the stored tapes, against the average move (1: average, or too few hits)
+    pub hit: f64,
+}
+
+/// One settled call's breakdown, or None if there's no such settled call.
+pub fn call_detail(conn: &Connection, id: i64) -> R<Option<CallDetail>> {
+    let Some(call) = db::settled_call(conn, id)? else { return Ok(None) };
+    let (stats_from, estimated, stake_cmd): (Option<String>, bool, Option<String>) =
+        conn.query_row("SELECT stats_from, COALESCE(estimated, 0) = 1, stake_cmd FROM predictions WHERE id = ?", [id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?;
+    let settings: Option<model::Settings> = serde_json::from_str(&call.model).ok();
+    let s = settings.clone().unwrap_or_default();
+    let slug = |pal: &str| -> R<String> {
+        let stored: Option<String> =
+            conn.query_row("SELECT slug FROM species WHERE pal = ? AND slug != ''", [pal], |r| r.get(0)).optional()?;
+        Ok(stored.unwrap_or_else(|| site::slug_for(pal)))
+    };
+    let fight = match call.duel_id {
+        Some(d) => db::get_duel(conn, d)?.map(|duel| fight_view(d, duel, call.fighters.as_ref(), &s)),
+        None => None,
+    };
+    let sides = match &call.fighters {
+        Some((h, a)) => vec![side_detail(&s, &h.fighter, &a.fighter), side_detail(&s, &a.fighter, &h.fighter)],
+        None => vec![],
+    };
+    Ok(Some(CallDetail {
+        slugs: [slug(&call.home_pal)?, slug(&call.away_pal)?],
+        stats_from: split_stats_from(stats_from.as_deref().unwrap_or("")),
+        estimated,
+        stake_cmd: stake_cmd.filter(|c| !c.is_empty()),
+        model: model_call(&call, &s),
+        settings,
+        fight,
+        sides,
+        call,
+    }))
+}
+
+/// "home: from their box; away: shown" as [home, away].
+fn split_stats_from(text: &str) -> [String; 2] {
+    let of = |side: &str| {
+        text.split(';').find_map(|part| part.trim().strip_prefix(side).and_then(|r| r.strip_prefix(':'))).unwrap_or("").trim().to_string()
+    };
+    [of("home"), of("away")]
+}
+
+/// "0:27" (or "1:05") in seconds.
+fn ko_secs(ko: &str) -> Option<u32> {
+    let (m, s) = ko.split_once(':')?;
+    Some(m.trim().parse::<u32>().ok()? * 60 + s.trim().parse::<u32>().ok()?)
+}
+
+/// How many of the fight's hardest hits the breakdown lists.
+const BIGGEST_HITS: usize = 5;
+
+fn fight_view(id: u64, d: site::Duel, fighters: Option<&(db::CallFighter, db::CallFighter)>, s: &model::Settings) -> FightView {
+    let ko = d.ko.as_deref().and_then(ko_secs);
+    // each side's HP falls by the other side's hits
+    let mut hp = [vec![(0, 100.0)], vec![(0, 100.0)]];
+    let mut left = [100.0f64, 100.0];
+    for h in &d.hits {
+        let target = usize::from(h.side == "home");
+        left[target] = (left[target] - h.pct).max(0.0);
+        hp[target].push((h.t, left[target]));
+    }
+    // the loser goes down at the K.O. even when the tape's rounding leaves it a sliver
+    if let (Some(w), Some(t), false) = (d.winner.as_deref(), ko, d.hits.is_empty()) {
+        let loser = usize::from(w == "home");
+        if left[loser] > 0.0 {
+            hp[loser].push((t.max(hp[loser].last().map_or(0, |p| p.0)), 0.0));
+        }
+    }
+    let moves = [0, 1].map(|i| {
+        let side = if i == 0 { "home" } else { "away" };
+        let listed = fighters.map(|(h, a)| if i == 0 { (&h.fighter, &a.fighter) } else { (&a.fighter, &h.fighter) });
+        let mut out: Vec<MoveDamage> = vec![];
+        for h in d.hits.iter().filter(|h| h.side == side) {
+            match out.iter_mut().find(|m| m.name == h.mv) {
+                Some(m) => {
+                    m.hits += 1;
+                    m.total += h.pct;
+                    m.max = m.max.max(h.pct);
+                }
+                None => {
+                    let known = listed.and_then(|(me, them)| me.skills.iter().find(|m| m.name == h.mv).map(|m| (m, them)));
+                    out.push(MoveDamage {
+                        name: h.mv.clone(),
+                        hits: 1,
+                        total: h.pct,
+                        max: h.pct,
+                        el: known.map(|(m, _)| m.el.clone()),
+                        power: known.map(|(m, _)| m.power),
+                        mult: known.map(|(m, them)| model::type_mult(s, &m.el, &them.types)),
+                    })
+                }
+            }
+        }
+        out.sort_by(|a, b| b.total.total_cmp(&a.total));
+        out
+    });
+    let mut biggest: Vec<site::Hit> = d.hits.iter().filter(|h| !h.mv.is_empty()).cloned().collect();
+    biggest.sort_by(|a, b| b.pct.total_cmp(&a.pct).then(a.t.cmp(&b.t)));
+    biggest.truncate(BIGGEST_HITS);
+    FightView {
+        id,
+        fought_at: d.fought_at,
+        ko: d.ko,
+        ko_secs: ko,
+        winner_hp_left: d.winner_hp_left,
+        casts: [d.home_casts, d.away_casts],
+        hits: d.hits,
+        hp,
+        moves,
+        biggest,
+    }
+}
+
+fn model_call(c: &db::CallRecord, s: &model::Settings) -> Option<ModelCall> {
+    let score = match (&c.fighters, c.species_rec) {
+        (Some((h, a)), Some(rec)) => Some(model::score(s, &h.fighter, &a.fighter, rec, c.pal_h2h)),
+        _ => None,
+    };
+    // calls imported from a calls file don't keep the factors: the re-run stands in
+    let ok = |p: Option<f64>| p.filter(|p| *p > 0.0 && *p < 1.0);
+    let stored = ok(c.p_stats).zip(ok(c.p_species)).zip(ok(c.p_h2h)).map(|((a, b), c)| [a, b, c]);
+    let (ps, rescored) = match (stored, &score) {
+        (Some(p), _) => (p, false),
+        (None, Some(sc)) => ([sc.p_stats, sc.p_species, sc.p_h2h], true),
+        (None, None) => return None,
+    };
+    let factors: Vec<Factor> = [("stats", 1.0), ("species", s.species_weight), ("h2h", s.pal_h2h_weight)]
+        .iter()
+        .zip(ps)
+        .map(|((key, weight), p)| Factor { key: key.to_string(), p_home: p, weight: *weight, logit: weight * model::logit(p) })
+        .collect();
+    let total = factors.iter().map(|f| f.logit).sum();
+    Some(ModelCall { factors, total, p_home: model::sigmoid(total), score, rescored })
+}
+
+fn side_detail(s: &model::Settings, me: &model::Fighter, them: &model::Fighter) -> SideDetail {
+    SideDetail {
+        strength: model::strength(s, &me.skills, &them.types),
+        moves: me
+            .skills
+            .iter()
+            .map(|m| MoveLine {
+                name: m.name.clone(),
+                el: m.el.clone(),
+                power: m.power,
+                lv: m.lv,
+                mult: model::type_mult(s, &m.el, &them.types),
+                usable: m.lv <= 70,
+                hit: m.hit,
+            })
+            .collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -340,5 +598,68 @@ mod tests {
     fn civil_dates() {
         assert_eq!(super::civil_date(0), "1970-01-01");
         assert_eq!(super::civil_date(1_794_355_200), "2026-11-11");
+    }
+
+    #[test]
+    fn a_call_breaks_down_into_its_fight_and_the_models_sum() {
+        let conn = augur_engine::seed::store();
+        let calls = augur_engine::db::settled(&conn).unwrap();
+        let c = calls.last().unwrap();
+        assert!(augur_engine::seed::tape(&conn, c.duel_id.unwrap()));
+        let d = super::call_detail(&conn, c.id).unwrap().expect("the newest call");
+        assert_eq!(d.call.id, c.id);
+        assert_eq!(d.slugs[0], augur_engine::site::slug_for(&c.home_pal));
+        assert!(d.settings.is_some(), "the call's own settings");
+        let f = d.fight.as_ref().expect("its duel");
+        let winner = usize::from(c.winner.as_deref() == Some("away"));
+        let loser = 1 - winner;
+        assert!(!f.hits.is_empty());
+        assert_eq!(f.hp[loser].last().unwrap(), &(f.ko_secs.unwrap(), 0.0), "the loser goes down at the K.O.");
+        assert_eq!(f.hp[winner].last().unwrap().1, f.winner_hp_left.unwrap() as f64, "the winner ends with the HP the duel says");
+        assert!(f.hp.iter().all(|h| h[0] == (0, 100.0)), "both start full");
+        for side in &f.moves {
+            assert!(side.windows(2).all(|w| w[0].total >= w[1].total), "biggest damage first");
+        }
+        let dealt: f64 = f.moves[winner].iter().map(|m| m.total).sum();
+        assert_eq!(dealt, 100.0, "the winner took all of the other side's HP");
+        assert!(f.moves[winner].iter().any(|m| m.name.is_empty() && m.el.is_none()), "unnamed hits are kept apart");
+        assert!(f.moves[winner].iter().filter(|m| !m.name.is_empty()).all(|m| m.power.is_some()), "listed moves have their power");
+        assert!(f.biggest.windows(2).all(|w| w[0].pct >= w[1].pct) && f.biggest.len() <= super::BIGGEST_HITS);
+        // the factors add up to the call's chance (the seed's calls are re-run: their factors weren't kept)
+        let m = d.model.as_ref().unwrap();
+        assert!(m.rescored && m.score.is_some());
+        assert_eq!(m.factors.len(), 3);
+        let sum: f64 = m.factors.iter().map(|f| f.logit).sum();
+        assert!((sum - m.total).abs() < 1e-12);
+        let p_pick = if c.pick == "home" { m.p_home } else { 1.0 - m.p_home };
+        assert!((p_pick - c.prob).abs() < 0.01, "{p_pick} vs the call's {}", c.prob);
+        assert_eq!(d.sides.len(), 2);
+        assert!(d.sides[0].moves.iter().any(|m| m.usable));
+    }
+
+    #[test]
+    fn a_call_without_a_tape_or_fighters_still_breaks_down() {
+        let conn = augur_engine::seed::store();
+        let c = augur_engine::db::settled(&conn).unwrap().remove(0);
+        let d = super::call_detail(&conn, c.id).unwrap().unwrap();
+        let f = d.fight.unwrap();
+        assert!(f.hits.is_empty() && f.hp.iter().all(|h| h.len() == 1) && f.biggest.is_empty(), "no tape: nothing made up");
+        // an old call: no fighters kept, factors stored
+        conn.execute("DELETE FROM fighters WHERE prediction_id = ?", [c.id]).unwrap();
+        conn.execute("UPDATE predictions SET p_stats = 0.3, p_species = 0.6, p_h2h = 0.5, stats_from = 'home: from their box; away: shown' WHERE id = ?", [c.id]).unwrap();
+        let d = super::call_detail(&conn, c.id).unwrap().unwrap();
+        assert!(d.call.fighters.is_none() && d.sides.is_empty());
+        let m = d.model.unwrap();
+        assert!(!m.rescored && m.score.is_none());
+        assert_eq!(m.factors[0].p_home, 0.3);
+        assert_eq!(d.stats_from, ["from their box".to_string(), "shown".to_string()]);
+        assert!(super::call_detail(&conn, 999_999).unwrap().is_none());
+    }
+
+    #[test]
+    fn ko_times() {
+        assert_eq!(super::ko_secs("0:27"), Some(27));
+        assert_eq!(super::ko_secs("1:05"), Some(65));
+        assert_eq!(super::ko_secs("soon"), None);
     }
 }

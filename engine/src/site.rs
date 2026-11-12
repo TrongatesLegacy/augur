@@ -777,7 +777,8 @@ pub fn parse_account(page: &str) -> AccountPage {
                     }
                 })
                 .collect();
-            out.closest = between(body, r#"<div class="kick">Closest to unlock</div>"#, &[r#"<div class="kick">"#])
+            // just the closest few: the every-title-by-category list follows in a <details> block
+            out.closest = between(body, r#"<div class="kick">Closest to unlock</div>"#, &["<details", r#"<div class="kick">"#])
                 .map(|q| {
                     regex!(r#"(?s)<div class="quest">.*?<span class="quest-n">((?:<span class="ico">.*?</span>)?[^<]*)</span><span class="quest-c">([\d,]+)<small>/([\d,]+)</small></span>.*?<div class="quest-d">(.*?)</div>"#)
                         .captures_iter(q)
@@ -787,6 +788,7 @@ pub fn parse_account(page: &str) -> AccountPage {
                             let n = |x: &str| x.replace(',', "").parse().ok();
                             Some(Quest { icon, name, have: n(&c[2])?, need: n(&c[3])?, about: text(&c[4]) })
                         })
+                        .take(4)
                         .collect()
                 })
                 .unwrap_or_default();

@@ -1,12 +1,45 @@
-// The tray popover: only what's useful at a glance, and the copy buttons (the bet and the chat line).
+// The tray popover: only what's useful at a glance, and the copy buttons (the bet and the chat line). Between duels
+// and off air it says how the last stream went. It sizes itself to what it shows.
 import { invoke, listen } from './lib/bridge.js';
 import { copyText } from './lib/clipboard.js';
-import { esc, pct } from './lib/format.js';
+import { esc, pct, signed } from './lib/format.js';
 import { SHORT, dial, pickVoice, tapeRows, voiceLine, whyLine } from './lib/pal.js';
 import { betCommand, stakeLine } from './lib/stake.js';
 
 const el = document.getElementById('pop');
 const state = { view: null, settings: null, voice: null, update: null };
+
+const shortDay = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+
+// no duel up: between duels (something's queued) or off air, and how the last stream went
+function quiet(view) {
+  const o = view?.off_air;
+  const between = (view?.queue || []).length > 0;
+  const head = view?.error ? 'OFFLINE' : between ? 'BETWEEN DUELS' : 'OFF AIR';
+  const hero = view?.error
+    ? '<b>Can’t reach PalDuels</b><small>Augur keeps trying every 30 seconds.</small>'
+    : between
+      ? `<b>Next up</b><small>${(view.queue || []).slice(0, 2).map((q) => `${esc(q.home)} vs ${esc(q.away)}`).join(' · ')}</small>`
+      : '<b>See you next stream</b><small>Augur calls the next fight the moment it’s up.</small>';
+  const ls = o?.last_stream;
+  const stream = ls
+    ? `<div class="qs"><div class="qh"><span>${between ? 'Today' : 'Last stream'} · ${esc(shortDay(ls[0]))}</span><span>best run ${ls[3]}</span></div>
+        <div class="qn"><b>${ls[1]}<i>/${ls[2]}</i></b><span>${pct(ls[1] / ls[2])} right</span></div>
+        ${o.last_bets ? `<div class="qb"><span>You <b class="${o.last_bets[0] >= 0 ? 'ok' : 'bad'}">${signed(o.last_bets[0])}</b></span><span>Following Augur <b class="${o.last_bets[1] >= 0 ? 'ok' : 'bad'}">${signed(o.last_bets[1])}</b></span></div>` : ''}</div>`
+    : '';
+  const recent = o?.recent?.length
+    ? `<div class="qr">${o.recent.map(([pick, other, right]) => `<div><span class="res ${right ? 'o' : 'x'}">${right ? '✓' : '✕'}</span><span><b>${esc(pick)}</b> over ${esc(other)}</span></div>`).join('')}</div>`
+    : '';
+  const all = o?.all_time?.[1] ? `<div class="qa">All time <b>${o.all_time[0]}/${o.all_time[1]}</b> · ${pct(o.all_time[0] / o.all_time[1])}</div>` : '';
+  return `<div class="hd"><span>${head}</span><span class="c">AUGUR</span></div><div class="quiet">${hero}</div>${stream}${recent}${all}`;
+}
+
+// the popover's window fits what it shows
+function fit() {
+  // the card, plus the clear margin around it
+  const pad = parseFloat(getComputedStyle(document.body).paddingTop) + parseFloat(getComputedStyle(document.body).paddingBottom);
+  requestAnimationFrame(() => invoke('fit_popover', { height: Math.ceil(el.getBoundingClientRect().height + pad) }).catch(() => {}));
+}
 
 function render() {
   const { view, settings } = state;
@@ -14,12 +47,9 @@ function render() {
   const today = view?.today || [0, 0];
   const u = state.update;
   const upd = u?.latest && u.ready ? `<div class="tup"><span>✦ Augur <b>${esc(u.latest.version)}</b> is ready</span><button id="tu">${u.installing ? 'Restarting…' : 'Restart to update'}</button></div>` : '';
-  const foot = upd + `<div class="ft"><span>Today <b>${today[0]}/${today[1]}</b>${today[1] ? ` · ${pct(today[0] / today[1])}` : ''}</span><button id="open">Open Augur ›</button></div>`;
+  const foot = upd + `<div class="ft"><span>Today <b>${today[0]}/${today[1]}</b>${today[1] ? ` · ${pct(today[0] / today[1])}` : ''}</span><span class="fb"><button id="open">Open Augur ›</button><button id="quit" class="qt" title="Quit Augur" aria-label="Quit Augur"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg></button></span></div>`;
   if (!p) {
-    const r = view?.last_result;
-    el.innerHTML = `<div class="hd"><span>${view?.error ? 'OFFLINE' : 'NO DUEL UP'}</span><span class="c">AUGUR</span></div>
-      <div class="empty" style="padding:30px 14px"><b>${view?.error ? 'Can’t reach PalDuels' : 'Waiting for the next fight'}</b>
-      ${r ? `Last: <span class="${r.right ? 'ok' : 'bad'}">${esc(r.winner_pal)} won ${r.right ? '✓' : '✕'}</span>${r.ko ? ` · K.O. ${esc(r.ko)}` : ''}` : esc(view?.title || '')}</div>${foot}`;
+    el.innerHTML = quiet(view) + foot;
   } else {
     const fav = p.pick === 'home' ? p.home : p.away;
     const dog = p.pick === 'home' ? p.away : p.home;
@@ -31,15 +61,15 @@ function render() {
       <div class="call"><div><div class="who">${esc(fav.pal)}</div><div class="vs">over <b>${esc(dog.pal)}</b></div><div class="small">${esc(p.home.owner)} vs ${esc(p.away.owner)}</div><div class="why">${esc(whyLine(p))}</div></div>${dial(p.prob, 84)}</div>
       <div class="stats">${tapeRows(p)}</div>
       <div class="betrow">${bet}${command ? '<button class="btn ghost" id="cb">Copy bet</button>' : ''}</div>
-      <div class="say"><div class="vo" id="vb">${voices.map((v) => `<button class="${v === voice ? 'on' : ''}" data-v="${esc(v)}">${esc(SHORT[v] || v)}</button>`).join('')}</div>
-      <div class="q" id="vq">${esc(voiceLine(p, voice, settings?.include_chance !== false))}</div><button class="btn copy" id="cp">Copy for chat</button></div>${foot}`;
+      ${settings?.chat_lines === false ? '' : `<div class="say"><div class="vo" id="vb">${voices.map((v) => `<button class="${v === voice ? 'on' : ''}" data-v="${esc(v)}">${esc(SHORT[v] || v)}</button>`).join('')}</div>
+      <div class="q" id="vq">${esc(voiceLine(p, voice, settings?.include_chance !== false))}</div><button class="btn copy" id="cp">Copy for chat</button></div>`}${foot}`;
     el.querySelectorAll('#vb button').forEach((b) => {
       b.onclick = () => {
         state.voice = b.dataset.v;
         render();
       };
     });
-    document.getElementById('cp').onclick = (e) => copyText(document.getElementById('vq').textContent, e.target);
+    document.getElementById('cp')?.addEventListener('click', (e) => copyText(document.getElementById('vq').textContent, e.target));
     document.getElementById('cb')?.addEventListener('click', (e) => copyText(command, e.target));
   }
   document.getElementById('open').onclick = () => invoke('open_window', { tab: 'live' });
@@ -47,6 +77,8 @@ function render() {
     e.target.disabled = true;
     invoke('update_install');
   });
+  document.getElementById('quit').onclick = () => invoke('quit_app');
+  fit();
 }
 
 addEventListener('keydown', (e) => {
@@ -54,6 +86,10 @@ addEventListener('keydown', (e) => {
 });
 listen('update', (u) => {
   state.update = u;
+  render();
+});
+listen('settings', (v) => {
+  state.settings = v;
   render();
 });
 listen('live', (v) => {

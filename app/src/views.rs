@@ -41,6 +41,61 @@ pub struct LiveView {
     pub today: (usize, usize),
     /// a fresh install that hasn't chosen yet: import a backup, or start fresh
     pub first_run: bool,
+    /// between duels and off air: how the last stream went
+    pub off_air: Option<OffAir>,
+}
+
+/// What the popover and Live show when no duel is up.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct OffAir {
+    /// the last stream day with calls: date, right, total, best run
+    pub last_stream: Option<(String, usize, usize, usize)>,
+    /// on that day's calls you bet: what you made, and what following Augur would have
+    pub last_bets: Option<(i64, i64)>,
+    /// every call: right, total
+    pub all_time: (usize, usize),
+    /// the latest calls, newest first: (pal called, beaten pal, right)
+    pub recent: Vec<(String, String, bool)>,
+    /// the latest stream days, oldest first: (date, right, total)
+    pub days: Vec<(String, usize, usize)>,
+    /// what's stored: duels, fight tapes, species, your bets
+    pub store: (i64, i64, i64, i64),
+}
+
+/// How the last stream went, for the quiet times.
+pub fn off_air(conn: &Connection, staking: &StakeSettings) -> R<OffAir> {
+    let calls = db::settled(conn)?;
+    let all = history::tally(&calls, None);
+    let mut out = OffAir { all_time: (all.right, all.total), ..Default::default() };
+    let dated: Vec<_> = all.by_day.iter().filter(|(d, ..)| !d.is_empty()).cloned().collect();
+    out.days = dated[dated.len().saturating_sub(10)..].to_vec();
+    let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0);
+    out.store = (
+        count("SELECT COUNT(*) FROM duels"),
+        count("SELECT COUNT(DISTINCT duel_id) FROM hits"),
+        count("SELECT COUNT(*) FROM species"),
+        count("SELECT COUNT(*) FROM bets"),
+    );
+    if let Some((day, right, total)) = all.by_day.iter().rev().find(|(d, ..)| !d.is_empty()).cloned() {
+        let on_day: Vec<db::CallRecord> =
+            calls.iter().filter(|c| c.fought_at.as_deref().is_some_and(|f| f.starts_with(&day))).cloned().collect();
+        out.last_stream = Some((day, right, total, history::tally(&on_day, None).best_run));
+        let synced = db::meta_get(conn, "bets_synced_at")?.and_then(|v| v.parse().ok()).unwrap_or(0);
+        let c = bets::compare(&on_day, &db::bets(conn)?, staking, &bets::odds(conn)?, bets::balance(conn), synced);
+        if c.bet_on > 0 {
+            out.last_bets = Some((c.yours, c.augur));
+        }
+    }
+    out.recent = calls
+        .iter()
+        .rev()
+        .take(3)
+        .map(|c| {
+            let (pick, other) = if c.pick == "home" { (&c.home_pal, &c.away_pal) } else { (&c.away_pal, &c.home_pal) };
+            (pick.clone(), other.clone(), c.right())
+        })
+        .collect();
+    Ok(out)
 }
 
 /// YYYY-MM-DD (UTC) for a Unix time, without a date library.

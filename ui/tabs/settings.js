@@ -1,6 +1,7 @@
 // Settings, in six pages: General (checking, the tray and notifications), Staking (with what it would suggest),
 // Chat lines, Account, Sync & data (sync across computers, back up, import) and Updates.
 import { invoke } from '../lib/bridge.js';
+import { copyText } from '../lib/clipboard.js';
 import { ago, esc, fmt, pct } from '../lib/format.js';
 import { notesList } from '../lib/notes.js';
 import { SHORT, VOICES } from '../lib/pal.js';
@@ -25,7 +26,7 @@ const FOLDER_ICON = { onedrive: '☁', icloud: '☁', gdrive: '▲', dropbox: '�
 const row = (label, sub, control) => `<div class="srow"><div>${label}${sub ? `<small>${sub}</small>` : ''}</div>${control}</div>`;
 const toggle = (attr, on, label) => `<button class="tog ${on ? 'on' : ''}" ${attr} aria-pressed="${!!on}" aria-label="${esc(label)}"></button>`;
 
-function general(s) {
+function general(s, about) {
   const ranged = s.poll_max_secs != null;
   const tog = (k, label, sub) => row(label, sub, toggle(`data-k="${k}"`, s[k], label));
   return `<div class="sg">
@@ -39,6 +40,22 @@ function general(s) {
       ${tog('tray_pick', 'Show the pick in the tray', 'macOS: name and chance · Windows: confidence ring')}
       ${tog('notify_new_pick', 'Notify on each new pick', 'with the bet to type')}
       ${tog('notify_result', 'Notify with each result', '"Chillet Lux won ✓"')}</div>
+    ${
+      about
+        ? `<div class="panel about"><div class="ph"><h3>About Augur</h3><span>version ${esc(about.version)}</span></div>
+      <div class="kpi five">${[
+        ['calls', about.counts[0]],
+        ['duels', about.counts[1]],
+        ['fight tapes', about.counts[2]],
+        ['species', about.counts[3]],
+        ['your bets', about.counts[4]],
+      ]
+        .map(([l, n]) => `<div><b>${fmt(n)}</b><small>${l}</small></div>`)
+        .join('')}</div>
+      <div class="srow"><div>Data folder<small>${esc(about.data_dir)}</small></div><button class="btn ghost" id="cpdir">Copy path</button></div>
+      <div class="small">Calls, duels and settings live here; the sign-in is encrypted for this computer. Settings › Sync &amp; data backs it all up.</div></div>`
+        : ''
+    }
   </div>`;
 }
 
@@ -79,6 +96,7 @@ function chat(s, live) {
   const lines = live?.prediction?.lines;
   return `<div class="sg">
     <div class="panel"><div class="ph"><h3>Chat lines</h3><span>shown in the tray and Live</span></div>
+      ${row('Show the chat lines', 'the lines to paste in chat and their copy button, in the tray and on Live', toggle('data-k="chat_lines"', s.chat_lines, 'Show the chat lines'))}
       ${row('Voices', 'tap to show or hide', `<div class="vchips">${VOICES.map((v) => `<button class="${s.voices.includes(v) ? 'on' : ''}" data-voice="${esc(v)}">${esc(SHORT[v])}</button>`).join('')}</div>`)}
       ${row('Default voice', '', `<select data-n="default_voice">${VOICES.map((v) => `<option ${s.default_voice === v ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>`)}
       ${row('Include the chance', 'adds "(83%)" to the line', toggle('data-k="include_chance"', s.include_chance, 'Include the chance'))}</div>
@@ -190,15 +208,16 @@ export async function render(app) {
   state.settingsPage ||= 'general';
   const page = state.settingsPage;
   const s = state.settings;
-  const [acct, preview, sync, upd] = await Promise.all([
+  const [acct, preview, sync, upd, about] = await Promise.all([
     page === 'account' ? invoke('account') : null,
     page === 'staking' ? invoke('stake_preview', { staking: s.staking }) : null,
     page === 'sync' ? invoke('sync_view') : null,
     page === 'updates' ? invoke('update_view') : null,
+    page === 'general' ? invoke('about') : null,
   ]);
   if (state.tab !== 'settings' || state.settingsPage !== page) return;
   const tabs = `<div class="seg ml">${PAGES.map(([k, l]) => `<button class="${page === k ? 'on' : ''}" data-page="${k}">${l}</button>`).join('')}</div>`;
-  const body = { general: () => general(s), staking: () => staking(s, preview), chat: () => chat(s, state.live), account: () => account(s, acct), sync: () => syncPage(sync, state.syncFlash), updates: () => updates(s, upd) }[page]();
+  const body = { general: () => general(s, about), staking: () => staking(s, preview), chat: () => chat(s, state.live), account: () => account(s, acct), sync: () => syncPage(sync, state.syncFlash), updates: () => updates(s, upd) }[page]();
   main.innerHTML = header('Settings', tabs) + body;
   state.syncFlash = null;
 
@@ -260,6 +279,7 @@ export async function render(app) {
     };
   });
   document.getElementById('si')?.addEventListener('click', () => invoke('sign_in'));
+  document.getElementById('cpdir')?.addEventListener('click', (e) => copyText(about.data_dir, e.target));
   document.getElementById('so')?.addEventListener('click', async () => {
     await invoke('sign_out');
     render(app);

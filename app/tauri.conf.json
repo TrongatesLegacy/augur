@@ -33,13 +33,15 @@
         "resizable": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "backgroundColor": "#14121f",
-        "theme": "Dark"
+        "theme": "Dark",
+        "transparent": true,
+        "shadow": false
       }
     ],
     "security": {
       "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src ipc: http://ipc.localhost"
-    }
+    },
+    "macOSPrivateApi": true
   },
   "bundle": {
     "active": true,

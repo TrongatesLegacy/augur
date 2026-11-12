@@ -50,6 +50,8 @@ pub fn fixture_data() -> Value {
     seed::import_bets(&conn);
     let s = model::Settings::default();
     let state = seed::state("state-leaflit-wumpo.json");
+    // sync times two minutes ago, so they read like real ones
+    let recent = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64 - 120_000;
     let p = predict::predict(&state, &predict::Options { lookups: false, db_path: PathBuf::from("/nonexistent"), settings: s.clone() })
         .unwrap();
     let stake = stake::suggest(&p.pick, p.prob, &StakeSettings::default(), &bets::odds(&conn).unwrap(), bets::balance(&conn));
@@ -59,14 +61,12 @@ pub fn fixture_data() -> Value {
         prediction: Some(p),
         stake: Some(stake),
         queue: state.queue.iter().filter(|q| q.pos > 0).take(3).cloned().collect(),
-        synced_at: 1,
+        synced_at: recent,
         today: (14, 19),
         first_run: false,
         ..Default::default()
     };
     let roster = Ok(site::parse_roster(&page("user-trongateslegacy.html")));
-    // the sync times: two minutes ago, so they read like a real sync
-    let recent = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64 - 120_000;
     let preview: Vec<_> = [0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9]
         .map(|p| (p, stake::suggest("home", p, &StakeSettings::default(), &bets::odds(&conn).unwrap(), bets::balance(&conn))))
         .to_vec();
@@ -78,7 +78,7 @@ pub fn fixture_data() -> Value {
         "species_list": augur_engine::history::species_records(&conn).unwrap(),
         "species": augur_engine::history::species_detail(&conn, "Chillet Lux").unwrap(),
         "player": views::player_view(&conn, &s, "TrongatesLegacy", roster).unwrap(),
-        "model_view": views::model_view(&conn, &s, None, Default::default(), 1).unwrap(),
+        "model_view": views::model_view(&conn, &s, None, Default::default(), recent).unwrap(),
         // checking at random times, so Settings shows the range
         "get_settings": AppSettings { poll_secs: 4, poll_max_secs: Some(12), ..Default::default() },
         "stake_preview": preview,
@@ -123,6 +123,11 @@ pub fn fixture_data() -> Value {
         "update_check": null,
         "update_install": null,
         "update_seen": null,
+        "fit_popover": null,
+        "quit_app": null,
+        "about": { "version": "0.1.1", "data_dir": "/Users/you/Library/Application Support/Augur", "counts": [19, 20, 1, 1, 13] },
+        // what Live and the popover show between duels (swapped in by the "offair" page and the off-air tray test)
+        "off_air": views::off_air(&conn, &StakeSettings::default()).unwrap(),
         "backfill_progress": augur_engine::backfill::Progress { phase: "duels".into(), done: 1200, total: 4702, ..Default::default() },
         "pal_image": null,
     })
@@ -198,17 +203,20 @@ const MAIN_DRIVER: &str = r#"
   const only = (location.hash.match(/tab=(\w+)/) || [])[1];
   if (!window.augur) window.__errors.push('the page never started (a module failed to load)');
   else {
-    for (const tab of only ? [only] : ['live', 'history', 'bets', 'pals', 'players', 'model', 'settings', 'staking', 'sync', 'updates']) {
+    for (const tab of only ? [only] : ['live', 'history', 'bets', 'pals', 'players', 'model', 'settings', 'staking', 'sync', 'updates', 'offair']) {
       // "updates" is Settings › Updates with a new version downloaded and ready (and its bar over the window)
       if (tab === 'updates') {
         DATA.update_view = DATA.update_ready;
         window.augur.showUpdate(DATA.update_ready);
       }
-      // "bets" is History's Your bets view; "staking" and "sync" are Settings pages
+      // "bets" is History's Your bets view; "staking", "sync" and "updates" are Settings pages
       window.augur.state.view = tab === 'bets' ? 'bets' : 'calls';
+      // "offair" is Live with no duel up, after a stream
+      if (tab === 'offair') window.augur.state.live = { ...DATA.live, prediction: null, queue: [], off_air: DATA.off_air, title: 'Last duel' };
+      else window.augur.state.live = DATA.live;
       window.augur.state.settingsPage = ['staking', 'sync', 'updates'].includes(tab) ? tab : 'general';
       // "welcome" is the fresh install's overlay, over Live
-      await window.augur.show(tab === 'bets' ? 'history' : ['staking', 'sync', 'updates'].includes(tab) ? 'settings' : tab === 'welcome' ? 'live' : tab);
+      await window.augur.show(tab === 'bets' ? 'history' : ['staking', 'sync', 'updates'].includes(tab) ? 'settings' : ['welcome', 'offair'].includes(tab) ? 'live' : tab);
       await sleep(300);
       out[tab] = document.getElementById('main').innerText;
     }
@@ -260,6 +268,7 @@ fn render_at(port: u16, name: &str, shot: Option<(&Path, &str)>, (w, h): (u32, u
             .arg("--no-first-run")
             .arg("--no-default-browser-check")
             .arg("--hide-scrollbars")
+            .arg("--default-background-color=00000000") // the popover's window is transparent around its card
             .arg(format!("--user-data-dir={}", dir.join("profile").display()))
             .arg("--virtual-time-budget=10000");
     };
@@ -327,6 +336,11 @@ fn every_tab_renders_headless() {
     assert!(text("live").contains("some stats hidden until the bell"), "Live says the home stats are estimated");
     assert!(text("history").contains("14 / 19"), "History: {}", text("history"));
     assert!(
+        text("offair").contains("off air") && text("offair").contains("last stream") && text("offair").contains("latest calls"),
+        "Live off air: {}",
+        text("offair")
+    );
+    assert!(
         text("welcome").contains("welcome to augur")
             && text("welcome").contains("import a backup")
             && text("welcome").contains("start fresh"),
@@ -377,7 +391,7 @@ fn every_tab_renders_headless() {
     if let Some(folder) = std::env::var_os("AUGUR_UI_SHOTS").map(PathBuf::from) {
         std::fs::create_dir_all(&folder).unwrap();
         let port = serve("index.html", &data, MAIN_DRIVER);
-        for tab in ["live", "history", "bets", "pals", "players", "model", "settings", "staking", "sync", "welcome", "updates"] {
+        for tab in ["live", "history", "bets", "pals", "players", "model", "settings", "staking", "sync", "welcome", "updates", "offair"] {
             render(port, tab, Some((&folder, tab)));
         }
     }
@@ -400,4 +414,33 @@ fn tray_popover_renders_headless() {
         render_at(serve("tray.html", &fixture_data(), TRAY_DRIVER), "tray", Some((&folder, "tray")), (340, 600));
     }
     assert!(tray.contains("Today 14/19"));
+}
+
+// No duel up, after a stream: the popover says how it went.
+const TRAY_OFF_AIR_DRIVER: &str = r#"
+DATA.live = { ...DATA.live, prediction: null, queue: [], off_air: DATA.off_air, title: 'Last duel' };
+(async () => {
+  document.body.style.width = '340px'; // the popover's width
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  for (let i = 0; i < 60 && !window.augur; i++) await sleep(100);
+  await sleep(200);
+  document.getElementById('report').textContent = JSON.stringify({ tray: document.getElementById('pop').innerText, errors: window.__errors });
+})();
+"#;
+
+#[test]
+fn tray_popover_off_air_renders_headless() {
+    if !have_chrome() {
+        return;
+    }
+    let r = render(serve("tray.html", &fixture_data(), TRAY_OFF_AIR_DRIVER), "tray-off-air", None);
+    assert_eq!(r["errors"], json!([]), "script errors: {}", r["errors"]);
+    let tray = r["tray"].as_str().unwrap();
+    let t = tray.to_lowercase();
+    assert!(t.contains("off air") && t.contains("14/19") && t.contains("best run 8") && t.contains("11 nov"), "the last stream: {tray}");
+    assert!(tray.contains("over"), "the latest calls: {tray}");
+    if let Some(folder) = std::env::var_os("AUGUR_UI_SHOTS").map(PathBuf::from) {
+        std::fs::create_dir_all(&folder).unwrap();
+        render_at(serve("tray.html", &fixture_data(), TRAY_OFF_AIR_DRIVER), "tray-off-air", Some((&folder, "tray-off-air")), (340, 540));
+    }
 }

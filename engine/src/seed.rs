@@ -40,5 +40,12 @@ pub fn store() -> Connection {
     calls::import(&conn, &root().join("fixtures/calls.jsonl")).unwrap();
     db::save_species(&conn, &site::parse_species(&page("pal-bushi-noct.html"), "bushi-noct")).unwrap();
     db::save_duel(&conn, 4702, &site::parse_duel(&page("duel-4702.html"))).unwrap();
+    // the calls file has no dates: the seed's stream was the evening of 11 Nov 2026, a fight every seven minutes
+    conn.execute(
+        "UPDATE duels SET fought_at = strftime('%Y-%m-%dT%H:%M:%SZ', '2026-11-11 20:00:00', '+' || ((id - 9001) * 7) || ' minutes')
+         WHERE fought_at IS NULL AND id BETWEEN 9001 AND 9019",
+        [],
+    )
+    .unwrap();
     conn
 }

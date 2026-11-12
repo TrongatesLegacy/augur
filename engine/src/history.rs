@@ -279,6 +279,8 @@ pub struct SpeciesDetail {
     pub months: Vec<(String, u32, u32)>,
     /// (owner, wins, duels)
     pub owners: Vec<(String, u32, u32)>,
+    /// (opposing species, wins, duels), most met first
+    pub matchups: Vec<(String, u32, u32)>,
 }
 
 pub fn species_detail(conn: &Connection, pal: &str) -> R<SpeciesDetail> {
@@ -329,6 +331,10 @@ pub fn species_detail(conn: &Connection, pal: &str) -> R<SpeciesDetail> {
         .prepare(&format!("SELECT CASE WHEN home_pal = ?1 THEN home_owner ELSE away_owner END o, SUM({mine}), COUNT(*) FROM duels WHERE (home_pal = ?1 OR away_pal = ?1) AND winner IS NOT NULL GROUP BY o ORDER BY COUNT(*) DESC LIMIT 8"))?
         .query_map([pal], |r| Ok((r.get::<_, Option<String>>(0)?.unwrap_or_default(), r.get(1)?, r.get(2)?)))?
         .collect::<Rq<_>>()?;
+    let matchups = conn
+        .prepare(&format!("SELECT CASE WHEN home_pal = ?1 THEN away_pal ELSE home_pal END o, SUM({mine}), COUNT(*) FROM duels WHERE (home_pal = ?1 OR away_pal = ?1) AND winner IS NOT NULL GROUP BY o ORDER BY COUNT(*) DESC, o LIMIT 10"))?
+        .query_map([pal], |r| Ok((r.get::<_, Option<String>>(0)?.unwrap_or_default(), r.get(1)?, r.get(2)?)))?
+        .collect::<Rq<_>>()?;
     Ok(SpeciesDetail {
         species: db::species_row(conn, pal)?,
         wins,
@@ -339,6 +345,7 @@ pub fn species_detail(conn: &Connection, pal: &str) -> R<SpeciesDetail> {
         moves,
         months,
         owners,
+        matchups,
     })
 }
 

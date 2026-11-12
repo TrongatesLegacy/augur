@@ -31,6 +31,8 @@ pub struct AppSettings {
     /// voices shown, in order: Yoda, Gollum, Dr. Rockso, Scooby-Doo, Daffy Duck
     pub voices: Vec<String>,
     pub default_voice: String,
+    /// show the chat lines and their copy button (in the tray and on Live)
+    pub chat_lines: bool,
     pub include_chance: bool,
     /// your Kick name, for your pal box and rivals (public, no sign-in needed)
     pub kick_name: String,
@@ -60,6 +62,7 @@ impl Default for AppSettings {
             launch_at_login: false,
             voices: augur_engine::voices::VOICES.iter().map(|v| v.to_string()).collect(),
             default_voice: "Yoda".into(),
+            chat_lines: true,
             include_chance: true,
             kick_name: String::new(),
             reroll_command: String::new(),

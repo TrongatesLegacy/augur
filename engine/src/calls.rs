@@ -29,6 +29,9 @@ pub struct Line {
     pub stake: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stake_cmd: Option<String>,
+    /// overwritten after the fight, so left out of the money comparison; carried so every computer agrees
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub damaged: bool,
 }
 
 /// Writes every settled call with full fighter data. Returns how many.
@@ -56,6 +59,7 @@ pub fn export(conn: &Connection, path: &Path) -> crate::Result<usize> {
             model,
             stake: c.stake,
             stake_cmd,
+            damaged: c.damaged,
         };
         out.push_str(&serde_json::to_string(&line)?);
         out.push('\n');
@@ -78,6 +82,13 @@ pub fn import(conn: &Connection, path: &Path) -> crate::Result<usize> {
             |r| r.get(0),
         )?;
         if exists > 0 {
+            // a call already here: only the damaged mark carries over (it's only ever set, never cleared)
+            if l.damaged {
+                conn.execute(
+                    "UPDATE predictions SET damaged = 1 WHERE home_owner = ?1 AND away_owner = ?2 AND seen_at = ?3",
+                    rusqlite::params![l.home_owner, l.away_owner, l.seen_at],
+                )?;
+            }
             continue;
         }
         let (Some(home), Some(away)) = (l.fighters.get("home").cloned(), l.fighters.get("away").cloned()) else { continue };
@@ -103,6 +114,9 @@ pub fn import(conn: &Connection, path: &Path) -> crate::Result<usize> {
             version: String::new(),
         };
         let id = db::add_call(conn, &call)?;
+        if l.damaged {
+            conn.execute("UPDATE predictions SET damaged = 1 WHERE id = ?", [id])?;
+        }
         if let Some(amount) = l.stake {
             db::set_call_stake(conn, id, amount, l.stake_cmd.as_deref().unwrap_or(""))?;
         }
@@ -132,6 +146,26 @@ mod tests {
         assert_eq!(done.iter().filter(|c| c.right()).count(), 14, "14 of the seed's 19 calls were right");
         let out = std::env::temp_dir().join(format!("augur-calls-{}.jsonl", std::process::id()));
         assert_eq!(export(&conn, &out).unwrap(), n);
+        let _ = std::fs::remove_file(out);
+    }
+
+    /// A damaged mark set on one computer reaches the others: on a call they don't have yet, and on one they do.
+    #[test]
+    fn the_damaged_mark_travels_with_the_calls() {
+        let fixture = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/calls.jsonl"));
+        let (mac, windows) = (db::open_memory().unwrap(), db::open_memory().unwrap());
+        import(&mac, fixture).unwrap();
+        import(&windows, fixture).unwrap();
+        let id = db::settled(&mac).unwrap()[3].id;
+        mac.execute("UPDATE predictions SET damaged = 1 WHERE id = ?", [id]).unwrap();
+        let out = std::env::temp_dir().join(format!("augur-damaged-{}.jsonl", std::process::id()));
+        export(&mac, &out).unwrap();
+        assert_eq!(std::fs::read_to_string(&out).unwrap().matches("\"damaged\":true").count(), 1, "only the marked call says so");
+        let damaged = |conn: &Connection| db::settled(conn).unwrap().iter().filter(|c| c.damaged).count();
+        assert_eq!((import(&windows, &out).unwrap(), damaged(&windows)), (0, 1), "a call it already had gets the mark, nothing is added");
+        let fresh = db::open_memory().unwrap();
+        import(&fresh, &out).unwrap();
+        assert_eq!(damaged(&fresh), 1, "a call it didn't have arrives marked");
         let _ = std::fs::remove_file(out);
     }
 }

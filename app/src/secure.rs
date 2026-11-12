@@ -88,13 +88,13 @@ mod imp {
     use windows_sys::Win32::Security::Cryptography::{CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB};
 
     fn run(input: &[u8], protect: bool) -> Result<Vec<u8>, String> {
-        let mut in_blob = CRYPT_INTEGER_BLOB { cbData: input.len() as u32, pbData: input.as_ptr() as *mut u8 };
+        let in_blob = CRYPT_INTEGER_BLOB { cbData: input.len() as u32, pbData: input.as_ptr() as *mut u8 };
         let mut out_blob = CRYPT_INTEGER_BLOB { cbData: 0, pbData: std::ptr::null_mut() };
         // SAFETY: the blobs point at live buffers for the duration of the call; the output is freed with LocalFree.
         let ok = unsafe {
             if protect {
                 CryptProtectData(
-                    &mut in_blob,
+                    &in_blob,
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
@@ -104,7 +104,7 @@ mod imp {
                 )
             } else {
                 CryptUnprotectData(
-                    &mut in_blob,
+                    &in_blob,
                     std::ptr::null_mut(),
                     std::ptr::null(),
                     std::ptr::null(),

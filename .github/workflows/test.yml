@@ -23,21 +23,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # the checks that don't build anything, on Linux (plentiful runners, about a minute); Clippy builds the whole
+  # Tauri app, so it runs in the Windows tests below, which build it anyway
   quality:
     name: Quality
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+          components: rustfmt
       - name: Formatting
         if: github.event_name != 'schedule'
         run: cargo fmt --all --check
-      - name: Clippy
-        if: github.event_name != 'schedule'
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: The pages parse
         if: github.event_name != 'schedule'
         run: |
@@ -62,7 +60,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
+      # on Windows: Mac runners are scarce (Quality kept queueing or getting cancelled on one). The Mac-only code
+      # (the Keychain, the Dock) is still compiled and tested on the Mac, just not linted
+      - name: Clippy
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Tests
         shell: bash
         run: cargo test --workspace --locked

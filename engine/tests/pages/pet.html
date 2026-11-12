@@ -5,19 +5,19 @@
 <main>
 <h1 class="sr-only">Your pet</h1>
 <section class="pt-stage has-pass">
-  <ol class="pt-path">
-    <li class="is-done"><span class="pt-node">D</span><span class="sr-only">Potato, Tier D, Done</span></li>
-    <li class="is-done"><span class="pt-node">C</span><span class="sr-only">Teen, Tier C, Done</span></li>
-    <li class="is-done"><span class="pt-node">B</span><span class="sr-only">Adult, Tier B, Done</span></li>
-    <li class="is-now"><span class="pt-node">A</span><span class="sr-only">Elder, Tier A, Now</span></li>
-    <li class=""><span class="pt-node">S</span><span class="sr-only">Hero, Tier S</span></li>
-    <li class="is-rank"><span class="pt-node rank">Legend</span><span class="sr-only">Legend, a rank</span></li>
-    <li class="is-rank"><span class="pt-node rank">Mythic</span><span class="sr-only">Mythic, a rank</span></li>
+  <ol class="pt-path" data-cap="Tier A" data-cap-el="Tier A, Neutral">
+    <li class="is-done" data-say="A stage."><span class="pt-node">D</span><span class="sr-only">Potato, Tier D, Done</span></li>
+    <li class="is-done" data-say="A stage."><span class="pt-node">C</span><span class="sr-only">Teen, Tier C, Done</span></li>
+    <li class="is-done" data-say="A stage."><span class="pt-node">B</span><span class="sr-only">Adult, Tier B, Done</span></li>
+    <li class="is-now" data-say="A stage."><span class="pt-node">A</span><span class="sr-only">Elder, Tier A, Now</span></li>
+    <li class="" data-say="A stage."><span class="pt-node">S</span><span class="sr-only">Hero, Tier S</span></li>
+    <li class="is-rank" data-say="A stage."><span class="pt-node rank">Legend</span><span class="sr-only">Legend, a rank</span></li>
+    <li class="is-rank" data-say="A stage."><span class="pt-node rank">Mythic</span><span class="sr-only">Mythic, a rank</span></li>
   </ol>
-  <h2 class="pt-name">Lamball Cryst</h2>
+  <h2 class="pt-name" tabindex="-1" data-say="Lamball Cryst: a Neutral pal, tier A.">Lamball Cryst</h2>
   <div class="pt-passw"><span class="pt-passl">Passives</span><ul class="pt-passes">
-    <li class="pt-pass"><span class="pt-passk">Passive</span><b>Hard Skin</b>: Defense +10%</li>
-    <li class="pt-pass"><span class="pt-passk">Passive</span><b>Swift</b>: Speed +30%</li>
+    <li class="pt-pass" data-say="Hard Skin: Defense +10%"><span class="pt-passk">Passive</span><b>Hard Skin</b><span class="sr-only">: </span><span class="pass is-up">Defense +10%</span></li>
+    <li class="pt-pass" data-say="Swift: Speed +30%"><span class="pt-passk">Passive</span><b>Swift</b><span class="sr-only">: </span><span class="pass is-up">Speed +30%</span></li>
   </ul></div>
   <div class="pt-recent"><ul class="pt-log-l">
     <li style="--i:0" data-say="Raid: night won, 2h ago. +3 growth."><span class="pt-lg-s k-up"></span><b>+3</b><span class="pt-lg-w">Raid: night won, 2h ago</span></li>

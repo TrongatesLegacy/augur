@@ -702,6 +702,19 @@ pub struct AccountPage {
     /// (earned, of)
     pub titles_earned: Option<(u32, u32)>,
     pub titles: Vec<TitleBadge>,
+    /// the titles you're closest to earning, as the page lists them
+    #[serde(default)]
+    pub closest: Vec<Quest>,
+}
+
+/// A title still to earn, and how far along you are.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Quest {
+    pub icon: String,
+    pub name: String,
+    pub have: u64,
+    pub need: u64,
+    pub about: String,
 }
 
 pub fn parse_account(page: &str) -> AccountPage {
@@ -716,9 +729,11 @@ pub fn parse_account(page: &str) -> AccountPage {
         }
         if title.eq_ignore_ascii_case("Titles") {
             out.titles_earned =
-                regex!(r"(\d+) of (\d+)</strong>").captures(body).and_then(|c| Some((c[1].parse().ok()?, c[2].parse().ok()?)));
+                regex!(r"(\d+) of (\d+)(?:</strong>| earned)").captures(body).and_then(|c| Some((c[1].parse().ok()?, c[2].parse().ok()?)));
             // each badge: <span class="title-badge[ rare]" title="…"><span class="ico">🥇</span>Name [<b>x3</b>][<span class="tb-rare">Rare</span>]</span>
-            out.titles = body
+            // only the earned badges: the rest of the panel lists every title by category
+            let earned = between(body, r#"<div class="titles">"#, &[r#"<div class="kick">"#]).unwrap_or(body);
+            out.titles = earned
                 .split(r#"<span class="title-badge"#)
                 .skip(1)
                 .map(|chunk| {
@@ -726,8 +741,9 @@ pub fn parse_account(page: &str) -> AccountPage {
                     let inner = chunk.split_once('>').map(|(_, r)| r).unwrap_or("");
                     let inner = regex!(r#"<span class="tb-rare">[^<]*</span>"#).replace(inner, "");
                     let icon = regex!(r#"<span class="ico">(.*?)</span>"#).captures(&inner).map(|i| text(&i[1])).unwrap_or_default();
-                    let rest = text(&regex!(r#"<span class="ico">.*?</span>"#).replace(&inner, ""));
-                    let rest = rest.split("</span>").next().unwrap_or("").to_string();
+                    // the badge ends at its own closing tag, once the icon and Rare spans inside it are gone
+                    let rest = regex!(r#"<span class="ico">.*?</span>"#).replace(&inner, "");
+                    let rest = text(rest.split("</span>").next().unwrap_or(""));
                     TitleBadge {
                         icon,
                         name: regex!(r"\s*x\d+\s*$").replace(&rest, "").trim().to_string(),
@@ -737,6 +753,19 @@ pub fn parse_account(page: &str) -> AccountPage {
                     }
                 })
                 .collect();
+            out.closest = between(body, r#"<div class="kick">Closest to unlock</div>"#, &[r#"<div class="kick">"#])
+                .map(|q| {
+                    regex!(r#"(?s)<div class="quest">.*?<span class="quest-n">((?:<span class="ico">.*?</span>)?[^<]*)</span><span class="quest-c">([\d,]+)<small>/([\d,]+)</small></span>.*?<div class="quest-d">(.*?)</div>"#)
+                        .captures_iter(q)
+                        .filter_map(|c| {
+                            let icon = regex!(r#"<span class="ico">(.*?)</span>"#).captures(&c[1]).map(|i| text(&i[1])).unwrap_or_default();
+                            let name = text(&regex!(r#"<span class="ico">.*?</span>"#).replace(&c[1], ""));
+                            let n = |x: &str| x.replace(',', "").parse().ok();
+                            Some(Quest { icon, name, have: n(&c[2])?, need: n(&c[3])?, about: text(&c[4]) })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             continue;
         }
         let stats: Vec<(String, String, String)> = regex!(r#"<div class="stat-v ?([^"]*)">([^<]*)</div><div class="stat-k">([^<]*)</div>"#)
@@ -767,9 +796,9 @@ pub struct Pet {
 }
 
 pub fn parse_pet(page: &str) -> Option<Pet> {
-    let name = regex!(r#"(?s)<h2 class="pt-name">(.*?)</h2>"#).captures(page).map(|c| text(&c[1]))?;
-    let path_html = between(page, r#"<ol class="pt-path">"#, &["</ol>"]).unwrap_or("");
-    let path = regex!(r#"(?s)<li class="([^"]*)">(.*?)</li>"#)
+    let name = regex!(r#"(?s)<h2 class="pt-name"[^>]*>(.*?)</h2>"#).captures(page).map(|c| text(&c[1]))?;
+    let path_html = between(page, r#"<ol class="pt-path""#, &["</ol>"]).unwrap_or("");
+    let path = regex!(r#"(?s)<li class="([^"]*)"[^>]*>(.*?)</li>"#)
         .captures_iter(path_html)
         .map(|c| {
             // "Potato, Tier D, Done": the stage is before the first comma
@@ -777,11 +806,11 @@ pub fn parse_pet(page: &str) -> Option<Pet> {
             (label, c[1].contains("is-done"), c[1].contains("is-now"))
         })
         .collect();
-    let passives = regex!(r#"(?s)<li class="pt-pass">(.*?)</li>"#)
+    let passives = regex!(r#"(?s)<li class="pt-pass"[^>]*>(.*?)</li>"#)
         .captures_iter(page)
         .map(|c| squash(&regex!(r#"<span class="pt-passk">[^<]*</span>"#).replace(&c[1], "")).replace(" :", ":"))
         .collect();
-    let log = regex!(r#"(?s)<ul class="pt-log-l">(.*?)</ul>"#)
+    let log = regex!(r#"(?s)<ul class="pt-log-l"[^>]*>(.*?)</ul>"#)
         .captures(page)
         .map(|l| {
             regex!(r#"(?s)<li[^>]*>(.*?)</li>"#)
@@ -841,6 +870,30 @@ pub fn pet_and_hall(cookie: &str) -> Result<(Option<Pet>, Option<Hall>)> {
 pub fn picks(user_key: &str, page: u32, cookie: &str) -> Result<Option<(PicksPage, Option<u64>)>> {
     let body = fetch_once(&format!("{BASE}/u/{user_key}?bp={page}"), Some(cookie))?;
     Ok(parse_picks(&body).map(|p| (p, parse_balance(&body))))
+}
+
+/// Kick's channel address for a name: lower case, underscores as dashes. None for anything that isn't a Kick name.
+pub fn kick_slug(name: &str) -> Option<String> {
+    let slug: String = name.trim().to_ascii_lowercase().replace('_', "-");
+    (!slug.is_empty() && slug.len() <= 40 && slug.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).then_some(slug)
+}
+
+/// The profile picture's address in Kick's channel API reply. None when they haven't set one.
+pub fn parse_kick_pic(body: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let url = v.get("user")?.get("profile_pic")?.as_str()?;
+    url.starts_with("https://").then(|| url.to_string())
+}
+
+/// A Kick user's profile picture (public, no sign-in). Ok(None) when they have none or there's no such channel.
+pub fn kick_pic(name: &str) -> Result<Option<Vec<u8>>> {
+    let Some(slug) = kick_slug(name) else { return Ok(None) };
+    let body = match fetch_once(&format!("https://kick.com/api/v2/channels/{slug}"), None) {
+        Ok(b) => b,
+        Err(Error::Http(404)) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    parse_kick_pic(&body).map(|url| fetch_bytes(&url)).transpose()
 }
 
 #[cfg(test)]
@@ -938,6 +991,10 @@ mod tests {
         assert!(a.titles[0].rare && a.titles[0].name == "Tournament champion" && a.titles[0].icon == "🥇");
         assert_eq!((a.titles[2].name.as_str(), a.titles[2].times), ("Kingslayer", Some(3)));
         assert_eq!(a.titles[1].about, "Won with every element");
+        assert!(a.titles.iter().all(|t| !t.name.contains("Closest") && t.name.len() < 30), "{:?}", a.titles);
+        let closest: Vec<_> = a.closest.iter().map(|q| (q.icon.as_str(), q.name.as_str(), q.have, q.need)).collect();
+        assert_eq!(closest, [("🎯", "BIG CALL", 8_250, 10_000), ("🐾", "BEAST MASTER", 2, 3)]);
+        assert_eq!(a.closest[1].about, "Owns three or more beast pals");
         let public = parse_account(&page("user-trongateslegacy.html"));
         assert_eq!(public.balance, None, "signed out, there's no balance");
     }
@@ -962,5 +1019,19 @@ mod tests {
         assert_eq!(h.tiers[0], ("D".into(), "Potato stage".into(), 2, 107));
         assert_eq!(h.pals.len(), 4);
         assert_eq!(h.pals[3], ("Rushoar".into(), "rushoar".into(), "B".into(), "2026-11-01".into()));
+    }
+
+    #[test]
+    fn kick_pictures() {
+        assert_eq!(kick_slug(" Some_Player42 ").as_deref(), Some("some-player42"));
+        assert_eq!(kick_slug("no/such"), None);
+        assert_eq!(kick_slug(""), None);
+        let body = r#"{"id":1,"slug":"some-player42","user":{"id":2,"username":"Some_Player42","profile_pic":"https://files.kick.com/images/user/2/profile_image/conversion/made-up-fullsize.webp"}}"#;
+        assert_eq!(
+            parse_kick_pic(body).as_deref(),
+            Some("https://files.kick.com/images/user/2/profile_image/conversion/made-up-fullsize.webp")
+        );
+        assert_eq!(parse_kick_pic(r#"{"user":{"profile_pic":null}}"#), None);
+        assert_eq!(parse_kick_pic("<html>blocked</html>"), None);
     }
 }

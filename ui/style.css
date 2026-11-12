@@ -92,7 +92,7 @@ td.num, .num { font: 600 15px var(--cond); letter-spacing: .03em; }
 .stage { display: grid; grid-template-columns: 1fr 340px 1fr; align-items: center; padding: 10px 26px; background: radial-gradient(60% 120% at 50% 0%, rgba(255,207,107,.08), transparent 70%), var(--panel); border: 1px solid var(--line); border-radius: 16px; }
 .fx { display: flex; gap: 16px; align-items: center; } .fx.r { flex-direction: row-reverse; text-align: right; }
 .nm { font: 800 28px/1 var(--cond); letter-spacing: .03em; }
-.ow { color: var(--t3); font-size: 13px; margin-top: 4px; }
+.ow { display: flex; align-items: center; gap: 6px; color: var(--t3); font-size: 13px; margin-top: 4px; } .fx.r .ow { justify-content: flex-end; } .ow .orb { box-shadow: none; font-size: 8px !important; }
 .els { display: flex; gap: 5px; margin-top: 8px; flex-wrap: wrap; } .fx.r .els { justify-content: flex-end; }
 .center { text-align: center; display: grid; justify-items: center; }
 .dialw { position: relative; display: grid; place-items: center; }
@@ -135,10 +135,19 @@ td.num, .num { font: 600 15px var(--cond); letter-spacing: .03em; }
 .kpi > div > b { display: block; font: 800 30px/1 var(--cond); }
 .kpi > div > small { font-size: 11px; color: var(--t3); letter-spacing: .1em; text-transform: uppercase; }
 .kpi .kv { display: grid; align-content: center; gap: 4px; }
-.box { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 10px; }
-.pcd { background: rgba(255,255,255,.035); border: 1px solid var(--line); border-radius: 12px; padding: 10px 11px; font-size: 12.5px; }
+.box { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); align-content: start; gap: 10px; }
+.pcd { display: flex; flex-direction: column; background: rgba(255,255,255,.035); border: 1px solid var(--line); border-radius: 12px; padding: 10px 11px; font-size: 12.5px; }
 .pcd .t { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .pft { display: flex; align-items: center; gap: 5px; margin-top: 6px; } .pft .tag { margin-left: auto; }
+.pills { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; min-height: 20px; }
+.box .pills { margin-top: auto; padding-top: 7px; }
+.pill { font: 600 10.5px/1 var(--sans); padding: 4px 6px; border-radius: 99px; white-space: nowrap; background: rgba(255,255,255,.06); color: var(--t2); border: 1px solid rgba(255,255,255,.08); }
+.pill.ok { background: rgba(61,220,151,.1); color: var(--ok); border-color: rgba(61,220,151,.25); }
+.pill b, .yp .pill b { font: 700 10.5px/1 var(--sans); letter-spacing: 0; color: var(--t1); }
+.yq { display: grid; gap: 8px; margin: 4px 0 12px; } .yq .hbar small { color: var(--t3); font: 600 11px var(--sans); }
+.pill.bad { background: rgba(255,95,109,.1); color: var(--bad); border-color: rgba(255,95,109,.25); }
+.pkey { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 12px; font-size: 12px; color: var(--t3); }
+.pkey span { display: flex; align-items: center; gap: 7px; white-space: nowrap; } .pkey .tag { font-style: normal; }
 .pcd .t b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pcd .rt { font-size: 14px; color: var(--t1); }
 .pcd .t b { font: 700 15px var(--cond); letter-spacing: .03em; }
@@ -431,8 +440,8 @@ body.pop { padding: 7px 9px 12px; box-sizing: border-box; }
 .ring .t { stroke: rgba(255,255,255,.08); }
 .ring .f { stroke: var(--c); stroke-linecap: round; filter: drop-shadow(0 0 4px color-mix(in srgb, var(--c) 45%, transparent)); }
 .ring > div { position: relative; display: grid; justify-items: center; line-height: 1; }
-.ring b { font: 800 calc(var(--s) * .27) / 1 var(--cond); letter-spacing: .02em; color: var(--t1); }
-.ring small { font-size: calc(var(--s) * .12); color: var(--t3); margin-top: 3px; letter-spacing: .04em; }
+.ring b { white-space: nowrap; font: 800 calc(var(--s) * var(--f, .27)) / 1 var(--cond); letter-spacing: .02em; color: var(--t1); }
+.ring small { white-space: nowrap; font-size: calc(var(--s) * .12); color: var(--t3); margin-top: 3px; letter-spacing: .04em; }
 .sb { display: flex; gap: 2px; height: 10px; border-radius: 5px; overflow: hidden; background: rgba(255,255,255,.06); }
 .sb i { display: block; min-width: 3px; }
 .sb i:first-child { border-radius: 5px 0 0 5px; } .sb i:last-child { border-radius: 0 5px 5px 0; } .sb i:only-child { border-radius: 5px; }

@@ -523,6 +523,45 @@ async fn pal_image(shared: tauri::State<'_, Arc<Shared>>, slug: String) -> Cmd<O
     Ok(std::fs::read(&path).ok().map(|b| format!("data:image/webp;base64,{}", base64::engine::general_purpose::STANDARD.encode(b))))
 }
 
+/// A player's Kick profile picture, fetched the first time it's needed and cached for a week. A player with none is
+/// remembered for a day, so a page full of them doesn't ask Kick again on every visit.
+#[tauri::command]
+async fn player_image(shared: tauri::State<'_, Arc<Shared>>, name: String) -> Cmd<Option<String>> {
+    let Some(slug) = site::kick_slug(&name) else { return Ok(None) };
+    let dir = shared.dir.join("img").join("players");
+    let (path, none) = (dir.join(format!("{slug}.img")), dir.join(format!("{slug}.none")));
+    let age = |p: &std::path::Path| std::fs::metadata(p).and_then(|m| m.modified()).ok().map(|t| t.elapsed().unwrap_or_default());
+    let fresh =
+        age(&path).is_some_and(|a| a < Duration::from_secs(7 * 86_400)) || age(&none).is_some_and(|a| a < Duration::from_secs(86_400));
+    if !fresh {
+        let _ = std::fs::create_dir_all(&dir);
+        match tauri::async_runtime::spawn_blocking(move || site::kick_pic(&name)).await {
+            Ok(Ok(Some(bytes))) if image_type(&bytes).is_some() => {
+                let _ = std::fs::write(&path, bytes);
+                let _ = std::fs::remove_file(&none);
+            }
+            Ok(Ok(_)) => {
+                let _ = std::fs::remove_file(&path);
+                let _ = std::fs::write(&none, b"");
+            }
+            _ => {} // Kick didn't answer: keep whatever we had, and try again next time
+        }
+    }
+    let bytes = std::fs::read(&path).ok();
+    Ok(bytes.and_then(|b| image_type(&b).map(|t| format!("data:{t};base64,{}", base64::engine::general_purpose::STANDARD.encode(&b)))))
+}
+
+/// The kind of image in some bytes, for the ones Kick serves.
+fn image_type(b: &[u8]) -> Option<&'static str> {
+    match b {
+        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => Some("image/webp"),
+        [0x89, b'P', b'N', b'G', ..] => Some("image/png"),
+        [0xFF, 0xD8, 0xFF, ..] => Some("image/jpeg"),
+        [b'G', b'I', b'F', b'8', ..] => Some("image/gif"),
+        _ => None,
+    }
+}
+
 #[tauri::command]
 fn open_window(app: AppHandle, tab: Option<String>) {
     open_main(&app, tab.as_deref());
@@ -697,6 +736,7 @@ pub fn run() {
             get_settings,
             save_settings,
             pal_image,
+            player_image,
             open_window,
             hide_popover,
             fit_popover,

@@ -61,6 +61,7 @@ pub fn fixture_data() -> Value {
         queue: state.queue.iter().filter(|q| q.pos > 0).take(3).cloned().collect(),
         synced_at: 1,
         today: (14, 19),
+        first_run: false,
         ..Default::default()
     };
     let roster = Ok(site::parse_roster(&page("user-trongateslegacy.html")));
@@ -105,6 +106,8 @@ pub fn fixture_data() -> Value {
             }],
         },
         "account": { "signed_in": false, "name": null },
+        "start_fresh": null,
+        "backfill_progress": augur_engine::backfill::Progress { phase: "duels".into(), done: 1200, total: 4702, ..Default::default() },
         "pal_image": null,
     })
 }
@@ -176,18 +179,24 @@ const MAIN_DRIVER: &str = r#"
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   for (let i = 0; i < 60 && !window.augur; i++) await sleep(100);
   const out = {};
+  const only = (location.hash.match(/tab=(\w+)/) || [])[1];
   if (!window.augur) window.__errors.push('the page never started (a module failed to load)');
   else {
-    const only = (location.hash.match(/tab=(\w+)/) || [])[1];
     for (const tab of only ? [only] : ['live', 'history', 'bets', 'pals', 'players', 'model', 'settings', 'staking', 'sync']) {
       // "bets" is History's Your bets view; "staking" and "sync" are Settings pages
       window.augur.state.view = tab === 'bets' ? 'bets' : 'calls';
       window.augur.state.settingsPage = ['staking', 'sync'].includes(tab) ? tab : 'general';
-      await window.augur.show(tab === 'bets' ? 'history' : ['staking', 'sync'].includes(tab) ? 'settings' : tab);
+      // "welcome" is the fresh install's overlay, over Live
+      await window.augur.show(tab === 'bets' ? 'history' : ['staking', 'sync'].includes(tab) ? 'settings' : tab === 'welcome' ? 'live' : tab);
       await sleep(300);
       out[tab] = document.getElementById('main').innerText;
     }
   }
+  out.sidebar = document.querySelector('.side')?.innerText || '';
+  // a fresh install's welcome, over everything
+  window.augur?.showWelcome({ first_run: true });
+  out.welcome = document.getElementById('welcome')?.innerText || '';
+  if (only !== 'welcome') document.getElementById('welcome')?.remove();
   out.errors = window.__errors;
   document.getElementById('report').textContent = JSON.stringify(out);
 })();
@@ -293,6 +302,14 @@ fn every_tab_renders_headless() {
     assert!(text("live").contains(&p["lines"][0].as_str().unwrap().to_lowercase()), "Live shows the Yoda line");
     assert!(text("live").contains("some stats hidden until the bell"), "Live says the home stats are estimated");
     assert!(text("history").contains("14 / 19"), "History: {}", text("history"));
+    assert!(
+        text("welcome").contains("welcome to augur")
+            && text("welcome").contains("import a backup")
+            && text("welcome").contains("start fresh"),
+        "a fresh install's welcome: {}",
+        text("welcome")
+    );
+    assert!(text("sidebar").contains("25%") && text("sidebar").contains("fetching"), "the sidebar shows the fetch: {}", text("sidebar"));
     let stake = data["live"]["stake"]["command"].as_str().unwrap();
     assert!(!stake.is_empty() && text("live").contains(&format!("copy {stake}")), "Live offers the bet {stake}: {}", text("live"));
     let b = &data["bets_view"]["comparison"];
@@ -323,7 +340,7 @@ fn every_tab_renders_headless() {
     if let Some(folder) = std::env::var_os("AUGUR_UI_SHOTS").map(PathBuf::from) {
         std::fs::create_dir_all(&folder).unwrap();
         let port = serve("index.html", &data, MAIN_DRIVER);
-        for tab in ["live", "history", "bets", "pals", "players", "model", "settings", "staking", "sync"] {
+        for tab in ["live", "history", "bets", "pals", "players", "model", "settings", "staking", "sync", "welcome"] {
             render(port, tab, Some((&folder, tab)));
         }
     }

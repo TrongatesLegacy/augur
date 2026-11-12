@@ -45,6 +45,8 @@ pub struct Shared {
     pub sync: Mutex<SyncState>,
     pub others: Mutex<Vec<DeviceFile>>,
     pub sync_now: AtomicBool,
+    /// a fresh install: the backfill waits (up to 10 minutes) for an import or "start fresh"
+    pub setup_wait: AtomicBool,
     pub tray: Mutex<Option<TrayIcon>>,
 }
 
@@ -236,6 +238,7 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
                     live.today = (t.right, t.total);
                 }
                 let mut live = shared.live.lock().unwrap();
+                live.first_run = shared.setup_wait.load(Ordering::Relaxed);
                 live.title = state.title.clone();
                 live.live = state.live;
                 live.picks_open = state.picks_open();
@@ -260,6 +263,12 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
 /// up new duels.
 fn backfill_loop(app: AppHandle, shared: Arc<Shared>) {
     std::thread::sleep(Duration::from_secs(20));
+    // a fresh install: wait for an import (it fills most of this in) or "start fresh", at most 10 minutes
+    let asked = Instant::now();
+    while shared.setup_wait.load(Ordering::Relaxed) && asked.elapsed() < Duration::from_secs(600) && !shared.stop.load(Ordering::Relaxed) {
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    finish_setup(&app, &shared);
     while !shared.stop.load(Ordering::Relaxed) {
         if shared.settings.lock().unwrap().backfill {
             if let Ok(conn) = shared.db() {
@@ -289,6 +298,7 @@ fn bets_loop(app: AppHandle, shared: Arc<Shared>) {
     let mut pacer = backfill::Pacer::new(Duration::from_millis(1000));
     while !shared.stop.load(Ordering::Relaxed) {
         shared.bets_now.store(false, Ordering::Relaxed);
+        pacer.gave_up = false;
         let on = shared.settings.lock().unwrap().import_bets;
         let conn = shared.db().ok();
         let user = conn.as_ref().and_then(|c| db::meta_get(c, "account").ok().flatten()).filter(|u| !u.is_empty());
@@ -380,6 +390,28 @@ async fn bets_view(shared: tauri::State<'_, Arc<Shared>>, range: String) -> Cmd<
     let staking = shared.settings.lock().unwrap().staking.clone();
     let import = shared.bets.lock().unwrap().clone();
     views::bets_view(&shared.db()?, &staking, &range, now_ms() / 1000, import).map_err(|e| e.to_string())
+}
+
+/// A fresh install has chosen (or waited long enough): stop asking and let the backfill start.
+pub fn finish_setup(app: &AppHandle, shared: &Shared) {
+    if shared.setup_wait.swap(false, Ordering::Relaxed) {
+        if let Ok(conn) = shared.db() {
+            let _ = db::meta_set(&conn, "setup", "done");
+        }
+        let mut live = shared.live.lock().unwrap();
+        live.first_run = false;
+        let _ = app.emit("live", &*live);
+    }
+}
+
+#[tauri::command]
+fn start_fresh(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>) {
+    finish_setup(&app, &shared);
+}
+
+#[tauri::command]
+fn backfill_progress(shared: tauri::State<'_, Arc<Shared>>) -> Progress {
+    shared.backfill.lock().unwrap().clone()
 }
 
 #[tauri::command]
@@ -539,6 +571,10 @@ fn sign_out(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>) {
 pub fn run() {
     let dir = settings::data_dir();
     let _ = std::fs::create_dir_all(&dir);
+    // a fresh install waits for the developer to import a backup or start fresh before fetching anything
+    let first_run = db::open(&settings::db_path(&dir))
+        .ok()
+        .is_some_and(|c| db::is_empty(&c).unwrap_or(false) && db::meta_get(&c, "setup").ok().flatten().is_none());
     let mut sync_state = SyncState::load(&dir);
     if sync_state.name.is_empty() {
         sync_state.name = crate::sync::default_name();
@@ -557,6 +593,7 @@ pub fn run() {
         sync: Mutex::new(sync_state),
         others: Mutex::new(vec![]),
         sync_now: AtomicBool::new(false),
+        setup_wait: AtomicBool::new(first_run),
         tray: Mutex::new(None),
     });
     tauri::Builder::default()
@@ -571,6 +608,8 @@ pub fn run() {
             bets_view,
             import_bets,
             stake_preview,
+            start_fresh,
+            backfill_progress,
             species_list,
             species,
             player,

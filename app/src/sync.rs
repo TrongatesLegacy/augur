@@ -205,6 +205,7 @@ pub async fn import_file(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>) 
         db::merge_from(&conn, &path).map_err(|e| e.to_string())?
     };
     *shared.backtest.lock().unwrap() = None;
+    crate::app::finish_setup(&app, &shared);
     let _ = app.emit("calls", merged.calls);
     shared.sync_now.store(true, Ordering::Relaxed);
     let file = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();

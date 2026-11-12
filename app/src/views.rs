@@ -39,6 +39,8 @@ pub struct LiveView {
     pub error: Option<String>,
     /// today's calls: (right, total)
     pub today: (usize, usize),
+    /// a fresh install that hasn't chosen yet: import a backup, or start fresh
+    pub first_run: bool,
 }
 
 /// YYYY-MM-DD (UTC) for a Unix time, without a date library.

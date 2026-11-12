@@ -1,4 +1,5 @@
 // Model: the settings and what they were fitted on, a suggested change, the species with secret moves, data health.
+import { backfillState } from '../lib/backfill.js';
 import { invoke } from '../lib/bridge.js';
 import { ago, esc, fmt, pct } from '../lib/format.js';
 
@@ -6,9 +7,10 @@ const slider = (label, v, lo, hi, shown) =>
   `<div class="set"><span>${label}</span><div class="sl"><i style="left:${((v - lo) / (hi - lo)) * 100}%"></i></div><span class="v">${shown}</span></div>`;
 
 function backfillLine(b) {
+  if (b.phase === 'setup') return 'waiting for setup';
   if (!b.phase) return 'waiting';
   if (b.phase === 'done') return 'up to date';
-  return `${esc(b.phase)} ${fmt(b.done)}/${fmt(b.total)}${b.paused ? ' (paused: duel up)' : ''}`;
+  return esc(backfillState(b)?.long || `${b.phase} ${fmt(b.done)}/${fmt(b.total)}`);
 }
 
 export async function render(app) {

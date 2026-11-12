@@ -105,6 +105,7 @@ impl Prediction {
             model: self.settings.clone(),
             home: self.home.fighter.clone(),
             away: self.away.fighter.clone(),
+            picks_open: self.picks_open,
         }
     }
 }

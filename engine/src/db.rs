@@ -98,7 +98,16 @@ CREATE INDEX IF NOT EXISTS bets_duel ON bets (duel_id);
 "#;
 
 /// Columns added since the first release, for stores made before them.
-const ADDED: &[(&str, &str, &str)] = &[("predictions", "stake", "INTEGER"), ("predictions", "stake_cmd", "TEXT")];
+const ADDED: &[(&str, &str, &str)] = &[
+    ("predictions", "stake", "INTEGER"),
+    ("predictions", "stake_cmd", "TEXT"),
+    // picks closed: the call is what was showing then; a later re-call (stats shown at the bell) is kept apart
+    ("predictions", "closed", "INTEGER DEFAULT 0"),
+    ("predictions", "late_pick", "TEXT"),
+    ("predictions", "late_prob", "REAL"),
+    // first called after picks closed (Augur started mid-fight): logged and learned from, but not in the tally
+    ("predictions", "late_only", "INTEGER DEFAULT 0"),
+];
 
 fn migrate(conn: &Connection) -> Result<()> {
     for (table, column, kind) in ADDED {
@@ -327,9 +336,18 @@ pub struct NewCall {
     pub model: crate::model::Settings,
     pub home: CallFighter,
     pub away: CallFighter,
+    /// picks were open when it was made (old calls files don't say: they were)
+    #[serde(default = "yes")]
+    pub picks_open: bool,
 }
 
-/// Record a call. Re-running the same open fight (e.g. stats revealed at the bell) updates it in place.
+fn yes() -> bool {
+    true
+}
+
+/// Record a call. Re-running the same open fight while picks are open updates it in place. Once picks have closed
+/// the call stands as it was: a re-call (stats shown at the bell) only updates the fighters, so the model learns from
+/// the real stats, and is kept as the "after the bell" pick. A fight first seen after picks closed is logged as late.
 pub fn add_call(conn: &Connection, c: &NewCall) -> Result<i64> {
     let existing: Option<i64> = conn
         .query_row(
@@ -338,6 +356,16 @@ pub fn add_call(conn: &Connection, c: &NewCall) -> Result<i64> {
             |r| r.get(0),
         )
         .optional()?;
+    let closed: bool = match existing {
+        Some(id) => conn.query_row("SELECT COALESCE(closed, 0) FROM predictions WHERE id = ?", [id], |r| r.get::<_, i64>(0))? == 1,
+        None => false,
+    };
+    if let (Some(id), true) = (existing, closed || !c.picks_open) {
+        conn.execute("UPDATE predictions SET closed = 1, late_pick = ?1, late_prob = ?2 WHERE id = ?3", params![c.pick, c.prob, id])?;
+        conn.execute("DELETE FROM fighters WHERE prediction_id = ?", [id])?;
+        save_fighters(conn, id, c)?;
+        return Ok(id);
+    }
     let model = serde_json::to_string(&c.model).unwrap();
     let vals = params![
         c.seen_at as i64,
@@ -374,9 +402,27 @@ pub fn add_call(conn: &Connection, c: &NewCall) -> Result<i64> {
         }
         None => {
             conn.execute(&format!("INSERT INTO predictions ({cols}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)"), vals)?;
-            conn.last_insert_rowid()
+            let id = conn.last_insert_rowid();
+            if !c.picks_open {
+                conn.execute("UPDATE predictions SET closed = 1, late_only = 1 WHERE id = ?", [id])?;
+            }
+            id
         }
     };
+    save_fighters(conn, id, c)?;
+    Ok(id)
+}
+
+/// Picks have closed on the fight up: its open call stands as it is now.
+pub fn close_call(conn: &Connection, home_owner: &str, away_owner: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE predictions SET closed = 1 WHERE status = 'open' AND COALESCE(closed, 0) = 0 AND home_owner = ?1 AND away_owner = ?2",
+        params![home_owner, away_owner],
+    )?;
+    Ok(())
+}
+
+fn save_fighters(conn: &Connection, id: i64, c: &NewCall) -> Result<()> {
     for (side, f) in [("home", &c.home), ("away", &c.away)] {
         let iv = |k: &str| f.ivs.get(k).copied().flatten().map(|v| v as i64);
         conn.execute(
@@ -400,7 +446,7 @@ pub fn add_call(conn: &Connection, c: &NewCall) -> Result<i64> {
         )?;
         save_moves(conn, &f.fighter.pal, &f.fighter.skills)?;
     }
-    Ok(id)
+    Ok(())
 }
 
 /// Match open calls to finished duels in the state's recent list and store their tapes. A call is only "skipped"
@@ -457,6 +503,12 @@ pub struct CallRecord {
     /// what Augur suggested betting when it made the call (None for calls made before it suggested stakes)
     pub stake: Option<u64>,
     pub fighters: Option<(CallFighter, CallFighter)>,
+    /// re-called after picks closed (stats shown at the bell): that pick and its chance
+    #[serde(default)]
+    pub late: Option<(String, f64)>,
+    /// first called after picks closed: not a call you could bet on
+    #[serde(default)]
+    pub late_only: bool,
 }
 
 impl CallRecord {
@@ -508,12 +560,17 @@ fn fighters_of(conn: &Connection, id: i64) -> Result<Option<(CallFighter, CallFi
     Ok(home.zip(away))
 }
 
-/// Finished calls, oldest first.
+/// Finished calls you could bet on (made while picks were open), oldest first: the tally, your bets and History.
 pub fn settled(conn: &Connection) -> Result<Vec<CallRecord>> {
+    Ok(settled_all(conn)?.into_iter().filter(|c| !c.late_only).collect())
+}
+
+/// Every finished call, including ones first made after picks closed: what the model learns from.
+pub fn settled_all(conn: &Connection) -> Result<Vec<CallRecord>> {
     let mut st = conn.prepare(
         "SELECT p.id, COALESCE(p.seen_at, 0), p.home_owner, p.away_owner, p.home_pal, p.away_pal, p.pick, p.prob, p.p_stats, p.p_species,
                 p.p_h2h, p.home_species_w, p.home_species_l, p.away_species_w, p.away_species_l, p.pal_h2h_home, p.pal_h2h_away,
-                p.duel_id, d.winner, d.fought_at, d.ko, d.winner_hp_left, p.stake
+                p.duel_id, d.winner, d.fought_at, d.ko, d.winner_hp_left, p.stake, p.late_pick, p.late_prob, COALESCE(p.late_only, 0)
          FROM predictions p LEFT JOIN duels d ON d.id = p.duel_id WHERE p.status = 'settled' AND d.winner IS NOT NULL ORDER BY p.id",
     )?;
     let calls: Vec<CallRecord> = st
@@ -543,6 +600,8 @@ pub fn settled(conn: &Connection) -> Result<Vec<CallRecord>> {
                 winner_hp_left: r.get(21)?,
                 stake: r.get::<_, Option<i64>>(22)?.map(|v| v.max(0) as u64),
                 fighters: None,
+                late: r.get::<_, Option<String>>(23)?.zip(r.get::<_, Option<f64>>(24)?),
+                late_only: r.get::<_, i64>(25)? == 1,
             })
         })?
         .collect::<Rq<_>>()?;
@@ -557,7 +616,11 @@ pub fn settled(conn: &Connection) -> Result<Vec<CallRecord>> {
 
 /// Saves the stake Augur suggested with a call.
 pub fn set_call_stake(conn: &Connection, id: i64, amount: u64, command: &str) -> Result<()> {
-    conn.execute("UPDATE predictions SET stake = ?1, stake_cmd = ?2 WHERE id = ?3", params![amount as i64, command, id])?;
+    // once picks have closed the stake stands too
+    conn.execute(
+        "UPDATE predictions SET stake = ?1, stake_cmd = ?2 WHERE id = ?3 AND COALESCE(closed, 0) = 0",
+        params![amount as i64, command, id],
+    )?;
     Ok(())
 }
 
@@ -771,6 +834,7 @@ mod tests {
             model: Settings::default(),
             home: fighter("A"),
             away: fighter("B"),
+            picks_open: true,
         }
     }
 
@@ -827,5 +891,44 @@ mod tests {
         settle(&conn, &[later(1, 2_000), later(2, 3_000)], |_| None).unwrap();
         let status: String = conn.query_row("SELECT status FROM predictions", [], |r| r.get(0)).unwrap();
         assert_eq!(status, "skipped");
+    }
+
+    /// The call that counts is the one showing when picks closed. A re-call at the bell (stats shown) is kept apart:
+    /// its real stats go to the fighters, and the stake stands.
+    #[test]
+    fn a_call_stands_once_picks_close() {
+        let conn = open_memory().unwrap();
+        let mut first = call("x", "y");
+        (first.pick, first.prob) = ("home".into(), 0.557);
+        let id = add_call(&conn, &first).unwrap();
+        set_call_stake(&conn, id, 600, "!h 600").unwrap();
+        // still open: an update replaces it
+        first.prob = 0.56;
+        assert_eq!(add_call(&conn, &first).unwrap(), id);
+        close_call(&conn, "x", "y").unwrap();
+        let mut late = call("x", "y");
+        (late.pick, late.prob, late.picks_open) = ("away".into(), 0.575, false);
+        late.away.fighter.def = 999.0;
+        assert_eq!(add_call(&conn, &late).unwrap(), id);
+        set_call_stake(&conn, id, 900, "!a 900").unwrap();
+        let row: (String, f64, String, String, f64) = conn
+            .query_row("SELECT pick, prob, stake_cmd, late_pick, late_prob FROM predictions WHERE id = ?", [id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .unwrap();
+        assert_eq!(row, ("home".into(), 0.56, "!h 600".into(), "away".into(), 0.575));
+        let def: f64 = conn.query_row("SELECT def FROM fighters WHERE prediction_id = ? AND side = 'away'", [id], |r| r.get(0)).unwrap();
+        assert_eq!(def, 999.0, "the real stats are kept for learning");
+
+        // a fight first seen after picks closed: logged, learned from, not counted
+        let mut seen_late = call("p", "q");
+        seen_late.picks_open = false;
+        let late_id = add_call(&conn, &seen_late).unwrap();
+        let r = |id, home: &str, away: &str| Recent { id, home: home.into(), away: away.into(), win: "home".into(), at: 2_000 };
+        settle(&conn, &[r(10, "x", "y"), r(11, "p", "q")], |_| None).unwrap();
+        let counted: Vec<i64> = settled(&conn).unwrap().iter().map(|c| c.id).collect();
+        let learned: Vec<i64> = settled_all(&conn).unwrap().iter().map(|c| c.id).collect();
+        assert_eq!((counted, learned), (vec![id], vec![id, late_id]));
+        assert_eq!(settled(&conn).unwrap()[0].late, Some(("away".into(), 0.575)));
     }
 }

@@ -182,6 +182,10 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
                 shared.busy.store(state.busy(), Ordering::Relaxed);
                 has_duel = state.home.is_some() && state.away.is_some();
                 if let Ok(conn) = shared.db() {
+                    // picks have closed on the fight up: its call stands as it is now (a re-call at the bell is kept apart)
+                    if let (true, Some(h), Some(a)) = (has_duel && !state.picks_open(), &state.home, &state.away) {
+                        let _ = db::close_call(&conn, &h.actor, &a.actor);
+                    }
                     if let Ok(settled) = db::settle(&conn, &state.recent, |id| site::duel(id).ok()) {
                         if !settled.is_empty() {
                             shared.bets_now.store(true, Ordering::Relaxed);

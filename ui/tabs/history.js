@@ -10,9 +10,15 @@ const RANGES = [
   ['all', 'All time'],
 ];
 
+// a call re-made after picks closed (stats shown at the bell) that came out differently: shown, not counted
+const lateNote = (c) =>
+  c.late && c.late[0] !== c.pick
+    ? `<small class="late" title="Re-called with the real stats after picks closed; the call above is the one that counts">after the bell: ${esc(c.late[0] === 'home' ? c.home_pal : c.away_pal)} ${pct(c.late[1])}</small>`
+    : '';
+
 function callRow(c) {
   const right = c.winner === c.pick;
-  return `<tr><td><span class="res ${right ? 'o' : 'x'}">${right ? '✓' : '✕'}</span></td><td>${esc(c.home_pal)} <span class="muted">vs</span> ${esc(c.away_pal)}</td><td>${esc(c.pick === 'home' ? c.home_pal : c.away_pal)}</td><td class="num">${pct(c.prob)}</td><td class="${right ? 'ok' : 'bad'}">${right ? 'Right' : 'Missed'}</td><td class="num">${esc(c.ko || '')}</td></tr>`;
+  return `<tr><td><span class="res ${right ? 'o' : 'x'}">${right ? '✓' : '✕'}</span></td><td>${esc(c.home_pal)} <span class="muted">vs</span> ${esc(c.away_pal)}</td><td>${esc(c.pick === 'home' ? c.home_pal : c.away_pal)}${lateNote(c)}</td><td class="num">${pct(c.prob)}</td><td class="${right ? 'ok' : 'bad'}">${right ? 'Right' : 'Missed'}</td><td class="num">${esc(c.ko || '')}</td></tr>`;
 }
 
 const VIEWS = [

@@ -251,6 +251,26 @@ td .two small b { color: var(--gold); font-weight: 700; }
 .kpi.five { grid-template-columns: repeat(5, 1fr); gap: 10px; padding: 6px 0 12px; border-bottom: 1px solid var(--line); margin-bottom: 2px; }
 .about { grid-column: 1 / -1; }
 
+/* you */
+main a { color: var(--gold); text-decoration: none; } main a:hover { text-decoration: underline; }
+.nav[hidden] { display: none; }
+.ytop { display: grid; grid-template-columns: 280px 1fr; gap: 14px; }
+.ybal { display: grid; align-content: center; gap: 4px; background: linear-gradient(160deg, rgba(255,207,107,.18), rgba(255,207,107,.03)); border-color: rgba(255,207,107,.35); }
+.ybal b { font: 800 44px/1 var(--cond); color: var(--gold); letter-spacing: .02em; }
+.ybal small { color: var(--t2); font-size: 12.5px; }
+.ystats { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px 14px; }
+.ystats div { display: grid; gap: 1px; }
+.ystats b { font: 800 24px/1.1 var(--cond); letter-spacing: .02em; }
+.ystats small { font-size: 11px; color: var(--t3); letter-spacing: .06em; text-transform: uppercase; }
+.form { display: inline-flex; gap: 4px; }
+.form i { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); opacity: .85; }
+.form i.w { background: var(--ok); }
+.badges { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.badge { display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; border-radius: 99px; font-size: 12.5px; color: var(--t2); background: rgba(255,255,255,.05); border: 1px solid var(--line); }
+.badge i { font-style: normal; }
+.badge b { color: var(--gold); font-weight: 700; }
+.badge.rare { color: var(--gold); border-color: rgba(255,207,107,.45); background: linear-gradient(160deg, rgba(255,207,107,.16), rgba(255,207,107,.03)); }
+
 /* pals: matchups */
 .mups { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 18px; }
 .mup { display: grid; grid-template-columns: 1fr 90px 44px; gap: 10px; align-items: center; padding: 6px 8px; border: 0; border-radius: 9px; background: none; color: var(--t1); font-size: 13px; text-align: left; cursor: pointer; }

@@ -32,10 +32,13 @@ pub fn import(
     now_ms: u64,
 ) -> Result<Imported> {
     let mut p = Progress { phase: "bets".into(), ..Default::default() };
-    let Some((first, balance)) = read(page, 1, &mut p)? else { return Ok(Imported::default()) };
+    let Some((first, balance, account)) = read(page, 1, &mut p)? else { return Ok(Imported::default()) };
     if let Some(b) = balance {
         db::meta_set(conn, "balance", &b.to_string())?;
     }
+    // the same page has the rest of your profile: kept for the You tab
+    db::meta_set(conn, "account_page", &serde_json::to_string(&account)?)?;
+    db::meta_set(conn, "account_page_at", &now_ms.to_string())?;
     let mut out = Imported { new: db::save_picks(conn, &first.picks, now_ms)?, total: first.total, balance };
     let (mut at, mut pages, mut total) = (1u32, first.pages, first.total);
     let mut fresh = !first.picks.is_empty() && out.new == first.picks.len();
@@ -54,7 +57,7 @@ pub fn import(
         if next > pages || (next == at && !fresh) || !backfill::wait_while_busy(ctl, &mut p) {
             break;
         }
-        let Some((pg, _)) = read(page, next, &mut p)? else { break };
+        let Some((pg, ..)) = read(page, next, &mut p)? else { break };
         let saved = db::save_picks(conn, &pg.picks, now_ms)?;
         out.new += saved;
         fresh = fresh && !pg.picks.is_empty() && saved == pg.picks.len();
@@ -71,10 +74,10 @@ fn read(
     page: &mut dyn FnMut(u32, &mut Progress) -> Option<String>,
     n: u32,
     p: &mut Progress,
-) -> Result<Option<(site::PicksPage, Option<u64>)>> {
+) -> Result<Option<(site::PicksPage, Option<u64>, site::AccountPage)>> {
     let Some(body) = page(n, p) else { return Ok(None) };
     match site::parse_picks(&body) {
-        Some(pg) => Ok(Some((pg, site::parse_balance(&body)))),
+        Some(pg) => Ok(Some((pg, site::parse_balance(&body), site::parse_account(&body)))),
         None => Err(Error::Parse("your picks: they only show when signed in, so sign in again in Settings".into())),
     }
 }
@@ -91,6 +94,13 @@ pub fn odds(conn: &Connection) -> Result<Odds> {
     let mid = rates.len() / 2;
     let rate = if rates.len().is_multiple_of(2) { (rates[mid - 1] + rates[mid]) / 2.0 } else { rates[mid] };
     Ok(Odds { rate, wins: rates.len() })
+}
+
+/// Your profile as the last import read it (balance, predictions, duels, spending, titles), and when (ms).
+pub fn account_page(conn: &Connection) -> Option<(site::AccountPage, u64)> {
+    let page = serde_json::from_str(&db::meta_get(conn, "account_page").ok().flatten()?).ok()?;
+    let at = db::meta_get(conn, "account_page_at").ok().flatten()?.parse().ok()?;
+    Some((page, at))
 }
 
 /// The balance from the last import, if it was shown.
@@ -284,6 +294,8 @@ mod tests {
         assert_eq!(again.new, 0);
         assert_eq!(*read.borrow(), [1], "nothing new on page 1 and nothing older missing: one page read");
         assert_eq!(balance(&conn), Some(248_000));
+        let (account, at) = account_page(&conn).unwrap();
+        assert_eq!((account.balance, account.titles_earned, at), (Some(248_120), Some((16, 52)), 1_794_400_100_000));
     }
 
     #[test]

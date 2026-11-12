@@ -105,7 +105,8 @@ pub fn fixture_data() -> Value {
                 path: PathBuf::from("/Users/you/Library/CloudStorage/OneDrive-Personal"),
             }],
         },
-        "account": { "signed_in": false, "name": null },
+        "account": { "signed_in": true, "name": "trongateslegacy" },
+        "you_view": views::you_view(&conn, &StakeSettings::default()).unwrap(),
         "start_fresh": null,
         // up to date, and (swapped in by the "updates" page and the tray test) a new version downloaded and ready
         "update_view": crate::updates::UpdateView { current: "0.1.1".into(), checked_at: Some(recent), ..Default::default() },
@@ -203,7 +204,7 @@ const MAIN_DRIVER: &str = r#"
   const only = (location.hash.match(/tab=(\w+)/) || [])[1];
   if (!window.augur) window.__errors.push('the page never started (a module failed to load)');
   else {
-    for (const tab of only ? [only] : ['live', 'history', 'bets', 'pals', 'players', 'model', 'settings', 'staking', 'sync', 'updates', 'offair']) {
+    for (const tab of only ? [only] : ['live', 'history', 'bets', 'pals', 'players', 'you', 'model', 'settings', 'staking', 'sync', 'updates', 'offair']) {
       // "updates" is Settings › Updates with a new version downloaded and ready (and its bar over the window)
       if (tab === 'updates') {
         DATA.update_view = DATA.update_ready;
@@ -337,6 +338,15 @@ fn every_tab_renders_headless() {
     assert!(text("live").contains("some stats hidden until the bell"), "Live says the home stats are estimated");
     assert!(text("history").contains("14 / 19"), "History: {}", text("history"));
     assert!(
+        text("you").contains("248,120")
+            && text("you").contains("predictions")
+            && text("you").contains("tournament champion")
+            && text("you").contains("16 of 52"),
+        "You: {}",
+        text("you")
+    );
+    assert!(text("sidebar").contains("you"), "signed in, the sidebar has You: {}", text("sidebar"));
+    assert!(
         text("offair").contains("off air") && text("offair").contains("last stream") && text("offair").contains("latest calls"),
         "Live off air: {}",
         text("offair")
@@ -392,7 +402,9 @@ fn every_tab_renders_headless() {
     if let Some(folder) = std::env::var_os("AUGUR_UI_SHOTS").map(PathBuf::from) {
         std::fs::create_dir_all(&folder).unwrap();
         let port = serve("index.html", &data, MAIN_DRIVER);
-        for tab in ["live", "history", "bets", "pals", "players", "model", "settings", "staking", "sync", "welcome", "updates", "offair"] {
+        for tab in
+            ["live", "history", "bets", "pals", "players", "you", "model", "settings", "staking", "sync", "welcome", "updates", "offair"]
+        {
             render(port, tab, Some((&folder, tab)));
         }
     }

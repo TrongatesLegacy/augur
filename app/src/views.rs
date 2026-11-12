@@ -178,6 +178,34 @@ pub fn bets_view(conn: &Connection, s: &StakeSettings, range: &str, now_secs: u6
     Ok(BetsView { comparison, balance, synced_at, stored, import })
 }
 
+/// The You tab: your signed-in profile as the picks list import last read it, and your bets next to Augur's.
+#[derive(Serialize)]
+pub struct YouView {
+    pub name: Option<String>,
+    pub page: Option<augur_engine::site::AccountPage>,
+    /// when the profile was read (ms)
+    pub read_at: Option<u64>,
+    pub comparison: Comparison,
+    /// your record from the history of duels (as an owner)
+    pub augur_calls: (usize, usize),
+}
+
+pub fn you_view(conn: &Connection, s: &StakeSettings) -> R<YouView> {
+    let page = bets::account_page(conn);
+    let synced = db::meta_get(conn, "bets_synced_at")?.and_then(|v| v.parse().ok()).unwrap_or(0);
+    let calls = db::settled(conn)?;
+    let t = history::tally(&calls, None);
+    let mut comparison = bets::compare(&calls, &db::bets(conn)?, s, &bets::odds(conn)?, bets::balance(conn), synced);
+    comparison.fights.clear();
+    Ok(YouView {
+        name: db::meta_get(conn, "account")?,
+        read_at: page.as_ref().map(|(_, at)| *at),
+        page: page.map(|(p, _)| p),
+        comparison,
+        augur_calls: (t.right, t.total),
+    })
+}
+
 #[derive(Serialize)]
 pub struct BoxPalView {
     #[serde(flatten)]

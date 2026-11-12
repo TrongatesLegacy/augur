@@ -55,6 +55,8 @@ pub struct Shared {
     pub update: Mutex<crate::updates::UpdateView>,
     pub pending: Mutex<crate::updates::Pending>,
     pub tray: Mutex<Option<TrayIcon>>,
+    /// where the tray icon is on screen (physical pixels: x, y, width, height), from its last click
+    pub tray_rect: Mutex<Option<[f64; 4]>>,
 }
 
 impl Shared {
@@ -404,10 +406,45 @@ fn toggle_popover(app: &AppHandle) {
     if w.is_visible().unwrap_or(false) {
         let _ = w.hide();
     } else {
-        let _ = w.move_window(if cfg!(target_os = "macos") { Position::TrayCenter } else { Position::TrayBottomCenter });
+        place_popover(app, &w);
         let _ = w.show();
         let _ = w.set_focus();
     }
+}
+
+/// Where the popover goes, in physical pixels: centred on the tray icon, on the side away from the taskbar or menu bar
+/// (above a bottom taskbar, below a top one) with a small gap, and kept inside the screen's work area (the screen
+/// without the taskbar), as Pear Drops does. tray and area are [x, y, width, height]; size is [width, height].
+fn popover_spot(tray: [f64; 4], area: [f64; 4], size: [f64; 2], scale: f64) -> (f64, f64) {
+    let [tx, ty, tw, th] = tray;
+    let [ax, ay, aw, ah] = area;
+    let [w, h] = size;
+    let (gap, margin) = (6.0 * scale, 8.0 * scale);
+    let x = (tx + tw / 2.0 - w / 2.0).round();
+    let y = if ty < ay + ah / 2.0 { ty + th + gap } else { ty - h - gap };
+    (x.min(ax + aw - w - margin).max(ax + margin), y.min(ay + ah - h - margin / 2.0).max(ay + margin / 2.0))
+}
+
+/// Puts the popover by the tray icon. macOS uses the menu bar's own placement; Windows and Linux work it out from
+/// the icon's last click and the screen's work area, so it opens above the taskbar instead of over it.
+fn place_popover(app: &AppHandle, w: &tauri::WebviewWindow) {
+    if cfg!(target_os = "macos") {
+        let _ = w.move_window(Position::TrayCenter);
+        return;
+    }
+    let tray = *app.state::<Arc<Shared>>().tray_rect.lock().unwrap();
+    let (Some(tray), Ok(size)) = (tray, w.outer_size()) else {
+        let _ = w.move_window(Position::BottomRight);
+        return;
+    };
+    let Ok(Some(monitor)) = app.monitor_from_point(tray[0] + tray[2] / 2.0, tray[1] + tray[3] / 2.0) else {
+        let _ = w.move_window(Position::BottomRight);
+        return;
+    };
+    let a = monitor.work_area();
+    let area = [a.position.x as f64, a.position.y as f64, a.size.width as f64, a.size.height as f64];
+    let (x, y) = popover_spot(tray, area, [size.width as f64, size.height as f64], monitor.scale_factor());
+    let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
 }
 
 /// macOS: in the Dock (and ⌘-Tab) while the main window is open, menu bar only while it isn't.
@@ -629,9 +666,9 @@ fn open_window(app: AppHandle, tab: Option<String>) {
 fn fit_popover(app: AppHandle, height: f64) {
     if let Some(w) = app.get_webview_window("tray") {
         let _ = w.set_size(tauri::LogicalSize::new(340.0, height.clamp(160.0, 640.0)));
-        // Windows: the popover sits above the taskbar, so keep its bottom edge there
-        if cfg!(windows) && w.is_visible().unwrap_or(false) {
-            let _ = w.move_window(Position::TrayBottomCenter);
+        // Windows: the popover sits above the taskbar, so keep its bottom edge there as it grows
+        if !cfg!(target_os = "macos") && w.is_visible().unwrap_or(false) {
+            place_popover(&app, &w);
         }
     }
 }
@@ -690,8 +727,10 @@ fn account(shared: tauri::State<'_, Arc<Shared>>) -> Account {
 
 /// Opens palduels.com's sign-in in its own window. Once the site lands on a profile page the session cookie is saved,
 /// encrypted, and the window closes. Augur never sees the password.
+// async: on Windows, building a window inside a synchronous command deadlocks WebView2 (a blank white window
+// that won't close)
 #[tauri::command]
-fn sign_in(app: AppHandle) -> Cmd<()> {
+async fn sign_in(app: AppHandle) -> Cmd<()> {
     if let Some(w) = app.get_webview_window("signin") {
         let _ = w.set_focus();
         return Ok(());
@@ -772,6 +811,7 @@ pub fn run() {
         update: Mutex::new(Default::default()),
         pending: Mutex::new(Default::default()),
         tray: Mutex::new(None),
+        tray_rect: Mutex::new(None),
     });
     tauri::Builder::default()
         .plugin(tauri_plugin_positioner::init())
@@ -844,8 +884,12 @@ pub fn run() {
                 })
                 .on_tray_icon_event(|tray, event| {
                     tauri_plugin_positioner::on_tray_event(tray.app_handle(), &event);
-                    if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
-                        toggle_popover(tray.app_handle());
+                    if let TrayIconEvent::Click { rect, button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                        let app = tray.app_handle();
+                        let scale = app.primary_monitor().ok().flatten().map_or(1.0, |m| m.scale_factor());
+                        let (p, sz) = (rect.position.to_physical::<f64>(scale), rect.size.to_physical::<f64>(scale));
+                        *app.state::<Arc<Shared>>().tray_rect.lock().unwrap() = Some([p.x, p.y, sz.width, sz.height]);
+                        toggle_popover(app);
                     }
                 })
                 .build(app)?;
@@ -920,6 +964,24 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+
+    /// The popover opens above a bottom taskbar, below a top one, and never past the screen's edges.
+    #[test]
+    fn popover_sits_by_the_tray_and_off_the_taskbar() {
+        // 1920x1080 at 100%, taskbar 48px at the bottom: work area 1920x1032, tray icon near the right
+        let area = [0.0, 0.0, 1920.0, 1032.0];
+        let (x, y) = super::popover_spot([1700.0, 1040.0, 32.0, 32.0], area, [340.0, 600.0], 1.0);
+        assert_eq!((x, y), (1546.0, 1032.0 - 600.0 - 4.0), "above the taskbar, clamped to the work area");
+        assert!(y + 600.0 <= 1032.0);
+        // a tray icon at the far right edge: kept 8px inside
+        let (x, _) = super::popover_spot([1900.0, 1040.0, 20.0, 32.0], area, [340.0, 400.0], 1.0);
+        assert_eq!(x, 1920.0 - 340.0 - 8.0);
+        let (_, y) = super::popover_spot([1700.0, 1040.0, 32.0, 32.0], area, [340.0, 400.0], 1.0);
+        assert_eq!(y, 1032.0 - 400.0 - 4.0, "just above the taskbar (the icon sits on it, below the work area)");
+        // taskbar at the top at 150%: below it
+        let (_, y) = super::popover_spot([1700.0, 0.0, 48.0, 48.0], [0.0, 72.0, 1920.0, 1008.0], [510.0, 900.0], 1.5);
+        assert_eq!(y, 72.0 + 6.0, "just below the taskbar (4px, scaled to 150%)");
+    }
     /// macOS draws the menu bar icon from its transparency alone, so an icon with no transparent pixels shows as a
     /// white square.
     #[test]

@@ -236,7 +236,7 @@ jobs:
           releaseId: ${{ github.event.release.id }}
           updaterJsonPreferNsis: true
           uploadWorkflowArtifacts: true
-          workflowArtifactNamePattern: installer-[platform]-[arch]
+          workflowArtifactNamePattern: installer-[platform]-[arch]-[bundle]
           retryAttempts: 1
 
       - name: Check the Mac signature

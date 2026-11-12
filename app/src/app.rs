@@ -249,6 +249,7 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
                             }
                         }
                         let mut live = shared.live.lock().unwrap();
+                        live.detail = p.as_ref().map(|p| views::live_detail(p, stake.as_ref()));
                         live.prediction = p;
                         live.stake = stake;
                         last_key = key;

@@ -4,7 +4,7 @@
 use augur_engine::backfill::Progress;
 use augur_engine::bets::{self, Comparison};
 use augur_engine::history::{self, Backtest};
-use augur_engine::predict::Prediction;
+use augur_engine::predict::{self, Prediction};
 use augur_engine::site::{self, BoxPal, QueueItem};
 use augur_engine::stake::{Stake, StakeSettings};
 use augur_engine::{db, learn, model, rusqlite};
@@ -43,6 +43,8 @@ pub struct LiveView {
     pub first_run: bool,
     /// between duels and off air: how the last stream went
     pub off_air: Option<OffAir>,
+    /// the call on the duel that's up, broken down like a settled one in History (no fight yet)
+    pub detail: Option<CallDetail>,
 }
 
 /// What the popover and Live show when no duel is up.
@@ -328,7 +330,7 @@ pub fn model_view(
 
 /// A call opened from History: the call and its duel, how the fight went (from its tape), and how the model came to
 /// its pick (the three factors on the log-odds scale, re-run with the settings the call was made with).
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct CallDetail {
     /// with its fighters as seen before the bell (None for calls logged before fighters were kept)
     pub call: db::CallRecord,
@@ -349,7 +351,7 @@ pub struct CallDetail {
 }
 
 /// The duel as it was fought.
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct FightView {
     pub id: u64,
     pub fought_at: Option<String>,
@@ -368,7 +370,7 @@ pub struct FightView {
     pub biggest: Vec<site::Hit>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct MoveDamage {
     /// "" for unnamed hits (likely damage over time)
     pub name: String,
@@ -384,7 +386,7 @@ pub struct MoveDamage {
 }
 
 /// The model's sum: each factor's home win chance and what it adds on the log-odds scale (positive leans home).
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ModelCall {
     pub factors: Vec<Factor>,
     /// the factors added up (log-odds toward home), and as a chance
@@ -401,7 +403,7 @@ pub struct ModelCall {
 }
 
 /// One input to the stats factor: HP, Attack, Defence, move power, type edges, unlisted moves or cooldowns.
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Part {
     pub key: String,
     pub label: String,
@@ -504,6 +506,8 @@ fn fmt_n(x: f64) -> String {
 fn summary(c: &db::CallRecord, parts: &[Part], factors: &[Factor]) -> String {
     let pal = |home: bool| if home { c.home_pal.as_str() } else { c.away_pal.as_str() };
     let toward_home = c.pick == "home";
+    // a fight still to come is told in the present, and has no result to set against the call
+    let settled = c.winner.is_some();
     // (label, log-odds toward home, [home figure, away figure])
     let mut drivers: Vec<(String, f64, [String; 2])> = parts.iter().map(|p| (p.label.clone(), p.logit, p.values.clone())).collect();
     for f in factors.iter().filter(|f| f.key != "stats") {
@@ -528,11 +532,14 @@ fn summary(c: &db::CallRecord, parts: &[Part], factors: &[Factor]) -> String {
     let top = drivers.iter().filter(|d| lean(d) > 0.0).max_by(|x, y| lean(x).total_cmp(&lean(y)));
     let against = drivers.iter().filter(|d| lean(d) < 0.0).min_by(|x, y| lean(x).total_cmp(&lean(y)));
     let mut out = match top {
-        Some(d) => format!("{} counted most for {}: {}.", d.0, pal(toward_home), say(d, toward_home)),
+        Some(d) => {
+            format!("{} {} for {}: {}.", d.0, if settled { "counted most" } else { "counts most" }, pal(toward_home), say(d, toward_home))
+        }
         None => format!("Nothing stood out for {}.", pal(toward_home)),
     };
     if let Some(d) = against {
-        out.push_str(&format!(" {} pulled toward {}: {}.", d.0, pal(!toward_home), say(d, !toward_home)));
+        let pulls = if settled { "pulled" } else { "pulls" };
+        out.push_str(&format!(" {} {pulls} toward {}: {}.", d.0, pal(!toward_home), say(d, !toward_home)));
     }
     if let Some(w) = c.winner.as_deref().filter(|w| *w != c.pick) {
         out.push_str(&format!(" {} won anyway.", pal(w == "home")));
@@ -544,7 +551,7 @@ fn pct_text(p_home: f64, toward_home: bool) -> String {
     format!("{:.0}%", 100.0 * if toward_home { p_home } else { 1.0 - p_home })
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Factor {
     /// "stats", "species" or "h2h"
     pub key: String,
@@ -554,14 +561,14 @@ pub struct Factor {
     pub logit: f64,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct SideDetail {
     /// average hitting power over its usable moves against the other side (the model's move strength)
     pub strength: f64,
     pub moves: Vec<MoveLine>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct MoveLine {
     pub name: String,
     pub el: String,
@@ -608,6 +615,53 @@ pub fn call_detail(conn: &Connection, id: i64) -> R<Option<CallDetail>> {
         sides,
         call,
     }))
+}
+
+/// The open call on the duel that's up, broken down by the same code as a settled one: no fight, no winner, its
+/// factors straight from the prediction. stake: what Augur suggests betting on it.
+pub fn live_detail(p: &Prediction, stake: Option<&Stake>) -> CallDetail {
+    let s = &p.settings;
+    let n = p.to_call();
+    let call = db::CallRecord {
+        id: 0,
+        seen_at: p.seen_at as i64,
+        home_owner: n.home_owner,
+        away_owner: n.away_owner,
+        home_pal: n.home_pal,
+        away_pal: n.away_pal,
+        pick: n.pick,
+        // unrounded, so the sum lands on the chance the dial shows
+        prob: p.prob,
+        p_stats: Some(p.score.p_stats),
+        p_species: Some(p.score.p_species),
+        p_h2h: Some(p.score.p_h2h),
+        species_rec: Some(p.species_rec),
+        pal_h2h: n.pal_h2h,
+        duel_id: None,
+        winner: None,
+        fought_at: None,
+        ko: None,
+        winner_hp_left: None,
+        stake: stake.map(|st| st.amount),
+        fighters: Some((n.home, n.away)),
+        late: None,
+        late_only: !p.picks_open,
+        version: n.version,
+        model: serde_json::to_string(s).unwrap_or_default(),
+    };
+    let sides = call.fighters.as_ref().map(|(h, a)| vec![side_detail(s, &h.fighter, &a.fighter), side_detail(s, &a.fighter, &h.fighter)]);
+    let slug = |side: &predict::Side| if side.slug.is_empty() { site::slug_for(&side.pal) } else { side.slug.clone() };
+    CallDetail {
+        slugs: [slug(&p.home), slug(&p.away)],
+        stats_from: [p.home.stats_from.clone(), p.away.stats_from.clone()],
+        estimated: p.estimated(),
+        stake_cmd: stake.map(|st| st.command.clone()).filter(|c| !c.is_empty()),
+        settings: Some(s.clone()),
+        fight: None,
+        model: model_call(&call, s),
+        sides: sides.unwrap_or_default(),
+        call,
+    }
 }
 
 /// "home: from their box; away: shown" as [home, away].
@@ -811,6 +865,38 @@ mod tests {
         assert_eq!(m.factors[0].p_home, 0.3);
         assert_eq!(d.stats_from, ["from their box".to_string(), "shown".to_string()]);
         assert!(super::call_detail(&conn, 999_999).unwrap().is_none());
+    }
+
+    #[test]
+    fn the_call_up_now_breaks_down_like_a_settled_one() {
+        let state = augur_engine::seed::state("state-leaflit-wumpo.json");
+        let opts = augur_engine::predict::Options {
+            lookups: false,
+            db_path: std::path::PathBuf::from("/nonexistent"),
+            settings: Default::default(),
+        };
+        let p = augur_engine::predict::predict(&state, &opts).unwrap();
+        let stake = augur_engine::stake::suggest(&p.pick, p.prob, &Default::default(), &Default::default());
+        let d = super::live_detail(&p, Some(&stake));
+        assert!(d.fight.is_none() && d.call.winner.is_none(), "no fight yet");
+        assert_eq!((d.call.home_pal.as_str(), d.call.pick.as_str()), (p.home.pal.as_str(), p.pick.as_str()));
+        assert_eq!(d.stats_from[0], p.home.stats_from);
+        assert!(d.estimated, "the home side's stats are hidden until the bell");
+        assert_eq!(d.stake_cmd.as_deref(), Some(stake.command.as_str()).filter(|c| !c.is_empty()));
+        let m = d.model.as_ref().expect("the model's sum");
+        assert!(!m.rescored, "the factors come straight from the prediction");
+        assert_eq!(m.factors.len(), 3);
+        assert_eq!(m.factors[0].p_home, p.score.p_stats);
+        assert!((m.p_home - p.score.p_home).abs() < 1e-9, "{} vs {}", m.p_home, p.score.p_home);
+        let stats = m.factors.iter().find(|f| f.key == "stats").unwrap();
+        assert!(!m.parts.is_empty());
+        let sum: f64 = m.parts.iter().map(|x| x.logit).sum();
+        assert!((sum - stats.logit).abs() < 0.02, "parts {sum} vs stats {}", stats.logit);
+        // told in the present, with no result to set against it
+        assert!(m.summary.contains(&format!("counts most for {}", p.favourite().pal)), "{}", m.summary);
+        assert!(!m.summary.contains("won anyway") && !m.summary.contains("counted"), "{}", m.summary);
+        assert_eq!(d.sides.len(), 2);
+        assert!(d.sides.iter().all(|s| s.moves.iter().any(|m| m.usable)));
     }
 
     #[test]

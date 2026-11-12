@@ -301,7 +301,7 @@ const MAIN_DRIVER: &str = r#"
       .map((el) => `${el.tagName.toLowerCase()}.${[...el.classList].join('.')} (${el.clientWidth}px, needs ${el.scrollWidth}px): ${el.textContent.trim().replace(/\s+/g, ' ').slice(0, 50)}`);
   if (!window.augur) window.__errors.push('the page never started (a module failed to load)');
   else {
-    for (const tab of only ? [only] : ['live', 'history', 'call', 'bets', 'pals', 'players', 'you', 'titles', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'updates', 'offair']) {
+    for (const tab of only ? [only] : ['live', 'history', 'call', 'bets', 'pals', 'players', 'you', 'titles', 'titlesone', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'updates', 'offair']) {
       // "ownmodel" is Settings › Model with self-tuning off and your own values
       const own = DATA.get_settings;
       if (tab === 'ownmodel') DATA.get_settings = { ...own, model_auto: false };
@@ -313,7 +313,8 @@ const MAIN_DRIVER: &str = r#"
       // "bets" is History's Your bets view; "staking", "sync" and "updates" are Settings pages
       window.augur.state.view = tab === 'bets' ? 'bets' : 'calls';
       // "titles" is You › Titles, every title by category
-      window.augur.state.youView = tab === 'titles' ? 'titles' : 'profile';
+      // "titlesone" is the same with one category's tab picked
+      window.augur.state.youView = ['titles', 'titlesone'].includes(tab) ? 'titles' : 'profile';
       // "call" is History with the first call's breakdown opened from its row
       window.augur.state.call = null;
       // "offair" is Live with no duel up, after a stream
@@ -321,7 +322,7 @@ const MAIN_DRIVER: &str = r#"
       else window.augur.state.live = DATA.live;
       window.augur.state.settingsPage = ['staking', 'sync', 'updates'].includes(tab) ? tab : tab === 'ownmodel' ? 'model' : 'general';
       // "welcome" is the fresh install's overlay, over Live
-      await window.augur.show(['bets', 'call'].includes(tab) ? 'history' : ['staking', 'sync', 'updates', 'ownmodel'].includes(tab) ? 'settings' : ['welcome', 'offair'].includes(tab) ? 'live' : tab === 'titles' ? 'you' : tab);
+      await window.augur.show(['bets', 'call'].includes(tab) ? 'history' : ['staking', 'sync', 'updates', 'ownmodel'].includes(tab) ? 'settings' : ['welcome', 'offair'].includes(tab) ? 'live' : ['titles', 'titlesone'].includes(tab) ? 'you' : tab);
       await sleep(300);
       if (tab === 'bets') out.betRows = document.querySelectorAll('#main tr[data-call]').length;
       if (tab === 'call') {
@@ -330,6 +331,13 @@ const MAIN_DRIVER: &str = r#"
         out.chart = { lines: document.querySelectorAll('.hpc path.line').length, hits: document.querySelectorAll('.hpc circle').length, ko: !!document.querySelector('.hpc .ko') };
         out.fits = document.getElementById('main').scrollHeight <= document.getElementById('main').clientHeight + 1;
       }
+      const visible = () => [...document.querySelectorAll('.tgrp')].filter((g) => !g.hidden).map((g) => g.querySelector('h4').textContent);
+      if (tab === 'titlesone') {
+        document.querySelector('.tcat[data-tg="1"]')?.click();
+        await sleep(100);
+        out.titlesShown = visible();
+      }
+      if (tab === 'titles') out.titlesAll = visible().length;
       out[tab] = document.getElementById('main').innerText;
       out.spills[tab] = spills();
       if (tab === 'call' && !only) {
@@ -498,8 +506,22 @@ fn big_numbers_fit() {
         let folder = folder.join("big");
         std::fs::create_dir_all(&folder).unwrap();
         for tab in [
-            "live", "history", "call", "bets", "pals", "players", "you", "titles", "model", "settings", "staking", "ownmodel", "sync",
-            "updates", "offair",
+            "live",
+            "history",
+            "call",
+            "bets",
+            "pals",
+            "players",
+            "you",
+            "titles",
+            "titlesone",
+            "model",
+            "settings",
+            "staking",
+            "ownmodel",
+            "sync",
+            "updates",
+            "offair",
         ] {
             render(port, tab, Some((&folder, tab)));
         }
@@ -573,6 +595,8 @@ fn every_tab_renders_headless() {
     );
     assert!(text("sidebar").contains("you"), "signed in, the sidebar has You: {}", text("sidebar"));
     assert!(text("you").contains("all titles ›"), "You links to its Titles view: {}", text("you"));
+    assert_eq!(r["titlesAll"], json!(7), "All shows every category");
+    assert_eq!(r["titlesShown"], json!(["Predictions"]), "a category tab shows just that category");
     assert!(
         text("titles").contains("16 titles earned")
             && text("titles").contains("36 still to unlock")
@@ -669,8 +693,23 @@ fn every_tab_renders_headless() {
         std::fs::create_dir_all(&folder).unwrap();
         let port = serve("index.html", &data, MAIN_DRIVER);
         for tab in [
-            "live", "history", "call", "bets", "pals", "players", "you", "titles", "model", "settings", "staking", "ownmodel", "sync",
-            "welcome", "updates", "offair",
+            "live",
+            "history",
+            "call",
+            "bets",
+            "pals",
+            "players",
+            "you",
+            "titles",
+            "titlesone",
+            "model",
+            "settings",
+            "staking",
+            "ownmodel",
+            "sync",
+            "welcome",
+            "updates",
+            "offair",
         ] {
             render(port, tab, Some((&folder, tab)));
         }

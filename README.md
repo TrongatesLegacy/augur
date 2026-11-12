@@ -14,7 +14,7 @@ Built with [Tauri 2](https://tauri.app): a Rust engine and a small web page for 
 
 | Path | What it is |
 |---|---|
-| `engine/` | Everything that isn't the desktop app (`augur-engine`): fetching and parsing palduels.com (`site`), the model (`model`), the SQLite store (`db`), a whole prediction (`predict`), the background backfill (`backfill`), the chat voices (`voices`), the calls file (`calls`), what the history says (`history`), the stake to suggest (`stake`), your bets and how following Augur compares (`bets`) and the test seed (`seed`). |
+| `engine/` | Everything that isn't the desktop app (`augur-engine`): fetching and parsing palduels.com (`site`), the model (`model`), the SQLite store (`db`), a whole prediction (`predict`), the background backfill (`backfill`), the chat voices (`voices`), the calls file (`calls`), what the history says (`history`), the stake to suggest (`stake`), your bets and how following Augur compares (`bets`), sync across computers (`sync`) and the test seed (`seed`). |
 | `app/` | The desktop app and command line (`augur`): tray, windows, sync loop, encrypted sign-in (`secure.rs`), settings, what each page is sent (`views.rs`), headless UI tests (`ui_tests.rs`). |
 | `ui/` | The pages, as ES modules with no build step: `index.html` + `main.js` (main window), `tray.html` + `tray.js` (popover), `lib/` (shared pieces), `tabs/` (one file per tab), `style.css`. |
 | `fixtures/calls.jsonl` | 19 made-up calls (real species, invented fighters, owners and results) in the calls-file format, with the model's expected numbers. Test data only: your own calls stay in your data folder. |
@@ -30,9 +30,25 @@ cargo run -q -p augur -- predict   # the duel that's up now, from the command li
 cargo run -q -p augur -- --help    # predict, backfill, import, export, analyse, tune, bets, status
 ```
 
-The app and the command line share one data folder: `~/Library/Application Support/Augur` on macOS, `%APPDATA%\Augur` on Windows (`AUGUR_DATA_DIR` overrides it). It holds `augur.db`, `settings.json`, the pal art cache and the encrypted sign-in.
+The app and the command line share one data folder: `~/Library/Application Support/Augur` on macOS, `%APPDATA%\Augur` on Windows (`AUGUR_DATA_DIR` overrides it). It holds `augur.db`, `settings.json`, `sync.json`, the pal art cache and the encrypted sign-in.
 
 On first launch the store is empty: live calls work straight away, and in the background Augur fetches every species (a few minutes), then past duels with fight tapes, newest first, then the older results-only ones (about an hour in all). One page at a time, slower after any HTTP 429, paused whenever a duel is up on stream. To bring your own calls across: `augur import calls.jsonl` (and `augur export` to back them up).
+
+## More than one computer
+
+**Settings › Sync & data › Sync** works the way Stream Multiview's does:
+- **The folder:** you pick a folder a sync app already moves. Augur finds OneDrive, iCloud Drive, Dropbox and Google Drive, or you can choose another folder. It creates `Augur Sync/` inside it.
+- **No clashes:** each computer writes only its own files there (`devices/<id>.json` and `calls/<id>.jsonl`) and reads the others' every minute. Nothing needs a lock, and the sync app never makes "conflicted copies".
+- **What syncs:** your settings (the latest change to each one wins) and Augur's calls (merged, never duplicated).
+- **What stays on each computer:** the sign-in (it's encrypted for that computer), launch at login and background fetching. Duels, species and your bets come from the site on each computer.
+
+**Back up… and Import…** cover setting up a new computer:
+- **Back up…** saves a complete copy of the store (calls, duels, tapes, species, bets) wherever you choose, such as OneDrive.
+- **Import…** merges one in, or a calls file. It adds what's missing and never overwrites, so a new PC skips the hour-long first fetch.
+
+Don't move the data folder itself into OneDrive: the app writes to its database every few seconds, and syncing a live SQLite file can corrupt it.
+
+The main window lays out for 1280×720 and zooms to fit any other size, so it looks the same on a laptop and on a big monitor.
 
 ## The data
 

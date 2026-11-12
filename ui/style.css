@@ -153,7 +153,30 @@ td.num, .num { font: 600 15px var(--cond); letter-spacing: .03em; }
 .est { color: var(--t3); font-size: 11px; }
 .st3 { display: flex; gap: 6px; } .st3 input { width: 74px; }
 
+td .two { display: grid; line-height: 1.25; }
+td .two small { font-size: 11.5px; color: var(--t3); }
+td .two small b { color: var(--gold); font-weight: 700; }
+
 /* settings */
+.opts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 2px 0 6px; }
+.opts.col { grid-template-columns: 1fr 1fr; }
+.opt { text-align: left; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: rgba(255,255,255,.03); color: var(--t2); display: grid; gap: 3px; min-width: 0; cursor: pointer; transition: border-color .15s, background .15s; }
+.opt:hover { border-color: rgba(255,255,255,.18); }
+.opt b { font: 700 15px var(--cond); letter-spacing: .05em; color: var(--t1); text-transform: uppercase; }
+.opt small { font-size: 11.5px; color: var(--t3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.opt.on { border-color: rgba(255,207,107,.5); background: linear-gradient(160deg, rgba(255,207,107,.15), rgba(255,207,107,.03)); }
+.opt.on b { color: var(--gold); }
+.fi { margin-right: 7px; opacity: .75; }
+.pvs { display: grid; gap: 8px; }
+.pv { display: grid; grid-template-columns: 40px 1fr 70px 52px; gap: 10px; align-items: center; }
+.pv > span { color: var(--t3); font: 600 14px var(--cond); }
+.pvb { height: 9px; border-radius: 5px; background: rgba(255,255,255,.06); overflow: hidden; }
+.pvb i { display: block; height: 100%; border-radius: 5px; background: linear-gradient(90deg, rgba(255,207,107,.3), var(--gold)); transition: width .3s; }
+.pv b { font: 700 16px var(--cond); letter-spacing: .03em; color: var(--gold); }
+.pv small { text-align: right; color: var(--t3); font-size: 12px; }
+.syst { display: flex; align-items: center; gap: 8px; font-size: 13.5px; padding: 9px 12px; border-radius: 10px; background: rgba(0,0,0,.2); border: 1px solid var(--line); }
+.dot.bad { background: var(--bad); box-shadow: 0 0 8px var(--bad); }
+.syst .dot:not(.idle):not(.bad) { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
 .sg { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
 .srow { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .srow:last-child { border: 0; }

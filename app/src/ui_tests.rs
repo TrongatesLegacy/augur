@@ -1,7 +1,7 @@
 //! Headless UI tests: the real pages in ui/, rendered by headless Chrome with a stand-in for the Tauri bridge that
 //! serves what the app's commands would return (built here from the repo's fixtures, no network). Nothing appears on
 //! screen and the user's own Chrome profile isn't touched. Skipped when Chrome isn't installed (set CHROME to point
-//! at it). AUGUR_UI_SHOTS=<folder> also saves a 1280x720 screenshot of every tab there.
+//! at it). AUGUR_UI_SHOTS=<folder> also saves a screenshot of every tab there (AUGUR_UI_SIZE=1024x576 for another size).
 
 use crate::settings::AppSettings;
 use crate::views;
@@ -64,6 +64,11 @@ pub fn fixture_data() -> Value {
         ..Default::default()
     };
     let roster = Ok(site::parse_roster(&page("user-trongateslegacy.html")));
+    // the sync times: two minutes ago, so they read like a real sync
+    let recent = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64 - 120_000;
+    let preview: Vec<_> = [0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9]
+        .map(|p| (p, stake::suggest("home", p, &StakeSettings::default(), &bets::odds(&conn).unwrap(), bets::balance(&conn))))
+        .to_vec();
     json!({
         "live": live,
         "history": views::history_view(&conn, &s, "all", 0).unwrap(),
@@ -74,6 +79,30 @@ pub fn fixture_data() -> Value {
         "player": views::player_view(&conn, &s, "TrongatesLegacy", roster).unwrap(),
         "model_view": views::model_view(&conn, &s, None, Default::default(), 1).unwrap(),
         "get_settings": AppSettings::default(),
+        "stake_preview": preview,
+        "sync_view": crate::sync::SyncView {
+            on: true,
+            folder: Some(PathBuf::from("/Users/you/Library/CloudStorage/OneDrive-Personal")),
+            name: "Studio Mac".into(),
+            what: Default::default(),
+            last_sync: Some(recent),
+            error: None,
+            history: vec![augur_engine::sync::Change { at: recent, from: "Gaming PC".into(), summary: "strategy, max from".into() }],
+            others: vec![augur_engine::sync::DeviceFile {
+                device: "pc".into(),
+                name: "Gaming PC".into(),
+                os: "Windows".into(),
+                app: "0.1.0".into(),
+                at: recent,
+                settings: Default::default(),
+                calls: 19,
+            }],
+            folders: vec![augur_engine::sync::Folder {
+                id: "onedrive".into(),
+                name: "OneDrive".into(),
+                path: PathBuf::from("/Users/you/Library/CloudStorage/OneDrive-Personal"),
+            }],
+        },
         "account": { "signed_in": false, "name": null },
         "pal_image": null,
     })
@@ -149,10 +178,11 @@ const MAIN_DRIVER: &str = r#"
   if (!window.augur) window.__errors.push('the page never started (a module failed to load)');
   else {
     const only = (location.hash.match(/tab=(\w+)/) || [])[1];
-    for (const tab of only ? [only] : ['live', 'history', 'bets', 'pals', 'players', 'model', 'settings']) {
-      // "bets" is History's Your bets view
+    for (const tab of only ? [only] : ['live', 'history', 'bets', 'pals', 'players', 'model', 'settings', 'staking', 'sync']) {
+      // "bets" is History's Your bets view; "staking" and "sync" are Settings pages
       window.augur.state.view = tab === 'bets' ? 'bets' : 'calls';
-      await window.augur.show(tab === 'bets' ? 'history' : tab);
+      window.augur.state.settingsPage = ['staking', 'sync'].includes(tab) ? tab : 'general';
+      await window.augur.show(tab === 'bets' ? 'history' : ['staking', 'sync'].includes(tab) ? 'settings' : tab);
       await sleep(300);
       out[tab] = document.getElementById('main').innerText;
     }
@@ -174,7 +204,15 @@ const TRAY_DRIVER: &str = r#"
 
 /// Renders the page in headless Chrome and returns its report.
 fn render(port: u16, name: &str, shot: Option<(&Path, &str)>) -> Value {
-    render_at(port, name, shot, (1280, 720))
+    render_at(port, name, shot, shot_size())
+}
+
+/// The main window's size for screenshots: AUGUR_UI_SIZE=1024x576 (the smallest it goes), default 1280x720.
+fn shot_size() -> (u32, u32) {
+    std::env::var("AUGUR_UI_SIZE")
+        .ok()
+        .and_then(|s| s.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))))
+        .unwrap_or((1280, 720))
 }
 
 fn render_at(port: u16, name: &str, shot: Option<(&Path, &str)>, (w, h): (u32, u32)) -> Value {
@@ -271,12 +309,18 @@ fn every_tab_renders_headless() {
     );
     assert!(text("players").contains("nyafia primo"), "Players: {}", text("players"));
     assert!(text("model").contains("history test"), "Model: {}", text("model"));
-    assert!(text("settings").contains("chat lines"), "Settings: {}", text("settings"));
+    assert!(
+        text("settings").contains("chat lines") && text("settings").contains("notify with each result"),
+        "Settings: {}",
+        text("settings")
+    );
+    assert!(text("staking").contains("what it would suggest") && text("staking").contains("sit out"), "Staking: {}", text("staking"));
+    assert!(text("sync").contains("gaming pc") && text("sync").contains("back up"), "Sync & data: {}", text("sync"));
 
     if let Some(folder) = std::env::var_os("AUGUR_UI_SHOTS").map(PathBuf::from) {
         std::fs::create_dir_all(&folder).unwrap();
         let port = serve("index.html", &data, MAIN_DRIVER);
-        for tab in ["live", "history", "bets", "pals", "players", "model", "settings"] {
+        for tab in ["live", "history", "bets", "pals", "players", "model", "settings", "staking", "sync"] {
             render(port, tab, Some((&folder, tab)));
         }
     }

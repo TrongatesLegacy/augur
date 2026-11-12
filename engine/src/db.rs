@@ -609,6 +609,103 @@ pub fn oldest_bet(conn: &Connection) -> Result<Option<u64>> {
     Ok(conn.query_row("SELECT MIN(seq) FROM bets", [], |r| r.get::<_, Option<i64>>(0))?.map(|v| v as u64))
 }
 
+// --- backing up and merging whole stores ---
+
+/// A complete, consistent copy of the store, safe while the app is writing to it.
+pub fn backup_to(conn: &Connection, path: &Path) -> Result<()> {
+    if path.exists() {
+        std::fs::remove_file(path)?;
+    }
+    conn.execute("VACUUM INTO ?1", [path.to_string_lossy()])?;
+    Ok(())
+}
+
+/// What merging another store added.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Merged {
+    pub calls: usize,
+    pub duels: usize,
+    pub tapes: usize,
+    pub species: usize,
+    pub bets: usize,
+}
+
+/// Adds what another store (a backup from another computer) has and this one doesn't: calls with their fighters,
+/// duels and tapes, species and moves, bets. Nothing here is changed or removed, so it's safe to run again.
+pub fn merge_from(conn: &Connection, other: &Path) -> Result<Merged> {
+    if !other.is_file() {
+        return Err(crate::Error::Parse(format!("{}: not a file", other.display())));
+    }
+    conn.execute("ATTACH DATABASE ?1 AS other", [other.to_string_lossy()])?;
+    let out = merge_attached(conn);
+    let _ = conn.execute_batch("DETACH DATABASE other");
+    out
+}
+
+fn merge_attached(conn: &Connection) -> Result<Merged> {
+    let has = |table: &str| -> Result<bool> {
+        Ok(conn.query_row("SELECT COUNT(*) FROM other.sqlite_master WHERE type = 'table' AND name = ?", [table], |r| r.get::<_, i64>(0))?
+            > 0)
+    };
+    if !has("predictions")? || !has("duels")? {
+        return Err(crate::Error::Parse("that file: it isn't an Augur backup".into()));
+    }
+    let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).map(|n| n as usize);
+    let mut m = Merged::default();
+    let tx = conn.unchecked_transaction()?;
+    let before = (count("SELECT COUNT(*) FROM duels")?, count("SELECT COUNT(DISTINCT duel_id) FROM hits")?);
+    let duel_cols = "id, fought_at, home_owner, away_owner, home_pal, away_pal, winner, ko, winner_hp_left, home_casts, away_casts";
+    tx.execute(&format!("INSERT OR IGNORE INTO duels ({duel_cols}) SELECT {duel_cols} FROM other.duels"), [])?;
+    // tapes for duels stored here without one
+    tx.execute(
+        "INSERT OR IGNORE INTO hits (duel_id, seq, side, t, move, pct) SELECT duel_id, seq, side, t, move, pct FROM other.hits
+         WHERE duel_id NOT IN (SELECT DISTINCT duel_id FROM hits)",
+        [],
+    )?;
+    (m.duels, m.tapes) = (count("SELECT COUNT(*) FROM duels")? - before.0, count("SELECT COUNT(DISTINCT duel_id) FROM hits")? - before.1);
+    m.species = tx.execute(
+        "INSERT OR IGNORE INTO species (pal, slug, types, power, base_hp, base_atk, base_def)
+         SELECT pal, slug, types, power, base_hp, base_atk, base_def FROM other.species",
+        [],
+    )?;
+    tx.execute(
+        "INSERT OR IGNORE INTO species_moves (pal, name, element, power, unlock_lv) SELECT pal, name, element, power, unlock_lv FROM other.species_moves",
+        [],
+    )?;
+    if has("bets")? {
+        m.bets = tx.execute(
+            "INSERT OR IGNORE INTO bets (seq, duel_id, home_owner, away_owner, home_pal, away_pal, backed, winner, stake, result, seen_at)
+             SELECT seq, duel_id, home_owner, away_owner, home_pal, away_pal, backed, winner, stake, result, seen_at FROM other.bets",
+            [],
+        )?;
+    }
+    // calls: the same fight seen at the same moment is the same call
+    let stake_cols = conn
+        .query_row("SELECT COUNT(*) FROM pragma_table_info('predictions', 'other') WHERE name = 'stake'", [], |r| r.get::<_, i64>(0))?
+        > 0;
+    let pcols = "seen_at, home_owner, away_owner, home_pal, away_pal, pick, prob, p_stats, p_species, p_h2h, estimated, home_species_w,                  home_species_l, away_species_w, away_species_l, pal_h2h_home, pal_h2h_away, model, status, duel_id";
+    let extra = if stake_cols { ", stake, stake_cmd" } else { "" };
+    let new: Vec<i64> = tx
+        .prepare(
+            "SELECT o.id FROM other.predictions o WHERE NOT EXISTS (SELECT 1 FROM predictions p
+             WHERE p.home_owner = o.home_owner AND p.away_owner = o.away_owner AND p.seen_at = o.seen_at) ORDER BY o.id",
+        )?
+        .query_map([], |r| r.get(0))?
+        .collect::<Rq<_>>()?;
+    for old in new {
+        tx.execute(&format!("INSERT INTO predictions ({pcols}{extra}) SELECT {pcols}{extra} FROM other.predictions WHERE id = ?"), [old])?;
+        let id = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO fighters (prediction_id, side, pal, types, hp, atk, def, hp_iv, atk_iv, def_iv, passives, hidden_boost, speed)
+             SELECT ?1, side, pal, types, hp, atk, def, hp_iv, atk_iv, def_iv, passives, hidden_boost, speed FROM other.fighters WHERE prediction_id = ?2",
+            [id, old],
+        )?;
+        m.calls += 1;
+    }
+    tx.commit()?;
+    Ok(m)
+}
+
 /// The open call for this fight, if Augur has made one.
 pub fn open_call(conn: &Connection, home_owner: &str, away_owner: &str) -> Result<Option<i64>> {
     Ok(conn
@@ -674,6 +771,25 @@ mod tests {
         assert_eq!(done.len(), 1);
         assert!(done[0].right());
         assert!(done[0].fighters.is_some());
+    }
+
+    #[test]
+    fn a_backup_merges_into_another_store_once() {
+        let dir = std::env::temp_dir().join(format!("augur-backup-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("backup.db");
+        let mac = crate::seed::store();
+        crate::seed::import_bets(&mac);
+        backup_to(&mac, &file).unwrap();
+        let pc = open_memory().unwrap();
+        let m = merge_from(&pc, &file).unwrap();
+        assert_eq!((m.calls, m.duels, m.tapes, m.species, m.bets), (19, 20, 1, 1, 13), "the 19 calls' duels and #4702 with its tape");
+        assert_eq!(settled(&pc).unwrap().len(), 19, "the calls arrive settled, with their fighters");
+        assert!(settled(&pc).unwrap().iter().all(|c| c.fighters.is_some()));
+        let again = merge_from(&pc, &file).unwrap();
+        assert_eq!((again.calls, again.duels, again.bets), (0, 0, 0), "merging twice adds nothing");
+        assert!(merge_from(&pc, &dir.join("missing.db")).is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

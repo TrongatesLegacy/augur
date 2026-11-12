@@ -24,6 +24,11 @@ pub struct Line {
     pub pal_h2h: [f64; 2],
     pub fighters: HashMap<String, CallFighter>,
     pub model: Settings,
+    /// the stake Augur suggested and its chat command (calls made before stakes have none)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stake: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stake_cmd: Option<String>,
 }
 
 /// Writes every settled call with full fighter data. Returns how many.
@@ -32,12 +37,10 @@ pub fn export(conn: &Connection, path: &Path) -> crate::Result<usize> {
     let mut n = 0;
     for c in db::settled(conn)? {
         let (Some((home, away)), Some(species_rec)) = (c.fighters, c.species_rec) else { continue };
-        let model: Settings = conn
-            .query_row("SELECT model FROM predictions WHERE id = ?", [c.id], |r| r.get::<_, Option<String>>(0))
-            .ok()
-            .flatten()
-            .and_then(|m| serde_json::from_str(&m).ok())
+        let (model, stake_cmd): (Option<String>, Option<String>) = conn
+            .query_row("SELECT model, stake_cmd FROM predictions WHERE id = ?", [c.id], |r| Ok((r.get(0)?, r.get(1)?)))
             .unwrap_or_default();
+        let model: Settings = model.and_then(|m| serde_json::from_str(&m).ok()).unwrap_or_default();
         let line = Line {
             call: c.id,
             seen_at: c.seen_at,
@@ -51,6 +54,8 @@ pub fn export(conn: &Connection, path: &Path) -> crate::Result<usize> {
             pal_h2h: c.pal_h2h,
             fighters: HashMap::from([("home".to_string(), home), ("away".to_string(), away)]),
             model,
+            stake: c.stake,
+            stake_cmd,
         };
         out.push_str(&serde_json::to_string(&line)?);
         out.push('\n');
@@ -95,6 +100,9 @@ pub fn import(conn: &Connection, path: &Path) -> crate::Result<usize> {
             away,
         };
         let id = db::add_call(conn, &call)?;
+        if let Some(amount) = l.stake {
+            db::set_call_stake(conn, id, amount, l.stake_cmd.as_deref().unwrap_or(""))?;
+        }
         if let (Some(duel), Some(winner)) = (l.duel, l.winner) {
             let recent = [Recent { id: duel, home: l.home_owner, away: l.away_owner, win: winner.clone(), at: l.seen_at.max(0) as u64 }];
             db::settle(conn, &recent, |_| Some(Duel { winner: Some(winner.clone()), ..Default::default() }))?;

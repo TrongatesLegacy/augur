@@ -190,6 +190,17 @@ impl State {
         serde_json::from_str(&body).map_err(|e| Error::Parse(format!("the live state: {e}")))
     }
 
+    /// The duels still to come, next first. The queue's first slot is the fight about to start: once its pals are
+    /// on screen it's the duel up, so it's left out; until then (the last duel still showing) it's next up. Slots
+    /// still waiting for an opponent are left out.
+    pub fn upcoming(&self) -> Vec<QueueItem> {
+        let on_screen = |q: &QueueItem| match (&self.home, &self.away) {
+            (Some(h), Some(a)) => q.home == h.actor && q.away == a.actor,
+            _ => false,
+        };
+        self.queue.iter().filter(|q| q.matched() && !on_screen(q)).cloned().collect()
+    }
+
     /// Picks are open for the duel on screen.
     pub fn picks_open(&self) -> bool {
         self.bets.as_ref().and_then(|b| b.get("state")).and_then(|s| s.as_str()) == Some("open")
@@ -1270,5 +1281,18 @@ mod tests {
         );
         assert_eq!(parse_kick_pic(r#"{"user":{"profile_pic":null}}"#), None);
         assert_eq!(parse_kick_pic("<html>blocked</html>"), None);
+    }
+
+    /// The fight about to start is next up until its pals are on screen, then the one after it is.
+    #[test]
+    fn next_up_is_the_fight_about_to_start() {
+        let mut s: State = serde_json::from_str(&page("state-leaflit-wumpo.json")).unwrap();
+        let (h, a) = (s.home.clone().unwrap(), s.away.clone().unwrap());
+        let q = |pos, home: &str, away: &str| QueueItem { pos, home: home.into(), away: away.into() };
+        s.queue = vec![q(0, &h.actor, &a.actor), q(1, "player-31", "player-32"), q(2, "", "")];
+        assert_eq!(s.upcoming().iter().map(|x| x.home.as_str()).collect::<Vec<_>>(), ["player-31"], "the fight on screen isn't next");
+        s.home = None;
+        s.away = None;
+        assert_eq!(s.upcoming()[0].home, h.actor, "before its pals load, the fight about to start is next up");
     }
 }

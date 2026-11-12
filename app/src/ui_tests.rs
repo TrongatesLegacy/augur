@@ -61,7 +61,7 @@ pub fn fixture_data() -> Value {
         picks_open: true,
         prediction: Some(p),
         stake: Some(stake),
-        queue: state.queue.iter().filter(|q| q.pos > 0).take(3).cloned().collect(),
+        queue: state.upcoming().into_iter().take(3).collect(),
         synced_at: recent,
         today: (14, 19),
         first_run: false,

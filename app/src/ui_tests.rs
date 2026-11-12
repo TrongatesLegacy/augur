@@ -88,6 +88,7 @@ pub fn fixture_data() -> Value {
     let live = views::LiveView {
         title: state.title.clone(),
         picks_open: true,
+        detail: Some(views::live_detail(&p, Some(&stake))),
         prediction: Some(p),
         stake: Some(stake),
         queue: state.queue.iter().filter(|q| q.pos > 0).take(3).cloned().collect(),
@@ -394,6 +395,19 @@ const MAIN_DRIVER: &str = r#"
       if (tab === 'titles') out.titlesAll = visible().length;
       out[tab] = document.getElementById('main').innerText;
       out.spills[tab] = spills();
+      if (tab === 'live' || tab === 'liveedge') {
+        // the page fits the window: its panels scroll inside, the page doesn't
+        out[tab + 'Fits'] = document.getElementById('main').scrollHeight <= document.getElementById('main').clientHeight + 1;
+      }
+      if ((tab === 'live' || tab === 'liveedge') && !only) {
+        // Windows draws text a few pixels wider than a Mac: Live keeps fitting with every letter 0.4px wider (not
+        // in the screenshots)
+        const els = [...document.querySelectorAll('#main *')];
+        const was = els.map((el) => getComputedStyle(el).letterSpacing);
+        els.forEach((el, i) => (el.style.letterSpacing = `calc(${was[i] === 'normal' ? '0px' : was[i]} + 0.4px)`));
+        await sleep(50);
+        out.spills[tab + 'Wide'] = spills();
+      }
       if (tab === 'call' && !only) {
         // an old call: no tape, no fighters, no factors kept
         const full = DATA.call_detail;
@@ -605,6 +619,27 @@ fn every_tab_renders_headless() {
         "Live says the home stats were hidden and guessed: {}",
         text("live")
     );
+    // the breakdown's pieces before the bell: the pick and its bet, how Augur is calling it (told in the present, no
+    // result yet), the tale of the tape, and Live's own panels
+    assert!(text("live").contains("augur calls\nwumpo") && text("live").contains("augur's pick"), "Live's headline: {}", text("live"));
+    assert!(
+        text("live").contains("how augur called it")
+            && text("live").contains("counts most for wumpo")
+            && text("live").contains("together")
+            && text("live").contains("move power")
+            && text("live").contains("the model it’s using"),
+        "how Augur is calling it: {}",
+        text("live")
+    );
+    assert!(!text("live").contains("won anyway") && !text("live").contains("counted most"), "nothing's been won yet: {}", text("live"));
+    assert!(
+        ["tale of the tape", "rolls", "projected hp race", "head to head", "say it in chat", "up next"]
+            .iter()
+            .all(|x| text("live").contains(x)),
+        "Live's panels: {}",
+        text("live")
+    );
+    assert!(!text("live").contains("what decides it"), "the breakdown's sum stands in for What decides it: {}", text("live"));
     // the head to head: the owners' record and meetings (home owner's pal first, the winner marked), the pals' own
     assert!(
         text("live").contains("5 meetings since 17 aug") && text("live").contains("player-12") && text("live").contains("2–3"),
@@ -629,6 +664,7 @@ fn every_tab_renders_headless() {
         "owners and pals who've never met: {}",
         text("liveedge")
     );
+    assert_eq!((&r["liveFits"], &r["liveedgeFits"]), (&json!(true), &json!(true)), "Live fits the window without scrolling");
     for tab in ["livePanels", "liveedgePanels"] {
         let f = &r[tab];
         assert_eq!((&f["h2h"], &f["race"]), (&json!(true), &json!(true)), "{tab}: nothing spills out of the panels: {f}");
@@ -719,7 +755,11 @@ fn every_tab_renders_headless() {
     );
     assert!(text("sidebar").contains("25%") && text("sidebar").contains("fetching"), "the sidebar shows the fetch: {}", text("sidebar"));
     let stake = data["live"]["stake"]["command"].as_str().unwrap();
-    assert!(!stake.is_empty() && text("live").contains(&format!("copy {stake}")), "Live offers the bet {stake}: {}", text("live"));
+    assert!(
+        !stake.is_empty() && text("live").contains(&format!("{stake}\n")) && text("live").contains(" credits\ncopy\n"),
+        "Live offers the bet {stake} with a copy button: {}",
+        text("live")
+    );
     let b = &data["bets_view"]["comparison"];
     assert!(text("bets").contains("following augur") && text("bets").contains("deviated"), "Your bets: {}", text("bets"));
     assert!(

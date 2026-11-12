@@ -1,36 +1,34 @@
-// Live: the duel that's up, the call and why, the head-to-heads, what's next and the chat line.
+// Live: the duel that's up, built from the same pieces as a call's breakdown in History (the headline, how Augur is
+// calling it and the tale of the tape), plus what only Live has: the bet to copy, the projected HP race (the "before"
+// of the breakdown's How it went), the head to head, what's next and the chat line.
+import { headline, tape, waterfall } from '../lib/callparts.js';
 import { copyText } from '../lib/clipboard.js';
-import { esc, feedProblem, fmt, pct, short, signed } from '../lib/format.js';
-import { SHORT, dial, face, orb, pickVoice, tapeRows, voiceLine, whyLine } from '../lib/pal.js';
-import { betCommand, stakeLine } from '../lib/stake.js';
+import { esc, feedProblem, fmt, pct, short } from '../lib/format.js';
+import { SHORT, face, orb, pickVoice, voiceLine, whyLine } from '../lib/pal.js';
+import { betCommand } from '../lib/stake.js';
 import { columns, empty, icon, ring, signedBar } from '../lib/viz.js';
 
-// a side whose stats the site hides until the bell: taken from the owner's box, or guessed (with why)
-function statsNote(p) {
-  const hidden = [p.home, p.away].filter((s) => s.stats_from && s.stats_from !== 'shown');
-  if (!hidden.length) return '';
-  const guessed = hidden.some((s) => s.estimated);
-  return `<div class="small ${guessed ? 'gold' : ''}">${hidden.map((s) => `${esc(s.pal)}'s stats are hidden until the bell: ${esc(s.stats_from.replace(/^from their box$/, 'taken from its owner’s box'))}`).join(' · ')}</div>`;
-}
-
-function upNext(live) {
+// the queue. Off air it's a panel of its own; with a duel up it sits compact under the chat line, two to a row
+function upNext(live, compact) {
   const q = live?.queue || [];
+  if (compact) {
+    const body = q.length
+      ? `<div class="unx">${q.map((x) => `<div class="unr" title="${esc(x.home)} vs ${esc(x.away)}"><span class="unp">#${x.pos}</span><span class="unn">${esc(x.home)} <i>vs</i> ${esc(x.away)}</span></div>`).join('')}</div>`
+      : '<div class="small">Nothing queued: fights show here as chat lines them up.</div>';
+    return `<div class="panel un"><div class="ph"><h3>Up next</h3><span>pals show at the bell</span></div>${body}</div>`;
+  }
   const body = q.length
     ? `<div class="fillin">${q.map((x) => `<div class="row"><span>${esc(x.home)} <span class="small">vs</span> ${esc(x.away)}</span><span class="small">#${x.pos}</span></div>`).join('')}</div>`
     : empty('queue', 'Nothing queued', 'Fights show here as chat lines them up.');
   return `<div class="panel col list"><div class="ph"><h3>Up next</h3><span>pals show at the bell</span></div>${body}</div>`;
 }
 
-function side(s, cls, isFav) {
-  return `<div class="fx ${cls === 'a' ? 'r' : ''}">${orb(s.pal, s.slug, cls + (isFav ? '' : ' dim'), 86, isFav)}<div><div class="nm" style="${isFav ? '' : 'color:var(--t2)'}">${esc(s.pal)}</div><div class="ow">${face(s.owner, 'a av', 18)}${cls === 'h' ? 'HOME' : 'AWAY'} · ${esc(s.owner)}</div><div class="els">${s.fighter.types.map((t) => `<span class="el">${esc(t)}</span>`).join('')}</div></div></div>`;
-}
-
-// one factor's home win chance as a bar from the middle: left for home, right for away
-function factor(label, ph) {
-  const l = Math.min(ph, 0.5) * 100;
-  const r = Math.max(ph, 0.5) * 100;
-  const color = ph >= 0.5 ? 'var(--home)' : 'var(--away)';
-  return `<div class="tr"><span>${label}</span><div class="track"><span class="fill" style="left:${100 - r}%;right:${l}%;background:${color}"></span></div><span class="pc">${pct(ph)}</span></div>`;
+// what Augur says to bet, under its pick in the headline: the command with a copy button, the credits, and why
+function bet(p, stake, command) {
+  const copy = command ? `<button class="btn sm" id="cmd" title="Copy ${esc(command)} for chat">Copy</button>` : '';
+  if (!stake) return { verdict: `<div class="lbet"><b>${esc(command)}</b>${copy}</div>`, line: esc(whyLine(p)) };
+  if (!stake.amount) return { verdict: `<div class="lbet off"><b>No bet</b>${copy}</div>`, line: esc(stake.why) };
+  return { verdict: `<div class="lbet"><b>${esc(stake.command)}</b><span>${fmt(stake.amount)} credits</span>${copy}</div>`, line: esc(stake.why) };
 }
 
 // a name as one of the owners: a meeting's sides and the rivalry's records name them as the site shows them
@@ -177,41 +175,35 @@ export function render(app) {
           all,
         )}</div>`
       : `<div class="panel col lstreams"><div class="ph"><h3>Recent streams</h3></div>${empty('chart', 'No streams yet', 'One bar per stream, once Augur has called some fights.')}</div>`;
-    main.innerHTML = header('Live · PalDuels', status) + hero + `<div class="loff grow">${stream}${upNext(live)}${recent}${days}</div>`;
+    main.innerHTML = header('Live · PalDuels', status) + hero + `<div class="loff grow">${stream}${upNext(live, false)}${recent}${days}</div>`;
     return;
   }
-  const fav = p.pick === 'home' ? p.home : p.away;
-  const hidden = [p.home, p.away]
-    .filter((s) => s.hidden.moves.length)
-    .map((s) => `<span class="chip">${esc(s.pal)}: unlisted <b>${s.hidden.moves.slice(0, 2).map((m) => esc(m[0] || 'unnamed')).join(', ')}</b></span>`)
-    .join('');
   const { voices, voice } = pickVoice(state.voice, state.settings);
   state.voice = voice;
   const command = betCommand(p, live.stake);
-  main.innerHTML =
-    header(`Live · ${esc(p.title || 'PalDuels')}`, status + (command ? `<button class="btn ghost" id="cmd">Copy ${esc(command)}</button>` : '')) +
-    `<div class="stage">${side(p.home, 'h', p.pick === 'home')}
-      <div class="center">${dial(p.prob, 100)}<div class="cond" style="font-weight:800;font-size:24px;letter-spacing:.06em;margin-top:4px;text-transform:uppercase">${esc(fav.pal)}</div><div class="small" style="color:var(--t2)">${esc(whyLine(p))}</div>${statsNote(p)}${stakeLine(live.stake)}</div>
-      ${side(p.away, 'a', p.pick === 'away')}</div>
-    <div class="g3">
-      <div class="panel"><div class="ph"><h3>Tale of the tape</h3><span>Lv 70</span></div>${tapeRows(p)}
-        <div class="small">Passives: ${esc(p.home.fighter.passives.join(', ') || 'none')} vs ${esc(p.away.fighter.passives.join(', ') || 'none')} · ${fmt(p.home.usable_moves)} vs ${fmt(p.away.usable_moves)} moves</div></div>
-      ${hpRace(p)}
-      <div class="panel"><div class="ph"><h3>What decides it</h3><span>home ◂ ▸ away</span></div>
-        ${factor('Stats', p.score.p_stats)}${factor('Records', p.score.p_species)}${factor('Pal H2H', p.score.p_h2h)}
-        <div class="chips">${fav.type_edge_moves.length ? `<span class="chip"><b>${fav.type_edge_moves.length}</b> type-edge moves</span>` : ''}${hidden || '<span class="chip">No unlisted moves</span>'}</div></div>
-    </div>
-    <div class="g3 grow">
-      ${headToHead(p)}
-      ${upNext(live)}
-      ${
-        state.settings?.chat_lines === false
-          ? ''
-          : `<div class="panel"><div class="ph"><h3>Say it in chat</h3><span>${voices.length} voices</span></div>
+  const d = live.detail;
+  const chat =
+    state.settings?.chat_lines === false
+      ? ''
+      : `<div class="panel lchat"><div class="ph"><h3>Say it in chat</h3><span>${voices.length} voices</span></div>
         <div class="vo" id="vb">${voices.map((v) => `<button class="${v === voice ? 'on' : ''}" data-v="${esc(v)}">${esc(SHORT[v] || v)}</button>`).join('')}</div>
-        <div class="q" id="vq">${esc(voiceLine(p, voice, state.settings?.include_chance !== false))}</div><button class="btn" id="cp" style="width:100%;margin-top:4px">Copy for chat</button></div>`
-      }
-    </div>`;
+        <div class="lq"><div class="q" id="vq">${esc(voiceLine(p, voice, state.settings?.include_chance !== false))}</div><button class="btn sm" id="cp">Copy</button></div></div>`;
+  main.innerHTML =
+    header(`Live · ${esc(p.title || 'PalDuels')}`, status) +
+    (d
+      ? headline(d, { ...bet(p, live.stake, command), chance: p.prob }) +
+        `<div class="cgrid lgrid grow">
+          <div class="stackc">${hpRace(p)}${headToHead(p)}</div>
+          <div class="stackc">${waterfall(d)}</div>
+          <div class="stackc">${tape(d)}${chat}${upNext(live, true)}</div>
+        </div>`
+      : `<div class="panel col grow">${empty('eye', 'Working out the call', 'The breakdown shows as soon as Augur has made it.')}</div>`);
+  // a panel with more below fades out at its foot, until it's scrolled to the end
+  main.querySelectorAll('.lgrid .fillin').forEach((el) => {
+    const more = () => el.classList.toggle('more', el.scrollTop + el.clientHeight < el.scrollHeight - 2);
+    el.addEventListener('scroll', more, { passive: true });
+    more();
+  });
   main.querySelectorAll('#vb button').forEach((b) => {
     b.onclick = () => {
       state.voice = b.dataset.v;

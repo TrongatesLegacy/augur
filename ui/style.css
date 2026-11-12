@@ -776,3 +776,8 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 .cml em { font-style: normal; font: 600 10px var(--sans); } .cml em.ok { color: var(--ok); } .cml em.bad { color: var(--bad); }
 .cmodel { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); display: grid; gap: 8px; }
 .cmh { display: flex; justify-content: space-between; align-items: baseline; }
+/* Titles: the category buttons are tabs */
+.tcat.on { border-color: rgba(255,207,107,.55); background: linear-gradient(160deg, rgba(255,207,107,.14), rgba(255,207,107,.03)); box-shadow: 0 0 0 1px rgba(255,207,107,.2) inset; }
+.tcat.on span { color: var(--t1); }
+.tgrp[hidden] { display: none; }
+.tall.one .tgh h4, .tall.one .tgc { display: none; }

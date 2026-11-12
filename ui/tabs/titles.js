@@ -91,10 +91,10 @@ export function titlesView(y) {
     ${ring(of ? got / of : null, { size: 92, label: fmt(got), sub: `of ${fmt(of)}`, title: `${fmt(got)} of ${fmt(of)} titles earned` })}
     <div class="thw"><b>${fmt(got)} titles earned</b><small>${fmt(Math.max(0, of - got))} still to unlock${of ? ` · ${pct(got / of)} of them all` : ''}</small>
       ${rare.length ? `<div class="trares">${rare.map((b) => `<span class="badge rare" title="${esc(b.about)}"><i>${esc(b.icon)}</i>${esc(b.name)}</span>`).join('')}</div>` : ''}</div>
-    <div class="tcats">${groups
+    <div class="tcats" role="tablist" aria-label="Title categories"><button class="tcat tall-tab" data-tg="all" role="tab"><span>All</span><b>${fmt(got)}<small>/${fmt(of)}</small></b><div class="tbar"><i style="width:${of ? ((100 * got) / of).toFixed(1) : 0}%"></i></div></button>${groups
       .map((g, i) => {
         const [n, m] = g.earned || [0, 0];
-        return `<button class="tcat ${m && n === m ? 'done' : ''}" data-tg="${i}" title="${esc(g.about)}"><span>${esc(g.name)}</span><b>${fmt(n)}<small>/${fmt(m)}</small></b><div class="tbar"><i style="width:${m ? ((100 * n) / m).toFixed(1) : 0}%"></i></div></button>`;
+        return `<button class="tcat ${m && n === m ? 'done' : ''}" data-tg="${i}" role="tab" title="${esc(g.about)}"><span>${esc(g.name)}</span><b>${fmt(n)}<small>/${fmt(m)}</small></b><div class="tbar"><i style="width:${m ? ((100 * n) / m).toFixed(1) : 0}%"></i></div></button>`;
       })
       .join('')}</div></div>`;
   const closest = (pg.closest || []).length
@@ -113,14 +113,33 @@ export function titlesView(y) {
             .join('')
         : empty('star', 'None yet', 'Win duels and picks to earn them.')
     }</div></div>`;
-  const all = `<div class="panel col"><div class="ph"><h3>Every title</h3><span>${groups.length ? `${fmt(groups.length)} categories` : ''}</span></div>
+  const all = `<div class="panel col"><div class="ph"><h3 class="tall-h">Every title</h3><span class="tall-n" data-all="${groups.length ? `${fmt(groups.length)} categories` : ''}">${groups.length ? `${fmt(groups.length)} categories` : ''}</span></div>
     <div class="tall fillin">${groups.length ? groups.map((g, i) => group(g, i, ctx)).join('') : empty('star', 'Not read yet', 'Augur reads every title with your profile, next time it reads your picks.')}</div></div>`;
   return `${hero}<div class="tgrid grow"><div class="stackc">${closest}${mine}</div>${all}</div>`;
 }
 
-// the category buttons jump to their section in the every-title list
+// the category buttons are tabs: one category at a time, or all of them (remembered while the app is open)
+let chosen = 'all';
+
 export function wire(main) {
-  main.querySelectorAll('.tcat[data-tg]').forEach((b) => {
-    b.onclick = () => main.querySelector(`#tg${b.dataset.tg}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  });
+  const tabs = [...main.querySelectorAll('.tcat[data-tg]')];
+  const show = (tg) => {
+    chosen = main.querySelector(`.tcat[data-tg="${tg}"]`) ? tg : 'all';
+    tabs.forEach((b) => {
+      b.classList.toggle('on', b.dataset.tg === chosen);
+      b.setAttribute('aria-selected', b.dataset.tg === chosen);
+    });
+    main.querySelectorAll('.tgrp').forEach((g) => (g.hidden = chosen !== 'all' && g.id !== `tg${chosen}`));
+    const list = main.querySelector('.tall');
+    if (list) list.scrollTop = 0;
+    const head = main.querySelector('.tall-h');
+    const g = chosen === 'all' ? null : main.querySelector(`#tg${chosen}`);
+    if (head) head.textContent = g ? g.querySelector('h4').textContent : 'Every title';
+    // one category: its name is the panel's title, so its own heading row keeps just the blurb and the count
+    list?.classList.toggle('one', !!g);
+    const note = main.querySelector('.tall-n');
+    if (note) note.textContent = g ? `${g.querySelector('.tgc').textContent} earned` : note.dataset.all;
+  };
+  tabs.forEach((b) => (b.onclick = () => show(b.dataset.tg)));
+  show(chosen);
 }

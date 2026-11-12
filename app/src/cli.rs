@@ -29,6 +29,11 @@ pub enum Command {
         /// predict from a saved /api/state.php response instead of the live one (doesn't save the call)
         #[arg(long)]
         state: Option<PathBuf>,
+        /// with --state, save the call anyway, dated when that state was saved: a call made before the duel that
+        /// the app missed. It settles on the next live run. Save it before the result is in: the pal head-to-head
+        /// is looked up live, so afterwards it would include the duel itself.
+        #[arg(long, requires = "state")]
+        save: bool,
     },
     /// Fetch every species and past duels into the store (gently; pauses while a duel is up).
     Backfill {
@@ -64,7 +69,7 @@ pub fn run(cli: Cli) -> CliResult {
     // the same model settings the app predicts with: learned, or your own (Settings › Model)
     let model = app.model_for(learn::load(&conn).map(|l| l.settings).as_ref());
     match cli.command {
-        Command::Predict { quick, json, state: saved } => {
+        Command::Predict { quick, json, state: saved, save } => {
             let state: site::State = match &saved {
                 Some(f) => serde_json::from_str(&std::fs::read_to_string(f)?)?,
                 None => site::State::fetch()?,
@@ -77,7 +82,7 @@ pub fn run(cli: Cli) -> CliResult {
                 None => println!("No duel up right now ({}).", if state.title.is_empty() { "idle" } else { &state.title }),
                 Some(p) => {
                     let st = stake::suggest(&p.pick, p.prob, &app.staking, &bets::odds(&conn)?);
-                    if saved.is_none() {
+                    if saved.is_none() || save {
                         let id = db::add_call(&conn, &p.to_call())?;
                         db::set_call_stake(&conn, id, st.amount, &st.command)?;
                     }

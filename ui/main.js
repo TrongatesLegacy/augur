@@ -102,6 +102,45 @@ listen('sync', () => {
 listen('calls', () => {
   if (app.state.tab === 'history') history.render(app);
 });
+// Updates: a dot on the Settings icon while there's news, and a bar floating over the window when an update is ready
+// (Restart to update) or was just installed (what's new). "Later" hides the ready bar until the next start.
+const gear = document.querySelector('.nav.gear');
+let later = false;
+function showUpdate(u) {
+  gear.classList.toggle('dot-on', !!(u && (u.latest || u.updated_from)));
+  let bar = document.getElementById('upbar');
+  const ready = u?.latest && u.ready && !later;
+  const news = u?.updated_from;
+  if (!ready && !news && !u?.installing) return bar?.remove();
+  if (!bar) {
+    bar = Object.assign(document.createElement('div'), { id: 'upbar', className: 'upbar' });
+    bar.setAttribute('role', 'status');
+    document.body.append(bar);
+  }
+  bar.classList.toggle('news', !ready && !!news);
+  bar.innerHTML = u.installing
+    ? `<span class="ui-g">↻</span><div><b>Restarting into Augur ${esc(u.latest?.version || '')}…</b><small>back in a few seconds</small></div>`
+    : ready
+      ? `<span class="ui-g">✦</span><div><b>Augur ${esc(u.latest.version)} is ready</b><small>${app.state.live?.live ? 'a duel is on: maybe after the result' : 'restarting takes a few seconds'}</small></div>
+         <button class="btn ghost sm" data-u="new">What’s new</button><button class="btn ghost sm" data-u="later">Later</button><button class="btn sm" data-u="go">Restart to update</button>`
+      : `<span class="ui-g">✓</span><div><b>Updated to ${esc(u.current)}</b><small>from ${esc(news)}</small></div>
+         <button class="btn ghost sm" data-u="new">What’s new</button><button class="btn ghost sm" data-u="ok" aria-label="Dismiss">✕</button>`;
+  const open = () => ((app.state.settingsPage = 'updates'), app.show('settings'));
+  bar.querySelectorAll('[data-u]').forEach((b) => {
+    b.onclick = async () => {
+      const k = b.dataset.u;
+      if (k === 'new') open();
+      else if (k === 'later') (later = true), showUpdate(u);
+      else if (k === 'ok') await invoke('update_seen'), showUpdate(await invoke('update_view'));
+      else (b.disabled = true), invoke('update_install').catch((e) => app.flash(e));
+    };
+  });
+}
+app.badge = showUpdate;
+listen('update', (u) => {
+  showUpdate(u);
+  if (app.state.tab === 'settings' && app.state.settingsPage === 'updates') settings.render(app);
+});
 listen('bets', (p) => {
   // redraw Your bets when an import finishes or moves on a page
   if (app.state.tab === 'history' && app.state.view === 'bets' && (p.phase === 'done' || p.done % 25 === 0)) history.render(app);
@@ -114,6 +153,7 @@ app.state.settings = await invoke('get_settings');
 app.state.live = await invoke('live');
 showBackfill(await invoke('backfill_progress'));
 showWelcome(app.state.live);
+showUpdate(await invoke('update_view'));
 await app.show('live');
 // for the headless UI tests
-window.augur = Object.assign(app, { showWelcome });
+window.augur = Object.assign(app, { showWelcome, showUpdate });

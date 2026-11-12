@@ -6,13 +6,15 @@ import { SHORT, dial, pickVoice, tapeRows, voiceLine, whyLine } from './lib/pal.
 import { betCommand, stakeLine } from './lib/stake.js';
 
 const el = document.getElementById('pop');
-const state = { view: null, settings: null, voice: null };
+const state = { view: null, settings: null, voice: null, update: null };
 
 function render() {
   const { view, settings } = state;
   const p = view?.prediction;
   const today = view?.today || [0, 0];
-  const foot = `<div class="ft"><span>Today <b>${today[0]}/${today[1]}</b>${today[1] ? ` · ${pct(today[0] / today[1])}` : ''}</span><button id="open">Open Augur ›</button></div>`;
+  const u = state.update;
+  const upd = u?.latest && u.ready ? `<div class="tup"><span>✦ Augur <b>${esc(u.latest.version)}</b> is ready</span><button id="tu">${u.installing ? 'Restarting…' : 'Restart to update'}</button></div>` : '';
+  const foot = upd + `<div class="ft"><span>Today <b>${today[0]}/${today[1]}</b>${today[1] ? ` · ${pct(today[0] / today[1])}` : ''}</span><button id="open">Open Augur ›</button></div>`;
   if (!p) {
     const r = view?.last_result;
     el.innerHTML = `<div class="hd"><span>${view?.error ? 'OFFLINE' : 'NO DUEL UP'}</span><span class="c">AUGUR</span></div>
@@ -41,10 +43,18 @@ function render() {
     document.getElementById('cb')?.addEventListener('click', (e) => copyText(command, e.target));
   }
   document.getElementById('open').onclick = () => invoke('open_window', { tab: 'live' });
+  document.getElementById('tu')?.addEventListener('click', (e) => {
+    e.target.disabled = true;
+    invoke('update_install');
+  });
 }
 
 addEventListener('keydown', (e) => {
   if (e.key === 'Escape') invoke('hide_popover');
+});
+listen('update', (u) => {
+  state.update = u;
+  render();
 });
 listen('live', (v) => {
   state.view = v;
@@ -52,6 +62,7 @@ listen('live', (v) => {
 });
 state.settings = await invoke('get_settings');
 state.view = await invoke('live');
+state.update = await invoke('update_view');
 render();
 // for the headless UI tests
 window.augur = { rendered: true };

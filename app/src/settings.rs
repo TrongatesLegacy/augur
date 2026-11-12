@@ -39,6 +39,10 @@ pub struct AppSettings {
     pub reroll_cost: Option<u64>,
     /// fetch past duels and tapes in the background (never while a duel is up)
     pub backfill: bool,
+    /// look for a newer Augur shortly after starting and every 6 hours
+    pub check_updates: bool,
+    /// download a newer Augur as soon as it's found, so Restart to update is instant (installing waits for the click)
+    pub auto_update: bool,
     /// read your picks list (signed in) to track your bets against Augur's calls
     pub import_bets: bool,
     pub staking: StakeSettings,
@@ -61,6 +65,8 @@ impl Default for AppSettings {
             reroll_command: String::new(),
             reroll_cost: None,
             backfill: true,
+            check_updates: true,
+            auto_update: true,
             import_bets: true,
             staking: StakeSettings::default(),
             model: ModelSettings::default(),

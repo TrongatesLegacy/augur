@@ -34,6 +34,15 @@ The app and the command line share one data folder: `~/Library/Application Suppo
 
 On first launch the store is empty, and a welcome over the whole window offers **Import a backup…** (from another computer: it brings the calls, bets and every past duel across) or **Start fresh**. The background fetch waits for that choice, at most 10 minutes. Live calls work straight away either way. Then, in the background, Augur fetches every species (a few minutes), then past duels with fight tapes, newest first, then the older results-only ones (about an hour in all). One page at a time, paused whenever a duel is up on stream. Each HTTP 429 slows it down, and 429s in a row wait longer each time: 2, 4, 8, 16, then 30 minutes at the slowest pace. After six in a row the run stops, and the next one, 6 hours later, carries on. The sidebar shows a ring while it runs, and "Site busy" while it waits. Later runs fetch only what's new: duels since the last run, plus every species again once a week. Duel numbers the site says don't exist aren't asked for again. To bring your own calls across: `augur import calls.jsonl` (and `augur export` to back them up).
 
+## Updates
+
+Augur updates itself from this repository's GitHub releases:
+- **Checking:** shortly after it starts, then every 6 hours. It downloads a new version in the background.
+- **Installing:** a notification, a bar over the main window, a strip in the tray popover and **Settings › Updates** each offer **Restart to update**. Nothing installs until you click it, so a duel is never cut off. Restarting takes a few seconds, and the main window comes back if it was open.
+- **After restarting:** Settings › Updates says what changed.
+- **Signed:** updates are signed with the project's update key, and Augur refuses one with a bad signature.
+- **Switches:** both automatic checking and automatic downloading can be turned off in Settings › Updates.
+
 ## More than one computer
 
 **Settings › Sync & data › Sync** works the way Stream Multiview's does:
@@ -93,18 +102,21 @@ Every test runs from the seed in the repo (`fixtures/calls.jsonl` and `engine/te
 
 ## Contributing and releases
 
-**Making a change:** open a pull request against `main`. Don't change the version or `CHANGELOG.md` in it. Write the title as one line a user would understand, because titles become the release's "What's new". Every pull request runs the tests (macOS, Windows, and the engine on Linux) and builds both installers as a test (under the run's **Artifacts**).
+**Making a change:** open a pull request against `main`. Don't change the version or `CHANGELOG.md` in it. Write the title as one line a user would understand, because titles become the release's "What's new". Every pull request runs the tests (macOS, Windows, and the engine on Linux) and builds both installers as a test (under the run's **Artifacts**). The installer build also runs after each merge to `main`, which keeps its caches warm for every pull request and release.
 
-**Making a release:** publish a GitHub release with a new tag like `v0.1.1` from the latest `main`, and click **Generate release notes**. The build workflow sets the version from the tag, adds the notes to `CHANGELOG.md`, commits that to `main`, moves the tag onto it, builds the installers and attaches them:
-
-- **Mac:** `Augur_<version>_universal.dmg` (Apple silicon and Intel) and the app as a `.zip`.
-- **Windows:** `Augur_<version>_x64-setup.exe` (installs for the current user, no admin needed).
+**Making a release:** publish a GitHub release with a new tag like `v0.1.1` from the latest `main`, and click **Generate release notes**. The build workflow:
+1. sets the version from the tag, adds the notes to `CHANGELOG.md`, commits that to `main` and moves the tag onto it;
+2. builds the installers with Tauri's own action ([`tauri-apps/tauri-action`](https://github.com/tauri-apps/tauri-action)) and attaches them:
+   - **Mac:** `Augur_<version>_universal.dmg` (Apple silicon and Intel).
+   - **Windows:** `Augur_<version>_x64-setup.exe` (installs for the current user, no admin needed).
+   - **For installed copies to update from:** the signed update files (`Augur.app.tar.gz` and the setup `.exe`, each with a `.sig`) and `latest.json`, which the app reads from the latest release.
 
 **Secrets the release uses:**
 
 | Secret | What it's for |
 |---|---|
 | `MAC_CERT_P12`, `MAC_CERT_PASSWORD` | Augur's own self-signed certificate ("Augur Code Signing"), base64 of the .p12 and its password. Every version is signed with it, so macOS recognises updates as the same app and keeps letting Augur read its Keychain item (the saved sign-in). Without it the app is signed ad hoc and the saved sign-in won't survive updates. |
+| `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | The update key (from `cargo tauri signer generate`) and its password. Every update is signed with it, and installed copies check the signature against the public key in `app/tauri.conf.json`. Keep a copy somewhere safe: without it, no future update can reach installed copies. |
 | `RELEASE_DEPLOY_KEY` | Optional: a deploy key with write access, for pushing the version commit if `main` is protected by a ruleset that lists the key under Bypass. Without it the release pushes with the workflow's own token. |
 
 The certificate isn't Apple's, so the first time someone opens a new install, macOS asks them to allow it in **System Settings → Privacy & Security → Open Anyway**. Windows SmartScreen may say "Windows protected your PC": **More info → Run anyway**.

@@ -5,14 +5,27 @@
 #   3. This workflow then:
 #        - sets the version from the tag and adds the notes to CHANGELOG.md,
 #          commits that to main and moves the tag onto that commit,
-#        - builds the Mac (.dmg, universal: Apple silicon and Intel, plus the app as a .zip) and Windows (.exe)
-#          installers from it,
-#        - attaches them to the release.
+#        - builds the Mac (.dmg, universal: Apple silicon and Intel) and Windows (.exe) installers from it with
+#          Tauri's own action, which attaches them to the release with the signed update files and latest.json
+#          (what installed copies read to update themselves: Settings > Updates).
 # Pull requests build the installers as a test (see the run's "Artifacts"), unless they only change things that
 # can't affect them (docs, tests, fixtures).
 name: Build installers
 
 on:
+  # after each merge too: caches saved on main are the ones every pull request and release can read
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
+      - 'fixtures/**'
+      - 'engine/tests/**'
+      - '.claude/**'
+      - '.github/workflows/test.yml'
+      - '.github/assets/**'
+      - '.github/*.md'
   pull_request:
     paths-ignore:
       - '**.md'
@@ -131,18 +144,16 @@ jobs:
   build:
     needs: prepare
     if: always() && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped')
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: macos-latest
             target: universal-apple-darwin
-            files: |
-              target/universal-apple-darwin/release/bundle/dmg/*.dmg
-              target/universal-apple-darwin/release/bundle/macos/*-mac.zip
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            files: target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -157,18 +168,10 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      # the Tauri command line, kept between runs
-      - uses: actions/cache@v6
-        id: tauri-cli
+      # the Tauri command line, downloaded ready-built (building it from source took 8-10 minutes a run)
+      - uses: taiki-e/install-action@v2
         with:
-          path: |
-            ~/.cargo/bin/cargo-tauri
-            ~/.cargo/bin/cargo-tauri.exe
-          key: tauri-cli-2-${{ runner.os }}
-
-      - name: Install the Tauri command line
-        if: steps.tauri-cli.outputs.cache-hit != 'true'
-        run: cargo install tauri-cli --version "^2" --locked
+          tool: tauri-cli@2
 
       # Mac: sign with the project's own certificate (secrets MAC_CERT_P12 + MAC_CERT_PASSWORD) so every version is
       # recognised as the same app and macOS keeps letting it read its saved sign-in from the Keychain.
@@ -204,43 +207,48 @@ jobs:
           security find-identity -p codesigning "$KC"
           echo "APPLE_SIGNING_IDENTITY=$HASH" >> "$GITHUB_ENV"
 
-      - name: Build installer
+      # Tauri's own action builds the installers (and, with the update key, the signed update files), saves them on
+      # the run's Artifacts and, for a release, attaches them with latest.json: what installed copies read to update
+      # themselves (Settings > Updates). Updates are signed with secrets TAURI_SIGNING_PRIVATE_KEY and its password;
+      # the app refuses one without a good signature. Without the key (Dependabot's pull requests don't get secrets)
+      # it builds without the update files.
+      - name: Choose what to build
         shell: bash
-        working-directory: app
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
-          set -o pipefail
-          cargo tauri build --target ${{ matrix.target }} 2>&1 | tee "$RUNNER_TEMP/build.log"
+          ARGS="--target ${{ matrix.target }}"
+          if [ -z "$KEY" ]; then
+            echo "::warning title=No update key::TAURI_SIGNING_PRIVATE_KEY isn't set, so this build has no update files."
+            ARGS="$ARGS --config tauri.no-update-files.json"
+          fi
+          echo "TAURI_ARGS=$ARGS" >> "$GITHUB_ENV"
 
-      # the app itself as a zip, for a later in-app updater (ditto keeps its signature and symlinks intact)
-      - name: Zip the Mac app
+      - uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: app
+          tauriScript: cargo tauri
+          args: ${{ env.TAURI_ARGS }}
+          releaseId: ${{ github.event.release.id }}
+          updaterJsonPreferNsis: true
+          uploadWorkflowArtifacts: true
+          workflowArtifactNamePattern: installer-[platform]-[arch]
+          retryAttempts: 1
+
+      - name: Check the Mac signature
         if: matrix.os == 'macos-latest'
         working-directory: target/universal-apple-darwin/release/bundle/macos
-        run: |
-          VERSION=$(python3 -c "import json;print(json.load(open('$GITHUB_WORKSPACE/app/tauri.conf.json'))['version'])")
-          ditto -c -k --keepParent Augur.app "Augur-$VERSION-mac.zip"
-          codesign -dv --verbose=2 Augur.app 2>&1 | grep -E "Authority|Signature|Identifier" || true
+        run: codesign -dv --verbose=2 Augur.app 2>&1 | grep -E "Authority|Signature|Identifier" || true
 
-      # Puts the end of the build log on the run's summary page if the build fails.
-      - name: Show build errors
-        if: failure()
-        shell: bash
-        run: |
-          [ -f "$RUNNER_TEMP/build.log" ] || exit 0
-          tail -n 40 "$RUNNER_TEMP/build.log" | sed -e 's/%/%25/g' -e 's/\r//g' | awk '{printf "%s%%0A", $0}' > tail.txt
-          echo "::error title=Build log::$(cat tail.txt)"
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: installer-${{ matrix.os }}
-          path: ${{ matrix.files }}
-          if-no-files-found: error
-          # long enough to try a pull request's installers; releases keep theirs for good
-          retention-days: 7
-
-  # Collects both installers (on pull requests too, as a check), then attaches them to the release.
+  # A release must end up with both installers, their update files and latest.json; one published without notes
+  # gets them from CHANGELOG.md.
   release:
     needs: [prepare, build]
-    if: always() && needs.build.result == 'success'
+    if: github.event_name == 'release' && needs.build.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -249,33 +257,21 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.sha || github.sha }}
 
-      - uses: actions/download-artifact@v8
-        with:
-          path: installers
-          merge-multiple: true
-
-      # the Mac artifact keeps its bundle folders (dmg/, macos/): bring every installer up to one level
-      - name: Gather the installers
-        run: |
-          find installers -mindepth 2 -type f -exec mv -t installers {} +
-          find installers -mindepth 1 -type d -empty -delete
-
-      - name: Check both installers are there
-        run: |
-          ls -l installers
-          ls installers/*.exe > /dev/null && ls installers/*.dmg > /dev/null && ls installers/*-mac.zip > /dev/null \
-            || { echo "::error::An installer is missing (need a Windows .exe, a Mac .dmg and the Mac .zip)."; exit 1; }
-
-      - name: Attach the installers to the release
-        if: github.event_name == 'release'
+      - name: Check the release has everything
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
-          BODY_EMPTY: ${{ github.event.release.body == '' }}
         run: |
-          gh release upload "$TAG" installers/* --clobber --repo "$GITHUB_REPOSITORY"
-          # a release published without notes gets them from CHANGELOG.md
-          if [ "$BODY_EMPTY" = "true" ]; then
-            python3 scripts/release_notes.py "$TAG" > notes.md
-            gh release edit "$TAG" --notes-file notes.md --repo "$GITHUB_REPOSITORY"
-          fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | tee assets.txt
+          for want in '\.dmg$' '_x64-setup\.exe$' '\.app\.tar\.gz$' '\.app\.tar\.gz\.sig$' '_x64-setup\.exe\.sig$' '^latest\.json$'; do
+            grep -Eq "$want" assets.txt || { echo "::error::The release is missing a file matching $want"; exit 1; }
+          done
+
+      - name: Release notes from CHANGELOG.md
+        if: github.event.release.body == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python3 scripts/release_notes.py "$TAG" > notes.md
+          gh release edit "$TAG" --notes-file notes.md --repo "$GITHUB_REPOSITORY"

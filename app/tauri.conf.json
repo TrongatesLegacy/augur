@@ -27,7 +27,7 @@
         "title": "Augur",
         "url": "tray.html",
         "width": 340,
-        "height": 540,
+        "height": 600,
         "visible": false,
         "decorations": false,
         "resizable": false,
@@ -65,6 +65,18 @@
     "windows": {
       "nsis": {
         "installMode": "currentUser"
+      }
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc5NEQzOTIzMjFENTAxQjEKUldTeEFkVWhJemxOZVF3U0NlWE01MUdZcU8vNTN3R3VsRm1tb0Z4aEF4NDFpK1F2clZpeHBicnAK",
+      "endpoints": [
+        "https://github.com/TrongatesLegacy/augur/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

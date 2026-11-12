@@ -77,6 +77,11 @@ pub fn run(cli: Cli) -> CliResult {
             if saved.is_none() {
                 db::settle(&conn, &state.recent, |id| site::duel(id).ok())?;
             }
+            let over = state.home.is_some() && !state.picks_open() && !state.live;
+            if over && saved.is_none() {
+                println!("The last fight is over and the next isn't up yet ({}): nothing to call.", state.title);
+                return print_tally(&conn, &model);
+            }
             match predict::predict(&state, &predict::Options { lookups: !quick, db_path: settings::db_path(&dir), settings: model.clone() })
             {
                 None => println!("No duel up right now ({}).", if state.title.is_empty() { "idle" } else { &state.title }),

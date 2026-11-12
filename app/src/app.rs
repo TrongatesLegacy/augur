@@ -229,7 +229,10 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
                         (Some(h), Some(a)) => format!("{}|{}|{}|{}|{}|{}", h.actor, a.actor, h.pal, a.pal, est("home"), est("away")),
                         _ => String::new(),
                     };
-                    if key != last_key {
+                    // once a fight is over ("Last duel") the site still shows both pals but not the tale of the
+                    // tape, and the pal head-to-head already includes it: don't call it again from that
+                    let callable = key.is_empty() || state.picks_open() || state.live;
+                    if key != last_key && callable {
                         let settings = shared.settings.lock().unwrap().clone();
                         let p = predict::predict(
                             &state,

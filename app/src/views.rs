@@ -270,6 +270,8 @@ pub struct ModelView {
     pub calls_right: usize,
     pub calibration: Option<(usize, usize, f64, f64)>,
     pub backtest: Option<Backtest>,
+    /// the algorithm's eras (version or settings changes), newest first, and how each did
+    pub eras: Vec<history::Era>,
     /// the model's last self-tuning run, and the changes it has kept (newest first)
     pub learned: Option<learn::Learned>,
     pub changes: Vec<learn::Change>,
@@ -308,6 +310,7 @@ pub fn model_view(
         live_right,
         live_total,
         backtest: Some(backtest),
+        eras: history::eras(&calls).into_iter().take(4).collect(),
         learned: learn::load(conn),
         changes: learn::changes(conn),
         auto,

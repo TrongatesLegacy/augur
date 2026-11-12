@@ -109,6 +109,8 @@ const ADDED: &[(&str, &str, &str)] = &[
     ("predictions", "late_only", "INTEGER DEFAULT 0"),
     // where each side's stats came from when called: "home: from their box; away: shown"
     ("predictions", "stats_from", "TEXT"),
+    // the Augur version that made the call, to compare results across algorithm changes
+    ("predictions", "app_version", "TEXT"),
 ];
 
 fn migrate(conn: &Connection) -> Result<()> {
@@ -344,6 +346,9 @@ pub struct NewCall {
     /// where each side's stats came from ("home: from their box; away: shown")
     #[serde(default)]
     pub stats_from: String,
+    /// the Augur version that made it
+    #[serde(default)]
+    pub version: String,
 }
 
 fn yes() -> bool {
@@ -414,7 +419,7 @@ pub fn add_call(conn: &Connection, c: &NewCall) -> Result<i64> {
             id
         }
     };
-    conn.execute("UPDATE predictions SET stats_from = ?1 WHERE id = ?2", params![c.stats_from, id])?;
+    conn.execute("UPDATE predictions SET stats_from = ?1, app_version = ?2 WHERE id = ?3", params![c.stats_from, c.version, id])?;
     save_fighters(conn, id, c)?;
     Ok(id)
 }
@@ -515,6 +520,11 @@ pub struct CallRecord {
     /// first called after picks closed: not a call you could bet on
     #[serde(default)]
     pub late_only: bool,
+    /// the Augur version and model settings (JSON) that made it: an "era" of the algorithm
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub model: String,
 }
 
 impl CallRecord {
@@ -576,7 +586,8 @@ pub fn settled_all(conn: &Connection) -> Result<Vec<CallRecord>> {
     let mut st = conn.prepare(
         "SELECT p.id, COALESCE(p.seen_at, 0), p.home_owner, p.away_owner, p.home_pal, p.away_pal, p.pick, p.prob, p.p_stats, p.p_species,
                 p.p_h2h, p.home_species_w, p.home_species_l, p.away_species_w, p.away_species_l, p.pal_h2h_home, p.pal_h2h_away,
-                p.duel_id, d.winner, d.fought_at, d.ko, d.winner_hp_left, p.stake, p.late_pick, p.late_prob, COALESCE(p.late_only, 0)
+                p.duel_id, d.winner, d.fought_at, d.ko, d.winner_hp_left, p.stake, p.late_pick, p.late_prob, COALESCE(p.late_only, 0),
+                COALESCE(p.app_version, ''), COALESCE(p.model, '')
          FROM predictions p LEFT JOIN duels d ON d.id = p.duel_id WHERE p.status = 'settled' AND d.winner IS NOT NULL ORDER BY p.id",
     )?;
     let calls: Vec<CallRecord> = st
@@ -608,6 +619,8 @@ pub fn settled_all(conn: &Connection) -> Result<Vec<CallRecord>> {
                 fighters: None,
                 late: r.get::<_, Option<String>>(23)?.zip(r.get::<_, Option<f64>>(24)?),
                 late_only: r.get::<_, i64>(25)? == 1,
+                version: r.get(26)?,
+                model: r.get(27)?,
             })
         })?
         .collect::<Rq<_>>()?;
@@ -842,6 +855,7 @@ mod tests {
             away: fighter("B"),
             picks_open: true,
             stats_from: String::new(),
+            version: String::new(),
         }
     }
 

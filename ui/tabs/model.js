@@ -35,6 +35,14 @@ function knobNote(k, auto) {
 // a headline number with its picture on the left
 const kpi = (pic, label, value, sub) => `<div class="panel kp">${pic}<div><span class="label">${label}</span><b>${value}</b><small>${sub}</small></div></div>`;
 
+// how the calls did since the algorithm last changed (a new version or new settings), next to before
+function erasBlock(eras) {
+  if (!eras?.length) return '';
+  const row = (e, label) =>
+    `<div class="era"><span>${label}<small>${e.changes.length ? esc(e.changes.map((c) => c.replace(/^[A-Z_]+/, (k) => KNOBS[k]?.[0] || k)).join(' · ')) : e.version ? `version ${esc(e.version)}` : 'before versions were recorded'}</small></span><b class="${e.total && e.right / e.total >= 0.6 ? 'ok' : ''}">${fmt(e.right)}/${fmt(e.total)}</b><span class="muted">${e.total ? pct(e.right / e.total) : '—'}</span></div>`;
+  return `<div class="eras"><span class="label">By algorithm</span>${eras.map((e, i) => row(e, i === 0 ? `Since ${ago(e.since)}` : `From ${ago(e.since)}`)).join('')}</div>`;
+}
+
 function backfillLine(b) {
   if (b.phase === 'setup') return 'waiting for setup';
   if (!b.phase) return 'waiting';
@@ -58,6 +66,7 @@ export async function render(app) {
     : `<div class="panel"><div class="ph"><h3>Learning</h3><span>${l ? `checked ${ago(l.at_ms)}` : 'first check soon'}</span></div>${
         l
           ? `<div class="lrn"><div><b class="cond">${fmt(l.past_duels)}</b><small>past duels</small></div><div><b class="cond">${fmt(l.live_calls)}</b><small>real calls</small></div><div><b class="cond ${gain > 0 ? 'ok' : ''}">${(c.past_right_after * 100).toFixed(1)}%</b><small>right on the ${fmt(c.past_n)} newest${gain > 0 ? `, up ${(gain * 100).toFixed(1)}` : ''}</small></div></div>
+             ${erasBlock(m.eras)}
              <div class="small" style="color:var(--t2);margin-top:8px">Re-fits every setting after each result (and every 25 duels the backfill brings in), and keeps a change only if it predicts the newest duels better than before.</div>`
           : `<div class="small" style="color:var(--t2)">Augur re-fits its settings on your duels and calls a minute after it starts, then whenever new results come in.</div>`
       }</div>`;

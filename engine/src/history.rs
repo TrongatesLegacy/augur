@@ -66,6 +66,55 @@ pub fn tally(calls: &[CallRecord], since: Option<&str>) -> Tally {
     t
 }
 
+/// A stretch of calls made by the same Augur version with the same model settings, and how it did.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Era {
+    /// the Augur version ("" for calls made before versions were recorded)
+    pub version: String,
+    /// what changed from the era before: "version 0.1.4 → 0.1.5", "TYPE_BONUS 1.4 → 1.5"
+    pub changes: Vec<String>,
+    /// when its first call was made (site clock, ms)
+    pub since: i64,
+    pub right: usize,
+    pub total: usize,
+}
+
+/// The algorithm's eras, newest first: a new one starts whenever a call was made by another version or with other
+/// model settings (the self-tuning kept a change, or you set your own).
+pub fn eras(calls: &[CallRecord]) -> Vec<Era> {
+    let mut out: Vec<(Era, String)> = vec![];
+    for c in calls {
+        let same = out.last().is_some_and(|(e, m)| e.version == c.version && *m == c.model);
+        if !same {
+            let changes = match out.last() {
+                None => vec![],
+                Some((prev, pm)) => {
+                    let mut ch = vec![];
+                    if prev.version != c.version {
+                        let name = |v: &str| if v.is_empty() { "earlier".to_string() } else { v.to_string() };
+                        ch.push(format!("version {} → {}", name(&prev.version), name(&c.version)));
+                    }
+                    let parse = |m: &str| serde_json::from_str::<Settings>(m).ok();
+                    if let (Some(a), Some(b)) = (parse(pm), parse(&c.model)) {
+                        for k in Settings::KEYS {
+                            let (x, y) = (a.get(k).unwrap_or_default(), b.get(k).unwrap_or_default());
+                            if (x - y).abs() > 1e-9 {
+                                ch.push(format!("{k} {x} → {y}"));
+                            }
+                        }
+                    }
+                    ch
+                }
+            };
+            out.push((Era { version: c.version.clone(), changes, since: c.seen_at, ..Default::default() }, c.model.clone()));
+        }
+        let (e, _) = out.last_mut().unwrap();
+        e.total += 1;
+        e.right += c.right() as usize;
+    }
+    out.into_iter().rev().map(|(e, _)| e).collect()
+}
+
 /// A past call re-run with other settings.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Rescored {
@@ -495,5 +544,26 @@ mod tests {
         assert_eq!(right, 14, "the seed's calls were made with today's settings, so re-scoring them changes nothing");
         let best = tune(&calls, &Settings::default(), &[("TYPE_BONUS", vec![1.0, 1.5, 2.0])]);
         assert_eq!(best.len(), 3);
+    }
+
+    /// Results split where the version or the settings changed, newest first, saying what changed.
+    #[test]
+    fn eras_split_on_version_and_settings() {
+        let conn = crate::seed::store();
+        let mut calls = db::settled(&conn).unwrap();
+        let model = |tb: f64| serde_json::to_string(&Settings { type_bonus: tb, ..Default::default() }).unwrap();
+        for (i, c) in calls.iter_mut().enumerate() {
+            (c.version, c.model) = match i {
+                0..=9 => (String::new(), model(1.5)),
+                10..=14 => ("0.1.5".into(), model(1.5)),
+                _ => ("0.1.5".into(), model(1.4)),
+            };
+        }
+        let e = eras(&calls);
+        assert_eq!(e.len(), 3);
+        assert_eq!((e[2].total, e[1].total, e[0].total), (10, 5, calls.len() - 15));
+        assert_eq!(e[1].changes, ["version earlier → 0.1.5"]);
+        assert_eq!(e[0].changes, ["TYPE_BONUS 1.5 → 1.4"]);
+        assert_eq!(e.iter().map(|x| x.right).sum::<usize>(), calls.iter().filter(|c| c.right()).count());
     }
 }

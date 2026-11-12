@@ -55,7 +55,7 @@ pub fn fixture_data() -> Value {
     let recent = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64 - 120_000;
     let p = predict::predict(&state, &predict::Options { lookups: false, db_path: PathBuf::from("/nonexistent"), settings: s.clone() })
         .unwrap();
-    let stake = stake::suggest(&p.pick, p.prob, &StakeSettings::default(), &bets::odds(&conn).unwrap(), bets::balance(&conn));
+    let stake = stake::suggest(&p.pick, p.prob, &StakeSettings::default(), &bets::odds(&conn).unwrap());
     let live = views::LiveView {
         title: state.title.clone(),
         picks_open: true,
@@ -69,7 +69,7 @@ pub fn fixture_data() -> Value {
     };
     let roster = Ok(site::parse_roster(&page("user-trongateslegacy.html")));
     let preview: Vec<_> = [0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9]
-        .map(|p| (p, stake::suggest("home", p, &StakeSettings::default(), &bets::odds(&conn).unwrap(), bets::balance(&conn))))
+        .map(|p| (p, stake::suggest("home", p, &StakeSettings::default(), &bets::odds(&conn).unwrap())))
         .to_vec();
     json!({
         "live": live,

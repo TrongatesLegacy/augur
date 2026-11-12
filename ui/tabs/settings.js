@@ -16,7 +16,7 @@ const PAGES = [
 ];
 
 const STRATEGY = {
-  kelly: ['Kelly', 'More on bigger edges, nothing when there’s none'],
+  scaled: ['Scale with chance', 'The more sure Augur is, the bigger the bet'],
   fixed: ['Fixed amount', 'The same on every call'],
   default_or_max: ['Default or max', 'A bare !h, or !h all on strong calls'],
 };
@@ -68,9 +68,9 @@ function staking(s, preview) {
     .map(([k, [name, sub]]) => `<button class="opt ${st.strategy === k ? 'on' : ''}" data-strategy="${k}"><b>${name}</b><small>${sub}</small></button>`)
     .join('');
   const specific =
-    st.strategy === 'kelly'
-      ? row('Kelly share', 'a quarter is steadier when the chance is a little off', `<select data-st="kelly_fraction">${[[0.125, 'An eighth'], [0.25, 'A quarter'], [0.5, 'Half'], [1, 'Full']].map(([v, l]) => `<option value="${v}" ${st.kelly_fraction === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`) +
-        row('Balance when signed out', 'Kelly sizes from your balance; signed in, Augur reads it', num('bankroll', 'placeholder="Not set" style="width:120px"'))
+    st.strategy === 'scaled'
+      ? row('Bets start rising from', 'below it, the default bet (a bare !h)', percent('scale_from', '55')) +
+        row('Up to the max at', 'from here up, !h all', percent('scale_to', '85'))
       : st.strategy === 'fixed'
         ? row('Amount', 'credits on every call', num('fixed_amount', 'style="width:120px"'))
         : row('Max bet from', 'the chance where !h all starts; below it a bare !h', percent('max_from', '70'));
@@ -272,8 +272,6 @@ export async function render(app) {
       const k = input.dataset.st;
       const v = input.value.trim();
       if (input.dataset.pct) st[k] = v ? Math.min(99, Math.max(1, +v)) / 100 : k === 'skip_below' ? null : st[k];
-      else if (k === 'bankroll') st[k] = v ? Math.max(0, Math.round(+v)) : null;
-      else if (k === 'kelly_fraction') st[k] = +v;
       else if (v) st[k] = Math.max(0, Math.round(+v));
       save(true);
     };

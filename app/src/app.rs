@@ -73,7 +73,7 @@ pub fn now_ms() -> u64 {
 
 /// The stake for a call: the staking settings, the payout the developer's wins have had and their last balance.
 fn stake_for(conn: &rusqlite::Connection, settings: &AppSettings, pick: &str, prob: f64) -> Stake {
-    stake::suggest(pick, prob, &settings.staking, &bets::odds(conn).unwrap_or_default(), bets::balance(conn))
+    stake::suggest(pick, prob, &settings.staking, &bets::odds(conn).unwrap_or_default())
 }
 
 /// A 32px tray icon: a gold ring filled to the chance around a dot in the favourite's colour (cyan home, pink away).
@@ -358,8 +358,7 @@ fn fit_zoom(w: &tauri::WebviewWindow) {
 fn stake_preview(shared: tauri::State<'_, Arc<Shared>>, staking: stake::StakeSettings) -> Cmd<Vec<(f64, Stake)>> {
     let conn = shared.db()?;
     let odds = bets::odds(&conn).unwrap_or_default();
-    let balance = bets::balance(&conn);
-    Ok([0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9].iter().map(|&p| (p, stake::suggest("home", p, &staking, &odds, balance))).collect())
+    Ok([0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9].iter().map(|&p| (p, stake::suggest("home", p, &staking, &odds))).collect())
 }
 
 fn toggle_popover(app: &AppHandle) {

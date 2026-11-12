@@ -81,7 +81,7 @@ pub fn off_air(conn: &Connection, staking: &StakeSettings) -> R<OffAir> {
             calls.iter().filter(|c| c.fought_at.as_deref().is_some_and(|f| f.starts_with(&day))).cloned().collect();
         out.last_stream = Some((day, right, total, history::tally(&on_day, None).best_run));
         let synced = db::meta_get(conn, "bets_synced_at")?.and_then(|v| v.parse().ok()).unwrap_or(0);
-        let c = bets::compare(&on_day, &db::bets(conn)?, staking, &bets::odds(conn)?, bets::balance(conn), synced);
+        let c = bets::compare(&on_day, &db::bets(conn)?, staking, &bets::odds(conn)?, synced);
         if c.bet_on > 0 {
             out.last_bets = Some((c.yours, c.augur));
         }
@@ -172,7 +172,7 @@ pub fn bets_view(conn: &Connection, s: &StakeSettings, range: &str, now_secs: u6
         .collect();
     let synced_at = db::meta_get(conn, "bets_synced_at")?.and_then(|v| v.parse().ok());
     let balance = bets::balance(conn);
-    let mut comparison = bets::compare(&calls, &bets, s, &bets::odds(conn)?, balance, synced_at.unwrap_or(0));
+    let mut comparison = bets::compare(&calls, &bets, s, &bets::odds(conn)?, synced_at.unwrap_or(0));
     comparison.fights.truncate(200);
     let stored = conn.query_row("SELECT COUNT(*) FROM bets", [], |r| r.get::<_, i64>(0))? as usize;
     Ok(BetsView { comparison, balance, synced_at, stored, import })
@@ -198,7 +198,7 @@ pub fn you_view(conn: &Connection, s: &StakeSettings) -> R<YouView> {
     let synced = db::meta_get(conn, "bets_synced_at")?.and_then(|v| v.parse().ok()).unwrap_or(0);
     let calls = db::settled(conn)?;
     let t = history::tally(&calls, None);
-    let mut comparison = bets::compare(&calls, &db::bets(conn)?, s, &bets::odds(conn)?, bets::balance(conn), synced);
+    let mut comparison = bets::compare(&calls, &db::bets(conn)?, s, &bets::odds(conn)?, synced);
     comparison.fights.clear();
     Ok(YouView {
         name: db::meta_get(conn, "account")?,

@@ -16,7 +16,7 @@ const todayIso = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60
 // the next duel: each owner's face and name on their side, a long name trimmed with "…" (the full one on hover)
 function nextUp(queue) {
   const [q, ...rest] = queue;
-  const side = (name, cls) => `<span class="nu-s ${cls}" title="${esc(name)}">${face(name, `${cls === 'h' ? 'h' : 'a'} av`, 26)}<span>${esc(name)}</span></span>`;
+  const side = (name, cls) => `<span class="nu-s ${cls}" title="${esc(name)}">${face(name, `${cls === 'h' ? 'h' : 'a'} av`, 24)}<span>${esc(name)}</span></span>`;
   return `<div class="nu"><div class="nu-t"><b>Next up</b>${rest.length ? `<small>+${rest.length} queued</small>` : ''}</div>
     <div class="nu-m">${side(q.home, 'h')}<span class="nu-v">vs</span>${side(q.away, 'a')}</div></div>`;
 }

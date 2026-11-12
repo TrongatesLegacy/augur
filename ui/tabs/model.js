@@ -17,6 +17,7 @@ export const KNOBS = {
   SPECIES_WEIGHT: ['Species records', 0, 2.5, (v) => `${v}`],
   PAL_H2H_WEIGHT: ['Pal head to head', 0, 1.5, (v) => `${v}`],
   COOLDOWN_EXP: ['Cooldown passives', 0, 1, (v) => `^${v}`],
+  HIT_WEIGHT: ['Real hit size', 0, 1, (v) => `^${v}`],
 };
 
 // what the learner last did with a setting, as a line under its name

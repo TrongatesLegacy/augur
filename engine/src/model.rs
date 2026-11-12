@@ -31,6 +31,10 @@ pub struct Settings {
     /// with cooldown passives say otherwise)
     #[serde(default = "half")]
     pub cooldown_exp: f64,
+    /// how much a move's real hit size in fight tapes counts on top of its listed power (0 = not at all, the
+    /// start; held-back past duels preferred about 0.25 on 12 Nov)
+    #[serde(default)]
+    pub hit_weight: f64,
 }
 
 fn half() -> f64 {
@@ -47,14 +51,15 @@ impl Default for Settings {
             species_weight: 1.2,
             pal_h2h_weight: 0.5,
             cooldown_exp: 0.5,
+            hit_weight: 0.0,
         }
     }
 }
 
 impl Settings {
     /// Every setting's key, as settings.json and `augur tune` name them.
-    pub const KEYS: [&'static str; 7] =
-        ["TYPE_BONUS", "TYPE_RESIST", "POWER_EXP", "STATS_STEEPNESS", "SPECIES_WEIGHT", "PAL_H2H_WEIGHT", "COOLDOWN_EXP"];
+    pub const KEYS: [&'static str; 8] =
+        ["TYPE_BONUS", "TYPE_RESIST", "POWER_EXP", "STATS_STEEPNESS", "SPECIES_WEIGHT", "PAL_H2H_WEIGHT", "COOLDOWN_EXP", "HIT_WEIGHT"];
 
     pub fn get(&self, key: &str) -> Option<f64> {
         Some(match key {
@@ -65,6 +70,7 @@ impl Settings {
             "SPECIES_WEIGHT" => self.species_weight,
             "PAL_H2H_WEIGHT" => self.pal_h2h_weight,
             "COOLDOWN_EXP" => self.cooldown_exp,
+            "HIT_WEIGHT" => self.hit_weight,
             _ => return None,
         })
     }
@@ -80,6 +86,7 @@ impl Settings {
             "SPECIES_WEIGHT" => c.species_weight = v,
             "PAL_H2H_WEIGHT" => c.pal_h2h_weight = v,
             "COOLDOWN_EXP" => c.cooldown_exp = v,
+            "HIT_WEIGHT" => c.hit_weight = v,
             _ => {}
         }
         c
@@ -93,6 +100,13 @@ pub struct Move {
     pub power: f64,
     #[serde(default = "one")]
     pub lv: u32,
+    /// how hard it really hits in fight tapes, against the average move (1 = average, or not enough tapes)
+    #[serde(default = "unit", skip_serializing_if = "is_unit")]
+    pub hit: f64,
+}
+
+fn is_unit(x: &f64) -> bool {
+    (*x - 1.0).abs() < 1e-12
 }
 
 fn one() -> u32 {
@@ -234,13 +248,15 @@ pub fn resolve(stats: &HashMap<String, StatLine>, passives: &[String]) -> ([f64;
     (vals, est)
 }
 
-/// Average hitting power over every usable move: power ** POWER_EXP times the type multiplier.
+/// Average hitting power over every usable move: power ** POWER_EXP times the type multiplier, times its real hit
+/// size in tapes ** HIT_WEIGHT.
 pub fn strength(s: &Settings, skills: &[Move], opp_types: &[String]) -> f64 {
     let usable: Vec<&Move> = skills.iter().filter(|m| m.lv <= 70).collect();
     if usable.is_empty() {
         return 100f64.powf(s.power_exp) * type_mult(s, "neutral", opp_types);
     }
-    usable.iter().map(|m| m.power.powf(s.power_exp) * type_mult(s, &m.el, opp_types)).sum::<f64>() / usable.len() as f64
+    usable.iter().map(|m| m.power.powf(s.power_exp) * type_mult(s, &m.el, opp_types) * m.hit.powf(s.hit_weight)).sum::<f64>()
+        / usable.len() as f64
 }
 
 fn logit(p: f64) -> f64 {

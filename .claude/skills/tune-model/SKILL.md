@@ -37,5 +37,6 @@ Something the model can't see (a passive, an unlisted move, an owner's rating) g
 - **Type edge:** 1.5x. The 4,702-duel history test prefers 1.25-1.5x; per-hit tapes show about 1.1x; when only one side's *species* types beat the other's, that side won 48% of 1,292 duels. The first 19 live calls prefer 2x by a hair.
 - **Resisted moves** don't hit softer per hit, yet `type_resist` 1.5 still scores best in both tests.
 - **Cooldown passives** start at half strength (`COOLDOWN_EXP` 0.5) and learn once 60 calls are in, 15 of them with a cooldown passive.
+- **Real hit size** (`HIT_WEIGHT`, starts at 0): each move's mean hit in the tapes against the average move. On 12 Nov a weight of 0.25 improved the held-back loss 0.6582 → 0.6555 in a one-off test, but the learner kept 0 on its own fit; it switches on if the evidence grows. Rockburst hits 1.76× the average move.
 - **Move power** matters a little and unevenly (best hits by power band: 40-80: 9%, 81-250: 13%, 251-450: 19%, 451+: 13%).
 - **Owners** were tested and left out: over 4,702 duels (fit on the oldest 3,500, checked on the rest) an owner's record alone got 50.4% right, and added to the species records it changed nothing (58.4% against 58.7%).

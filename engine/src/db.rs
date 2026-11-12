@@ -176,9 +176,32 @@ pub fn moves_of(conn: &Connection, pal: &str) -> Result<Vec<Move>> {
             el: r.get::<_, Option<String>>(1)?.unwrap_or_else(|| "neutral".into()),
             power: r.get::<_, i64>(2)? as f64,
             lv: r.get(3)?,
+            hit: 1.0,
         })
     })?;
     Ok(rows.collect::<Rq<_>>()?)
+}
+
+/// How hard each move really hits in the stored fight tapes, against the average move: its mean % of the target's
+/// HP per hit, pulled toward the average by 10 hits' worth so rare moves stay near 1. Only tapes of duels before
+/// `before` when given (so a test on newer duels doesn't see their own tapes).
+pub fn hit_sizes(conn: &Connection, before: Option<u64>) -> Result<std::collections::HashMap<String, f64>> {
+    let mut st = conn.prepare("SELECT move, AVG(pct), COUNT(*) FROM hits WHERE move != '' AND duel_id < ? GROUP BY move")?;
+    let rows: Vec<(String, f64, f64)> =
+        st.query_map([before.map_or(i64::MAX, |b| b as i64)], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Rq<_>>()?;
+    let hits: f64 = rows.iter().map(|r| r.2).sum();
+    if hits == 0.0 {
+        return Ok(Default::default());
+    }
+    let mean = rows.iter().map(|r| r.1 * r.2).sum::<f64>() / hits;
+    Ok(rows.into_iter().map(|(m, avg, n)| (m, ((avg * n + mean * 10.0) / (n + 10.0)) / mean)).collect())
+}
+
+/// Sets each move's real hit size from `hit_sizes`.
+pub fn with_hit_sizes(moves: &mut [Move], sizes: &std::collections::HashMap<String, f64>) {
+    for m in moves {
+        m.hit = (sizes.get(&m.name).copied().unwrap_or(1.0) * 1000.0).round() / 1000.0;
+    }
 }
 
 pub fn save_species(conn: &Connection, sp: &Species) -> Result<()> {
@@ -533,7 +556,7 @@ impl CallRecord {
     }
 }
 
-fn fighters_of(conn: &Connection, id: i64) -> Result<Option<(CallFighter, CallFighter)>> {
+fn fighters_of(conn: &Connection, id: i64, sizes: &std::collections::HashMap<String, f64>) -> Result<Option<(CallFighter, CallFighter)>> {
     let mut st = conn.prepare_cached(
         "SELECT side, pal, types, hp, atk, def, hp_iv, atk_iv, def_iv, passives, hidden_boost, speed FROM fighters WHERE prediction_id = ?",
     )?;
@@ -567,6 +590,7 @@ fn fighters_of(conn: &Connection, id: i64) -> Result<Option<(CallFighter, CallFi
     let mut away = None;
     for (side, mut f) in rows {
         f.fighter.skills = moves_of(conn, &f.fighter.pal)?;
+        with_hit_sizes(&mut f.fighter.skills, sizes);
         if side == "home" {
             home = Some(f)
         } else {
@@ -624,10 +648,11 @@ pub fn settled_all(conn: &Connection) -> Result<Vec<CallRecord>> {
             })
         })?
         .collect::<Rq<_>>()?;
+    let sizes = hit_sizes(conn, None)?;
     calls
         .into_iter()
         .map(|mut c| {
-            c.fighters = fighters_of(conn, c.id)?;
+            c.fighters = fighters_of(conn, c.id, &sizes)?;
             Ok(c)
         })
         .collect()
@@ -951,5 +976,28 @@ mod tests {
         let learned: Vec<i64> = settled_all(&conn).unwrap().iter().map(|c| c.id).collect();
         assert_eq!((counted, learned), (vec![id], vec![id, late_id]));
         assert_eq!(settled(&conn).unwrap()[0].late, Some(("away".into(), 0.575)));
+    }
+
+    /// A move's real hit size is its mean % per hit against the average move, pulled toward 1 when there are few
+    /// hits, and only from tapes before a duel when asked.
+    #[test]
+    fn hit_sizes_from_tapes() {
+        let conn = open_memory().unwrap();
+        for (duel, mv, pct) in [(1, "Big", 40), (1, "Small", 10), (2, "Big", 40), (2, "Small", 10), (3, "Big", 90)] {
+            conn.execute("INSERT OR IGNORE INTO duels (id, winner) VALUES (?, 'home')", [duel]).unwrap();
+            let seq: i64 = conn.query_row("SELECT COUNT(*) FROM hits", [], |r| r.get(0)).unwrap();
+            conn.execute(
+                "INSERT INTO hits (duel_id, seq, side, t, move, pct) VALUES (?1, ?2, 'home', 1, ?3, ?4)",
+                rusqlite::params![duel, seq, mv, pct],
+            )
+            .unwrap();
+        }
+        let before = hit_sizes(&conn, Some(3)).unwrap();
+        // mean 25% per hit; Big 40% over 2 hits pulled toward 25 by 10 hits' worth = 27.5 / 25
+        assert!((before["Big"] - 1.1).abs() < 1e-9 && (before["Small"] - 0.9).abs() < 1e-9, "{before:?}");
+        assert!(hit_sizes(&conn, None).unwrap()["Big"] > before["Big"], "duel 3's tape counts once it's allowed");
+        let mut moves = vec![Move { name: "Big".into(), el: "neutral".into(), power: 100.0, lv: 1, hit: 1.0 }];
+        with_hit_sizes(&mut moves, &before);
+        assert_eq!(moves[0].hit, 1.1);
     }
 }

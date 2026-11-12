@@ -716,7 +716,11 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 .cres { display: flex; align-items: center; gap: 7px; margin-top: 7px; font-weight: 700; font-size: 13px; white-space: nowrap; }
 .cnotes { display: grid; gap: 1px; max-width: 100%; font-size: 11.5px; color: var(--t3); line-height: 1.4; text-align: center; }
 .cnotes span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cgrid { display: grid; grid-template-columns: 1.25fr 1fr 1fr; gap: 14px; }
+.cgrid { display: grid; grid-template-columns: 1.25fr 1fr 1fr; grid-template-rows: minmax(0, 1fr); gap: 14px; min-height: 0; }
+/* the breakdown never grows past the window: each panel's contents scroll inside it instead */
+.cgrid > * { min-height: 0; }
+.cgrid .stackc > .panel { min-height: 0; }
+.cgrid .stackc > .panel.col > .fillin, .cgrid > .panel.col > .fillin { flex: 1 1 0; min-height: 0; overflow: auto; }
 .cgrid > .panel.col > .fillin { flex: 1 1 0; min-height: 0; overflow: auto; }
 .hpc { display: block; width: 100%; height: auto; }
 .hpc .grid line { stroke: rgba(255,255,255,.06); }
@@ -770,3 +774,5 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 .cml small { font-size: 10px; color: var(--t3); text-transform: uppercase; letter-spacing: .06em; }
 .cml b { font: 700 13px var(--cond); text-align: right; color: var(--t1); } .cml b.ok { color: var(--ok); } .cml b.bad { color: var(--bad); }
 .cml em { font-style: normal; font: 600 10px var(--sans); } .cml em.ok { color: var(--ok); } .cml em.bad { color: var(--bad); }
+.cmodel { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); display: grid; gap: 8px; }
+.cmh { display: flex; justify-content: space-between; align-items: baseline; }

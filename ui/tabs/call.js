@@ -138,10 +138,10 @@ function damage(d) {
 }
 
 // the model's sum on the log-odds scale: each factor moves the call toward home (left) or away (right), then the total
-function waterfall(d) {
+function waterfall(d, model) {
   const c = d.call;
   const m = d.model;
-  if (!m) return `<div class="panel col"><div class="ph"><h3>How Augur called it</h3></div>${empty('eye', 'No numbers kept for this call', 'It was logged before Augur saved its factors and fighters.')}</div>`;
+  if (!m) return `<div class="panel col grow"><div class="ph"><h3>How Augur called it</h3></div>${empty('eye', 'No numbers kept for this call', 'It was logged before Augur saved its factors and fighters.')}${model}</div>`;
   const steps = [];
   let run = 0;
   for (const f of m.factors) {
@@ -171,9 +171,9 @@ function waterfall(d) {
   const total = `<div class="wf total"><div class="wl"><b>Together</b><small>log-odds ${signedLogit(m.total)}</small></div>
     <div class="wt"><i class="gold" style="left:${Math.min(50, at(m.total))}%;width:${Math.abs(at(m.total) - 50)}%"></i></div>
     <div class="wv"><b class="gold">${pct(fav === 'home' ? m.p_home : 1 - m.p_home)}</b><small>${esc(pal(c, fav))}</small></div></div>`;
-  return `<div class="panel"><div class="ph"><h3>How Augur called it</h3><span>home ◂ ▸ away</span></div>
-    ${rows}${total}
-    ${m.rescored ? '<div class="small">Re-run on the fighters it saw with its settings: the call didn’t keep its factors.</div>' : ''}</div>`;
+  return `<div class="panel col grow"><div class="ph"><h3>How Augur called it</h3><span>home ◂ ▸ away</span></div>
+    <div class="fillin">${rows}${total}
+    ${m.rescored ? '<div class="small">Re-run on the fighters it saw with its settings: the call didn’t keep its factors.</div>' : ''}${model}</div></div>`;
 }
 
 function settings(d) {
@@ -181,9 +181,10 @@ function settings(d) {
   const s = d.settings;
   const chips = s ? SETTINGS.filter(([k]) => s[k] != null).map(([k, l, f]) => `<span class="chip">${l} <b>${f(s[k])}</b></span>`).join('') : '<span class="small">Not saved with this call.</span>';
   const stake = d.stake_cmd ? `suggested <b class="gold">${esc(d.stake_cmd)}</b>` : c.stake === 0 ? 'said sit it out' : '';
-  return `<div class="panel col grow"><div class="ph"><h3>The model it used</h3><span>${c.version ? `Augur ${esc(c.version)}` : 'version not recorded'}</span></div>
-    <div class="fillin"><div class="chips">${chips}</div>
-    <div class="small cmeta">${[stake, c.fought_at ? `fought ${esc(c.fought_at.slice(0, 16).replace('T', ' '))} UTC` : '', d.fight ? `duel #${d.fight.id}` : ''].filter(Boolean).join(' · ')}</div></div></div>`;
+  // shown at the foot of How Augur called it: one panel fewer, so the page fits small windows
+  return `<div class="cmodel"><div class="cmh"><span class="label">The model it used</span><span class="small">${c.version ? `Augur ${esc(c.version)}` : 'version not recorded'}</span></div>
+    <div class="chips">${chips}</div>
+    <div class="small cmeta">${[stake, c.fought_at ? `fought ${esc(c.fought_at.slice(0, 16).replace('T', ' '))} UTC` : '', d.fight ? `duel #${d.fight.id}` : ''].filter(Boolean).join(' · ')}</div></div>`;
 }
 
 // the tale of the tape: stats, talent rolls, move strength, passives and the type-edge moves
@@ -237,7 +238,7 @@ export async function render(app, back) {
       headline(d) +
       `<div class="cgrid grow">
         <div class="stackc">${howItWent(d)}${damage(d)}</div>
-        <div class="stackc">${waterfall(d)}${settings(d)}</div>
+        <div class="stackc">${waterfall(d, settings(d))}</div>
         ${tape(d)}
       </div>`;
   }

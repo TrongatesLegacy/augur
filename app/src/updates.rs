@@ -215,6 +215,7 @@ pub async fn update_install(app: AppHandle, shared: tauri::State<'_, Arc<Shared>
         return Err(e.to_string());
     }
     shared.stop.store(true, Ordering::Relaxed);
+    crate::app::remember_window(&app);
     app.restart();
 }
 

@@ -6,6 +6,8 @@
   --sans: Inter, -apple-system, "Segoe UI", system-ui, sans-serif;
 }
 * { box-sizing: border-box; }
+/* no rubber-band bounce or scroll chaining: the window and every box that scrolls stop at their ends */
+html, body, * { overscroll-behavior: none; }
 html, body { margin: 0; height: 100%; background: var(--ink); color: var(--t1); font: 14px/1.4 var(--sans); -webkit-user-select: none; user-select: none; }
 body.app { background: radial-gradient(70% 70% at 75% -10%, #2a2150 0%, #15122a 42%, #0d0b16 100%) fixed; }
 button { font: inherit; color: inherit; cursor: pointer; }
@@ -522,7 +524,7 @@ body.pop { padding: 7px 9px 12px; box-sizing: border-box; }
 .bsts { display: flex; gap: 8px; }
 .bst { display: grid; gap: 1px; padding: 5px 12px; border-radius: 10px; background: rgba(255,255,255,.04); border: 1px solid var(--line); font-size: 11.5px; color: var(--t3); }
 .bst b { font: 700 17px var(--cond); color: var(--t1); letter-spacing: .03em; }
-table.sticky thead th { position: sticky; top: 0; background: #17142a; z-index: 1; }
+table.sticky thead th { position: sticky; top: 0; background: #17142a; z-index: 1; box-shadow: 0 -16px 0 #17142a; } /* the shadow covers rows above it, should a bounce leave a gap */
 .avg { display: grid; grid-template-columns: minmax(40px, max-content) 1fr; gap: 6px; align-items: center; min-width: 70px; }
 .pmoves th, .pmoves td { padding-left: 6px; padding-right: 6px; }
 .avg i { display: block; height: 5px; border-radius: 3px; background: linear-gradient(90deg, rgba(255,207,107,.35), var(--gold)); }

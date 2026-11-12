@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 /// Rough Lv 70 stat fits from observed duels: stat = m + k * base * (1 + 0.003 * IV). Used only when the site
-/// hides a side's stats (the owner has several of that pal).
+/// hides a side's stats until the bell and its owner's box doesn't show them either.
 const FIT: [(&str, f64, f64); 3] = [("HP", 979.0, 48.5), ("ATK", 98.0, 5.27), ("DEF", 136.0, 6.65)];
 pub const ASSUMED_IV: f64 = 50.0;
 

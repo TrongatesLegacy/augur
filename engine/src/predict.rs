@@ -1,7 +1,7 @@
 //! A whole prediction from the live state: the model's pick plus everything the screens and the chat lines show.
 
 use crate::db::{self, CallFighter, NewCall};
-use crate::model::{self, Fighter, Score, Settings};
+use crate::model::{self, Fighter, Score, Settings, StatLine};
 use crate::site::{self, DuelRow, Rivalry, State, StateSide, Tale};
 use crate::voices;
 use serde::{Deserialize, Serialize};
@@ -35,6 +35,10 @@ pub struct Side {
     pub fighter: CallFighter,
     /// some stats were hidden until the bell and are estimated
     pub estimated: bool,
+    /// where the stats came from: "shown", "from their box" (hidden, but the owner has one of that pal) or
+    /// "guessed (…)" with why
+    #[serde(default)]
+    pub stats_from: String,
     pub base: [Option<f64>; 3],
     pub usable_moves: usize,
     pub strength: f64,
@@ -106,6 +110,7 @@ impl Prediction {
             home: self.home.fighter.clone(),
             away: self.away.fighter.clone(),
             picks_open: self.picks_open,
+            stats_from: format!("home: {}; away: {}", self.home.stats_from, self.away.stats_from),
         }
     }
 }
@@ -179,6 +184,26 @@ pub struct Options {
     pub settings: Settings,
 }
 
+/// A pal's stats and passives as its box card shows them.
+pub type BoxCard = (HashMap<String, StatLine>, Vec<String>);
+
+/// A hidden fighter's stats from its owner's pal box: the card shows what it fights with (stats, talent rolls and
+/// passives, the same numbers the duel shows at the bell). Only when the owner has exactly one of that pal.
+/// Returns the stats and passives (or None), and where they came from.
+pub fn box_stats(owned: Option<&[site::BoxPal]>, pal: &str) -> (Option<BoxCard>, String) {
+    let Some(owned) = owned else { return (None, "guessed (their box couldn't be read)".into()) };
+    let same: Vec<&site::BoxPal> = owned.iter().filter(|p| p.pal == pal).collect();
+    match same.as_slice() {
+        [one] if one.stats.len() == 3 => {
+            let stats =
+                one.stats.iter().map(|(k, (lv70, iv))| (k.clone(), StatLine { iv: Some(*iv), base: None, lv70: Some(*lv70) })).collect();
+            (Some((stats, one.passives.clone())), "from their box".into())
+        }
+        [] => (None, "guessed (not in their box)".into()),
+        many => (None, format!("guessed ({} in their box)", many.len())),
+    }
+}
+
 /// The prediction for the duel in the state, or None when no duel is up.
 pub fn predict(state: &State, opts: &Options) -> Option<Prediction> {
     let (h, a) = (state.home.as_ref()?, state.away.as_ref()?);
@@ -195,21 +220,46 @@ pub fn predict(state: &State, opts: &Options) -> Option<Prediction> {
         let slug = site::slug_of(&side.img).unwrap_or_else(|| site::slug_for(&side.pal));
         hidden_moves(&side.pal, &slug, &listed, &opts.db_path, 3)
     };
-    let (owners, pal_h2h, hidden) = if opts.lookups {
+    // the site hides a side's stats until the bell ("STATS KNOWN AT THE BELL"): its owner's box may show them
+    let shown = |key: &str| stats.get(key).and_then(|s| s.get("HP")).and_then(|l| l.lv70).is_some();
+    let boxed = |side: &StateSide, key: &str| (opts.lookups && !shown(key)).then(|| site::roster(&side.actor_key).ok()).flatten();
+    let (owners, pal_h2h, hidden, boxes) = if opts.lookups {
         std::thread::scope(|s| {
             let owners = s.spawn(|| site::owner_rivalry(&h.actor_key, &a.actor_key).ok());
             let pals = s.spawn(|| pal_head_to_head(h, a, species_rec, 40));
             let hh = s.spawn(|| hid(h, "home"));
             let ha = s.spawn(|| hid(a, "away"));
-            (owners.join().ok().flatten(), pals.join().unwrap_or_default(), [hh.join().unwrap_or_default(), ha.join().unwrap_or_default()])
+            let bh = s.spawn(|| boxed(h, "home"));
+            let ba = s.spawn(|| boxed(a, "away"));
+            (
+                owners.join().ok().flatten(),
+                pals.join().unwrap_or_default(),
+                [hh.join().unwrap_or_default(), ha.join().unwrap_or_default()],
+                [bh.join().ok().flatten(), ba.join().ok().flatten()],
+            )
         })
     } else {
-        (None, PalHeadToHead::default(), [HiddenMoves::default(), HiddenMoves::default()])
+        (None, PalHeadToHead::default(), [HiddenMoves::default(), HiddenMoves::default()], [None, None])
     };
 
-    let build = |key: &str, me: &StateSide, op: &StateSide, hidden: HiddenMoves| {
-        let st = stats.get(key).cloned().unwrap_or_default();
-        let pas = passives.get(key).cloned().unwrap_or_default();
+    let build = |key: &str, me: &StateSide, op: &StateSide, hidden: HiddenMoves, owned: Option<Vec<site::BoxPal>>| {
+        let (mut st, mut pas) = (stats.get(key).cloned().unwrap_or_default(), passives.get(key).cloned().unwrap_or_default());
+        let stats_from = if shown(key) {
+            "shown".to_string()
+        } else if !opts.lookups {
+            "guessed".to_string()
+        } else {
+            let (card, from) = box_stats(owned.as_deref(), &me.pal);
+            if let Some((card, card_passives)) = card {
+                // the box has no base stats: keep the duel's for the report
+                for (k, line) in card {
+                    let base = st.get(&k).and_then(|l| l.base);
+                    st.insert(k, StatLine { base, ..line });
+                }
+                pas = card_passives;
+            }
+            from
+        };
         let (vals, est) = model::resolve(&st, &pas);
         let mv = skills.get(key).cloned().unwrap_or_default();
         let fighter = Fighter {
@@ -231,6 +281,7 @@ pub fn predict(state: &State, opts: &Options) -> Option<Prediction> {
             pal: me.pal.clone(),
             slug: site::slug_of(&me.img).unwrap_or_else(|| site::slug_for(&me.pal)),
             estimated: est,
+            stats_from,
             base,
             usable_moves: mv.iter().filter(|m| m.lv <= 70).count(),
             strength: model::strength(&opts.settings, &mv, &op.types),
@@ -245,8 +296,9 @@ pub fn predict(state: &State, opts: &Options) -> Option<Prediction> {
         }
     };
     let [hidden_home, hidden_away] = hidden;
-    let mut home = build("home", h, a, hidden_home);
-    let mut away = build("away", a, h, hidden_away);
+    let [box_home, box_away] = boxes;
+    let mut home = build("home", h, a, hidden_home, box_home);
+    let mut away = build("away", a, h, hidden_away, box_away);
     let score = model::score(
         &opts.settings,
         &home.fighter.fighter,
@@ -303,6 +355,12 @@ pub fn report(p: &Prediction) -> String {
     )];
     out.extend(p.lines.iter().cloned());
     out.push(String::new());
+    // the site hid a side's stats until the bell: say where Augur got them
+    for s in [&p.home, &p.away] {
+        if !s.stats_from.is_empty() && s.stats_from != "shown" {
+            out.push(format!("  {} {} stats hidden until the bell: {}", s.owner, s.pal, s.stats_from));
+        }
+    }
     out.push(format!(
         "HOME {}: {} [{}]   vs   AWAY {}: {} [{}]",
         p.home.owner,
@@ -395,5 +453,38 @@ mod tests {
         assert!(p.home.estimated, "the home side's stats were hidden until the bell");
         assert_eq!(p.away.fighter.fighter.hp, 8705.0);
         assert!(p.lines[0].contains("Wumpo"));
+    }
+
+    fn boxed(pal: &str, hp: f64) -> site::BoxPal {
+        site::BoxPal {
+            pal: pal.into(),
+            stats: [("HP", (hp, 43.0)), ("ATK", (592.0, 34.0)), ("DEF", (1015.0, 2.0))].map(|(k, v)| (k.to_string(), v)).into(),
+            passives: vec!["COOLDOWN −15%".into()],
+            ..Default::default()
+        }
+    }
+
+    /// A hidden fighter takes its stats from its owner's box when the owner has exactly one of that pal.
+    #[test]
+    fn hidden_stats_come_from_the_box() {
+        let owned = vec![boxed("Turtacle Terra", 5592.0), boxed("Lamball", 3000.0)];
+        let (card, from) = box_stats(Some(&owned), "Turtacle Terra");
+        let (stats, passives) = card.unwrap();
+        assert_eq!((stats["HP"].lv70, stats["HP"].iv, stats["DEF"].lv70), (Some(5592.0), Some(43.0), Some(1015.0)));
+        assert_eq!((passives, from.as_str()), (vec!["COOLDOWN −15%".to_string()], "from their box"));
+        let two = vec![boxed("Lamball", 3000.0), boxed("Lamball", 3100.0)];
+        assert_eq!(box_stats(Some(&two), "Lamball").1, "guessed (2 in their box)");
+        assert_eq!(box_stats(Some(&owned), "Nyafia Terra").1, "guessed (not in their box)");
+        assert_eq!(box_stats(None, "Lamball").1, "guessed (their box couldn't be read)");
+    }
+
+    /// Without lookups a hidden side is still guessed, and says so.
+    #[test]
+    fn a_hidden_side_says_it_was_guessed() {
+        let state = crate::seed::state("state-leaflit-wumpo.json");
+        let p =
+            predict(&state, &Options { lookups: false, db_path: PathBuf::from("/nonexistent"), settings: Settings::default() }).unwrap();
+        assert_eq!((p.home.stats_from.as_str(), p.away.stats_from.as_str()), ("guessed", "shown"));
+        assert!(report(&p).contains("stats hidden until the bell: guessed"));
     }
 }

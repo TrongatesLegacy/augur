@@ -463,7 +463,11 @@ fn every_tab_renders_headless() {
     let chance = format!("{}%", (p["prob"].as_f64().unwrap() * 100.0).round());
     assert!(text("live").contains(&chance), "Live shows the chance {chance}: {}", text("live"));
     assert!(text("live").contains(&p["lines"][0].as_str().unwrap().to_lowercase()), "Live shows the Yoda line");
-    assert!(text("live").contains("some stats hidden until the bell"), "Live says the home stats are estimated");
+    assert!(
+        text("live").contains("stats are hidden until the bell: guessed"),
+        "Live says the home stats were hidden and guessed: {}",
+        text("live")
+    );
     assert!(text("history").contains("14 / 19"), "History: {}", text("history"));
     assert!(
         text("you").contains("248,120")

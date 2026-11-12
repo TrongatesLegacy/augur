@@ -28,6 +28,6 @@ If you think the model's number is off (one factor carrying it, a coin flip call
 ## Rules
 
 - **No crowd data.** Never use or fetch chat or crowd picks (`call.crowd`), and don't move a pick because chat disagrees.
-- **Hidden stats.** When the owner has several of the pal, its stats stay hidden until the bell and are estimated (marked in the report). Say so, and run it again once the fight starts or the developer sends a screenshot.
+- **Hidden stats.** The site sometimes hides a side's stats until the bell (picks are closed by then). Augur reads them from the owner's pal box when the owner has one of that pal; otherwise they're guessed (the report says which and why). Say so, and run it again once the fight starts or the developer sends a screenshot.
 - **A miss** is a reason to look at the tape and, if there's a pattern, run the `tune-model` skill. Don't retune on one fight.
 - **"No duel up right now"** means nothing is queued. If the developer says a fight happened, the site may not have recorded it yet: wait a minute and run again.

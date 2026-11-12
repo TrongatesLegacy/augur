@@ -5,6 +5,14 @@ import { SHORT, dial, face, orb, pickVoice, tapeRows, voiceLine, whyLine } from 
 import { betCommand, stakeLine } from '../lib/stake.js';
 import { columns, empty, icon, ring, signedBar } from '../lib/viz.js';
 
+// a side whose stats the site hides until the bell: taken from the owner's box, or guessed (with why)
+function statsNote(p) {
+  const hidden = [p.home, p.away].filter((s) => s.stats_from && s.stats_from !== 'shown');
+  if (!hidden.length) return '';
+  const guessed = hidden.some((s) => s.estimated);
+  return `<div class="small ${guessed ? 'gold' : ''}">${hidden.map((s) => `${esc(s.pal)}'s stats are hidden until the bell: ${esc(s.stats_from.replace(/^from their box$/, 'taken from its owner’s box'))}`).join(' · ')}</div>`;
+}
+
 function upNext(live) {
   const q = live?.queue || [];
   const body = q.length
@@ -92,7 +100,7 @@ export function render(app) {
   main.innerHTML =
     header(`Live · ${esc(p.title || 'PalDuels')}`, status + (command ? `<button class="btn ghost" id="cmd">Copy ${esc(command)}</button>` : '')) +
     `<div class="stage">${side(p.home, 'h', p.pick === 'home')}
-      <div class="center">${dial(p.prob, 100)}<div class="cond" style="font-weight:800;font-size:24px;letter-spacing:.06em;margin-top:4px;text-transform:uppercase">${esc(fav.pal)}</div><div class="small" style="color:var(--t2)">${esc(whyLine(p))}</div>${p.home.estimated || p.away.estimated ? '<div class="small gold">Some stats hidden until the bell: estimated</div>' : ''}${stakeLine(live.stake)}</div>
+      <div class="center">${dial(p.prob, 100)}<div class="cond" style="font-weight:800;font-size:24px;letter-spacing:.06em;margin-top:4px;text-transform:uppercase">${esc(fav.pal)}</div><div class="small" style="color:var(--t2)">${esc(whyLine(p))}</div>${statsNote(p)}${stakeLine(live.stake)}</div>
       ${side(p.away, 'a', p.pick === 'away')}</div>
     <div class="g3">
       <div class="panel"><div class="ph"><h3>Tale of the tape</h3><span>Lv 70</span></div>${tapeRows(p)}

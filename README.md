@@ -121,7 +121,7 @@ The main window lays out for 1280×720 and zooms to fit any other size, so it lo
 2. **Adjustments to move strength:** damage from moves the site doesn't list (species-only attacks like Bushi Noct's Iai, found in the pal's last 3 fight tapes), and cooldown passives. Both are damped until proven.
 3. **Records:** the species' win/loss records and past fights between the two species shift that chance on the log-odds scale, each pulled toward 50% so small samples barely move it.
 
-Hidden stats (an owner with several of the pal) are estimated from base stats at an average IV until the bell. The crowd's picks are never used.
+When the site hides a fighter's stats until the bell ("stats known at the bell"), Augur takes them from its owner's pal box: the card shows the stats, talent rolls and passives it fights with. Only when the owner has none or several of that pal does it estimate them from base stats at an average roll, and the call says so. The crowd's picks are never used.
 
 **It tunes itself.** Straight after each result, and whenever the backfill brings in 25 more past duels, Augur re-fits every setting: types, move power and the records on every past duel, the stat settings and cooldown passives on real calls (they're the only ones with each pal's actual stats; they wait for 60). The newest quarter of each is held back, and a change is kept only if it predicts those better. The Model tab shows each setting, what it learned from and what it changed. Settings > Model turns this off to use your own values; it keeps learning meanwhile. Owners aren't in the model: an owner's record predicted no better than a coin flip over 4,702 duels, and added nothing to the species records.
 

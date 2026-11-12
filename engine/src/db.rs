@@ -107,6 +107,8 @@ const ADDED: &[(&str, &str, &str)] = &[
     ("predictions", "late_prob", "REAL"),
     // first called after picks closed (Augur started mid-fight): logged and learned from, but not in the tally
     ("predictions", "late_only", "INTEGER DEFAULT 0"),
+    // where each side's stats came from when called: "home: from their box; away: shown"
+    ("predictions", "stats_from", "TEXT"),
 ];
 
 fn migrate(conn: &Connection) -> Result<()> {
@@ -339,6 +341,9 @@ pub struct NewCall {
     /// picks were open when it was made (old calls files don't say: they were)
     #[serde(default = "yes")]
     pub picks_open: bool,
+    /// where each side's stats came from ("home: from their box; away: shown")
+    #[serde(default)]
+    pub stats_from: String,
 }
 
 fn yes() -> bool {
@@ -409,6 +414,7 @@ pub fn add_call(conn: &Connection, c: &NewCall) -> Result<i64> {
             id
         }
     };
+    conn.execute("UPDATE predictions SET stats_from = ?1 WHERE id = ?2", params![c.stats_from, id])?;
     save_fighters(conn, id, c)?;
     Ok(id)
 }
@@ -835,6 +841,7 @@ mod tests {
             home: fighter("A"),
             away: fighter("B"),
             picks_open: true,
+            stats_from: String::new(),
         }
     }
 

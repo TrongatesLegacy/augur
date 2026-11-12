@@ -2,7 +2,7 @@
 // and off air it says how the last stream went. It sizes itself to what it shows.
 import { invoke, listen } from './lib/bridge.js';
 import { copyText } from './lib/clipboard.js';
-import { esc, pct, signed } from './lib/format.js';
+import { esc, fmt, pct, signed } from './lib/format.js';
 import { SHORT, dial, pickVoice, tapeRows, voiceLine, whyLine } from './lib/pal.js';
 import { betCommand, stakeLine } from './lib/stake.js';
 
@@ -30,7 +30,7 @@ function quiet(view) {
   const recent = o?.recent?.length
     ? `<div class="qr">${o.recent.slice(0, 3).map(([pick, other, right]) => `<div><span class="res ${right ? 'o' : 'x'}">${right ? '✓' : '✕'}</span><span><b>${esc(pick)}</b> over ${esc(other)}</span></div>`).join('')}</div>`
     : '';
-  const all = o?.all_time?.[1] ? `<div class="qa">All time <b>${o.all_time[0]}/${o.all_time[1]}</b> · ${pct(o.all_time[0] / o.all_time[1])}</div>` : '';
+  const all = o?.all_time?.[1] ? `<div class="qa">All time <b>${fmt(o.all_time[0])}/${fmt(o.all_time[1])}</b> · ${pct(o.all_time[0] / o.all_time[1])}</div>` : '';
   return `<div class="hd"><span>${head}</span><span class="c">AUGUR</span></div><div class="quiet">${hero}</div>${stream}${recent}${all}`;
 }
 
@@ -47,7 +47,7 @@ function render() {
   const today = view?.today || [0, 0];
   const u = state.update;
   const upd = u?.latest && u.ready ? `<div class="tup"><span>✦ Augur <b>${esc(u.latest.version)}</b> is ready</span><button id="tu">${u.installing ? 'Restarting…' : 'Restart to update'}</button></div>` : '';
-  const foot = upd + `<div class="ft"><span>Today <b>${today[0]}/${today[1]}</b>${today[1] ? ` · ${pct(today[0] / today[1])}` : ''}</span><span class="fb"><button id="open">Open Augur ›</button><button id="quit" class="qt" title="Quit Augur" aria-label="Quit Augur"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg></button></span></div>`;
+  const foot = upd + `<div class="ft"><span>Today <b>${fmt(today[0])}/${fmt(today[1])}</b>${today[1] ? ` · ${pct(today[0] / today[1])}` : ''}</span><span class="fb"><button id="open">Open Augur ›</button><button id="quit" class="qt" title="Quit Augur" aria-label="Quit Augur"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg></button></span></div>`;
   if (!p) {
     el.innerHTML = quiet(view) + foot;
   } else {

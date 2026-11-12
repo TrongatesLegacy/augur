@@ -10,7 +10,7 @@ export function ring(frac, { size = 72, tone = 'gold', label, sub = '', title = 
   const c = 2 * Math.PI * r;
   const text = label ?? (frac == null ? '—' : pct(frac));
   // long labels (a 147–172 record) shrink to stay on one line inside the ring
-  const fit = Math.min(0.27, 1.3 / String(text).length).toFixed(3);
+  const fit = Math.min(0.27, 1.1 / String(text).length).toFixed(3);
   return `<div class="ring ${tone}" style="--s:${size}px;--f:${fit}" role="img" aria-label="${esc(title || `${text} ${sub}`)}"${title ? ` title="${esc(title)}"` : ''}>
     <svg viewBox="0 0 60 60" aria-hidden="true"><circle cx="30" cy="30" r="${r}" class="t"/>${frac == null ? '' : `<circle cx="30" cy="30" r="${r}" class="f" stroke-dasharray="${(c * clamp(frac)).toFixed(1)} ${c.toFixed(1)}"/>`}</svg>
     <div><b>${text}</b>${sub ? `<small>${sub}</small>` : ''}</div></div>`;

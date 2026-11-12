@@ -238,6 +238,32 @@ const MAIN_DRIVER: &str = r#"
   for (let i = 0; i < 60 && !window.augur; i++) await sleep(100);
   const out = {};
   const only = (location.hash.match(/tab=(\w+)/) || [])[1];
+  // text that spills out of its box: content wider than the element, unless it scrolls or trims with "…"
+  out.spills = {};
+  const spills = () =>
+    [...document.querySelectorAll('#main *')]
+      .filter((el) => {
+        const cs = getComputedStyle(el);
+        if (/auto|scroll/.test(cs.overflowX) || cs.textOverflow === 'ellipsis' || el.closest('svg') || !el.clientWidth || !el.textContent.trim()) return false;
+        // a number (or a record like 1,000–950) broken over two lines
+        const t = el.textContent.trim();
+        if (/^[+−-]?[\d,.]+(%|×|k|M)?([–/ ]+[\d,.]+)?$/.test(t) && !el.children.length) {
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          if (new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size > 1) return true;
+        }
+        if (el.scrollWidth > el.clientWidth + 2) {
+          // only what's laid out counts: a decoration placed past the edge (and clipped) is meant to be
+          const box = el.getBoundingClientRect();
+          const kids = [...el.children].filter((c) => !/absolute|fixed/.test(getComputedStyle(c).position));
+          return !el.children.length || kids.some((c) => c.getBoundingClientRect().right > box.right + 2 || c.scrollWidth > c.clientWidth + 2) || [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+        }
+        // centred text spilling out both sides doesn't scroll: compare with the parent's edges instead
+        const [r, p] = [el.getBoundingClientRect(), el.parentElement.getBoundingClientRect()];
+        const pcs = getComputedStyle(el.parentElement);
+        return cs.position !== 'absolute' && !/auto|scroll/.test(pcs.overflowX) && (r.left < p.left - 2 || r.right > p.right + 2);
+      })
+      .map((el) => `${el.tagName.toLowerCase()}.${[...el.classList].join('.')} (${el.clientWidth}px, needs ${el.scrollWidth}px): ${el.textContent.trim().replace(/\s+/g, ' ').slice(0, 50)}`);
   if (!window.augur) window.__errors.push('the page never started (a module failed to load)');
   else {
     for (const tab of only ? [only] : ['live', 'history', 'bets', 'pals', 'players', 'you', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'updates', 'offair']) {
@@ -259,6 +285,7 @@ const MAIN_DRIVER: &str = r#"
       await window.augur.show(tab === 'bets' ? 'history' : ['staking', 'sync', 'updates', 'ownmodel'].includes(tab) ? 'settings' : ['welcome', 'offair'].includes(tab) ? 'live' : tab);
       await sleep(300);
       out[tab] = document.getElementById('main').innerText;
+      out.spills[tab] = spills();
       DATA.get_settings = own;
     }
   }
@@ -300,7 +327,10 @@ fn shot_size() -> (u32, u32) {
 
 fn render_at(port: u16, name: &str, shot: Option<(&Path, &str)>, (w, h): (u32, u32)) -> Value {
     let chrome = chrome().expect("Chrome");
-    let dir = std::env::temp_dir().join(format!("augur-ui-{}-{name}", std::process::id()));
+    // its own Chrome profile: tests run at the same time
+    static RUN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let run = RUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("augur-ui-{}-{name}-{run}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let url = format!("http://127.0.0.1:{port}/test.html");
     let base = |c: &mut Command| {
@@ -316,7 +346,8 @@ fn render_at(port: u16, name: &str, shot: Option<(&Path, &str)>, (w, h): (u32, u
     };
     let mut c = Command::new(&chrome);
     base(&mut c);
-    let out = c.arg("--dump-dom").arg(&url).output().expect("run Chrome");
+    // the report is read at the same window size as the screenshots, so layout checks see what they show
+    let out = c.arg(format!("--window-size={w},{h}")).arg("--dump-dom").arg(&url).output().expect("run Chrome");
     let dom = String::from_utf8_lossy(&out.stdout);
     let report = dom.split("<pre id=\"report\" style=\"display:none\">").nth(1).and_then(|s| s.split("</pre>").next()).unwrap_or("");
     let report = html_unescape(report);
@@ -358,6 +389,57 @@ fn signed(n: i64) -> String {
 
 fn html_unescape(s: &str) -> String {
     s.replace("&quot;", "\"").replace("&lt;", "<").replace("&gt;", ">").replace("&#39;", "'").replace("&amp;", "&")
+}
+
+/// Every count 1,000 times bigger (a long-running install, a big balance), for the layout checks below. Ids,
+/// times, rolls, ranks and positions keep their values.
+fn bigger(v: &mut Value, key: &str) {
+    let k = key.to_ascii_lowercase();
+    let keep = ["id", "seq", "pos", "at", "ms", "n", "z"].contains(&k.as_str())
+        || ["_id", "_at", "_ms"].iter().any(|e| k.ends_with(e))
+        || ["iv", "tier", "secs", "hp_left", "zoom", "width", "height", "version"].iter().any(|e| k.contains(e))
+        || k.starts_with("lv")
+        || k.starts_with("page");
+    match v {
+        Value::Number(n) if !keep => {
+            if let Some(i) = n.as_i64().filter(|i| *i != 0) {
+                *v = json!(i * 1000);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(|x| bigger(x, key)),
+        Value::Object(map) => map.iter_mut().for_each(|(k, x)| bigger(x, k)),
+        _ => {}
+    }
+}
+
+/// Big numbers fit: with every count 1,000 times bigger, no text spills out of its box on any tab.
+#[test]
+fn big_numbers_fit() {
+    if !have_chrome() {
+        return;
+    }
+    let mut data = fixture_data();
+    bigger(&mut data, "");
+    let port = serve("index.html", &data, MAIN_DRIVER);
+    // the size the window is laid out at (smaller windows zoom it down)
+    let r = render_at(port, "main", None, (1280, 720));
+    assert_eq!(r["errors"], json!([]), "script errors: {}", r["errors"]);
+    let spills: Vec<String> = r["spills"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .flat_map(|(tab, list)| list.as_array().unwrap().iter().map(move |x| format!("{tab}: {}", x.as_str().unwrap_or(""))))
+        .collect();
+    if let Some(folder) = std::env::var_os("AUGUR_UI_SHOTS").map(PathBuf::from) {
+        let folder = folder.join("big");
+        std::fs::create_dir_all(&folder).unwrap();
+        for tab in
+            ["live", "history", "bets", "pals", "players", "you", "model", "settings", "staking", "ownmodel", "sync", "updates", "offair"]
+        {
+            render(port, tab, Some((&folder, tab)));
+        }
+    }
+    assert!(spills.is_empty(), "text spills out of its box with big numbers:\n{}", spills.join("\n"));
 }
 
 #[test]

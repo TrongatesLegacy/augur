@@ -78,7 +78,7 @@ function versus(y) {
       [c.deviated, 'deviated', 'gold'],
       [c.missed, 'missed', 'dim'],
     ])}
-    <div class="small yfoot">Augur's calls: <b>${right}/${total}</b>${total ? ` · ${pct(right / total)}` : ''} · <a href="#" id="yb">every bet in History ›</a></div></div>`;
+    <div class="small yfoot">Augur's calls: <b>${fmt(right)}/${fmt(total)}</b>${total ? ` · ${pct(right / total)}` : ''} · <a href="#" id="yb">every bet in History ›</a></div></div>`;
 }
 
 const CHAOS_ICON = { eggs: 'egg', zergs: 'swords', gifts: 'star' };
@@ -103,21 +103,21 @@ function petPanel(p) {
     <div class="yp">${orb(p.name, p.name.toLowerCase().replace(/\s+/g, '-'), 'h', 54, true)}<div><b>${esc(p.name)}</b>
       ${p.passives.length ? `<div class="pills">${passivePills(p.passives)}</div>` : ''}</div></div>
     <div class="steps" style="--n:${p.path.length};--at:${Math.max(0, reached)}">${p.path.map(([s, done, isNow]) => `<span class="${isNow ? 'now' : done ? 'done' : ''}" title="${esc(s)}"><i></i>${esc(s)}</span>`).join('')}</div>
-    <div class="plog fillin">${p.log.length ? p.log.map(([g, w]) => `<div><b class="${g ? 'ok' : 'muted'}">${g ? '+' + g : '·'}</b><span>${esc(w)}</span></div>`).join('') : '<div class="small">No growth logged yet.</div>'}</div></div>`;
+    <div class="plog fillin">${p.log.length ? p.log.map(([g, w]) => `<div><b class="${g ? 'ok' : 'muted'}">${g ? '+' + fmt(g) : '·'}</b><span>${esc(w)}</span></div>`).join('') : '<div class="small">No growth logged yet.</div>'}</div></div>`;
 }
 
 function hallPanel(h) {
   if (!h) return `<div class="panel col"><div class="ph"><h3>Your Hall</h3></div>${empty('box', 'Hall not read yet', 'Every pal your pets become, by tier.')}</div>`;
-  return `<div class="panel col"><div class="ph"><h3>Your Hall</h3><span>${h.found} of ${h.total} pals found</span></div>
+  return `<div class="panel col"><div class="ph"><h3>Your Hall</h3><span>${fmt(h.found)} of ${fmt(h.total)} pals found</span></div>
     <div class="yrow">${ring(h.total ? h.found / h.total : null, { size: 62, label: fmt(h.found), sub: `of ${fmt(h.total)}` })}
-      <div class="htiers">${h.tiers.map(([t, stage, n, of]) => `<div title="${esc(stage)}"><span class="tier">${esc(t)}</span><div class="mb"><i style="width:${of ? Math.max(n ? 2 : 0, (100 * n) / of) : 0}%"></i></div><small>${n}/${of}</small></div>`).join('')}</div></div>
+      <div class="htiers">${h.tiers.map(([t, stage, n, of]) => `<div title="${esc(stage)}"><span class="tier">${esc(t)}</span><div class="mb"><i style="width:${of ? Math.max(n ? 2 : 0, (100 * n) / of) : 0}%"></i></div><small>${fmt(n)}/${fmt(of)}</small></div>`).join('')}</div></div>
     <div class="hpals fillin">${h.pals.map(([pal, slug, tier, d]) => `<span class="chip" title="Tier ${esc(tier)} · found ${esc(d)}">${orb(pal, slug, 'h av', 22)}${esc(pal)} <small>${esc(shortDay(d))}</small></span>`).join('')}</div></div>`;
 }
 
 function titlesPanel(pg) {
   const t = pg.titles_earned;
   if (!t && !pg.titles.length) return `<div class="panel col"><div class="ph"><h3>Titles</h3></div>${empty('star', 'No titles yet', 'Win duels and picks to earn them.')}</div>`;
-  return `<div class="panel col"><div class="ph"><h3>Titles</h3>${t ? `<span>${t[0]} of ${t[1]} earned · ${t[1] - t[0]} to unlock</span>` : ''}</div>
+  return `<div class="panel col"><div class="ph"><h3>Titles</h3>${t ? `<span>${fmt(t[0])} of ${fmt(t[1])} earned · ${fmt(t[1] - t[0])} to unlock</span>` : ''}</div>
     ${t ? `<div class="progress thick"><i style="width:${(100 * t[0]) / t[1]}%"></i></div>` : ''}
     ${(pg.closest || []).length ? `<div class="yq"><span class="label">Closest to unlock</span>${pg.closest.map((q) => `<div class="hbar" title="${esc(q.about)}"><span>${esc(q.icon)} ${esc(q.name)}</span><b>${fmt(q.have)}<small>/${fmt(q.need)}</small></b><div class="b"><i style="width:${Math.min(100, (100 * q.have) / q.need)}%"></i></div></div>`).join('')}</div>` : ''}
     <div class="badges fillin">${pg.titles.map((b) => `<span class="badge ${b.rare ? 'rare' : ''}" title="${esc(b.about)}"><i>${esc(b.icon)}</i>${esc(b.name)}${b.times ? ` <b>×${b.times}</b>` : ''}</span>`).join('')}</div></div>`;
@@ -138,7 +138,7 @@ export async function render(app) {
     main.innerHTML =
       header(`You · ${esc(y.name || 'PalDuels')}`, refresh) +
       `<div class="ytop">
-        <div class="panel ybal"><span class="label">Your balance</span><b>${pg.balance != null ? fmt(pg.balance) : '—'}</b><small>credits · only you can see this</small><span class="coin" aria-hidden="true"></span></div>
+        <div class="panel ybal"><span class="label">Your balance</span><b style="font-size:${Math.min(50, 400 / fmt(pg.balance).length).toFixed(1)}px">${pg.balance != null ? fmt(pg.balance) : '—'}</b><small>credits · only you can see this</small><span class="coin" aria-hidden="true"></span></div>
         ${predictions(find('prediction'))}
       </div>
       <div class="g3 ymid">${duels(find('duel record'))}${versus(y)}${chaos(find('chaos'))}</div>

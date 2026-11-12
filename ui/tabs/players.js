@@ -26,7 +26,7 @@ const records = (rows, pals) =>
     .map(([name, w, n]) => {
       const r = w / n;
       const tone = r < 0.45 ? 'bad' : r > 0.55 ? 'ok' : '';
-      return `<div class="rec">${pals ? orb(name, slugOf(name), 'h av', 24) : face(name, 'a av', 24)}<div class="hbar"><span>${esc(name)}</span><b class="${tone}">${w}–${n - w}</b><div class="b"><i class="${tone}" style="width:${100 * r}%"></i></div></div></div>`;
+      return `<div class="rec">${pals ? orb(name, slugOf(name), 'h av', 24) : face(name, 'a av', 24)}<div class="hbar"><span>${esc(name)}</span><b class="${tone}">${fmt(w)}–${fmt(n - w)}</b><div class="b"><i class="${tone}" style="width:${100 * r}%"></i></div></div></div>`;
     })
     .join('');
 
@@ -59,11 +59,11 @@ export async function render(app) {
   const most = d.pals_used[0];
   const advice = (k) => v.roster.filter((p) => p.advice === k).length;
   const palStat = (label, x, tone, none) =>
-    `<div class="pst">${x ? orb(x[0], slugOf(x[0]), 'h av', 40) : `<span class="pst-o">${icon('egg', 18)}</span>`}<div><span class="label">${label}</span><b class="${x ? tone : 'muted'}">${x ? esc(x[0]) : '—'}</b><small>${x ? `${x[1]}–${x[2] - x[1]} · ${pct(x[1] / x[2])}` : none}</small></div></div>`;
+    `<div class="pst">${x ? orb(x[0], slugOf(x[0]), 'h av', 40) : `<span class="pst-o">${icon('egg', 18)}</span>`}<div><span class="label">${label}</span><b class="${x ? tone : 'muted'}">${x ? esc(x[0]) : '—'}</b><small>${x ? `${fmt(x[1])}–${fmt(x[2] - x[1])} · ${pct(x[1] / x[2])}` : none}</small></div></div>`;
   main.lastElementChild.outerHTML = `<div class="panel phero">
       ${face(state.player, 'a', 64)}
       <div class="pwho"><b>${esc(d.owner || state.player)}</b><small>${d.duels ? `${fmt(d.duels)} ranked duels` : 'no ranked duels logged yet'}</small></div>
-      ${ring(d.duels ? d.wins / d.duels : null, { size: 84, tone: d.duels && d.wins / d.duels < 0.45 ? 'bad' : 'ok', label: d.duels ? `${d.wins}–${d.duels - d.wins}` : '—', sub: d.duels ? `${pct(d.wins / d.duels)} won` : 'duel record', title: 'Duel record' })}
+      ${ring(d.duels ? d.wins / d.duels : null, { size: 96, tone: d.duels && d.wins / d.duels < 0.45 ? 'bad' : 'ok', label: d.duels ? `${fmt(d.wins)}–${fmt(d.duels - d.wins)}` : '—', sub: d.duels ? `${pct(d.wins / d.duels)} won` : 'duel record', title: 'Duel record' })}
       ${palStat('Best pal for them', best, 'ok', 'needs 3+ duels with a pal')}
       ${palStat('Most used', most, '', 'no duels yet')}
       <div class="pboxs"><div class="yhead"><b class="bn">${v.roster.length}</b><span>in the pal box · ${v.rerolled_pals} rerolled</span></div>

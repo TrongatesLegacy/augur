@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Augur",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "com.trongateslegacy.augur",
   "build": {
     "frontendDist": "../ui"
@@ -43,12 +43,22 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg", "nsis"],
+    "targets": [
+      "app",
+      "dmg",
+      "nsis"
+    ],
     "category": "Utility",
     "shortDescription": "Calls PalDuels fights before the bell",
     "longDescription": "Augur predicts PalDuels fights from stats, types, moves and history, and keeps score.",
     "copyright": "TrongatesLegacy",
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
     "macOS": {
       "minimumSystemVersion": "11.0"
     },

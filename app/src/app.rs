@@ -462,6 +462,19 @@ fn in_dock(app: &AppHandle, shown: bool) {
     let _ = (app, shown);
 }
 
+/// What's remembered of the main window: its size, place and whether it's maximised (not whether it's showing: Augur
+/// starts in the tray).
+const WINDOW_STATE: tauri_plugin_window_state::StateFlags = tauri_plugin_window_state::StateFlags::SIZE
+    .union(tauri_plugin_window_state::StateFlags::POSITION)
+    .union(tauri_plugin_window_state::StateFlags::MAXIMIZED);
+
+/// Saves the main window's size and place. Closing only hides it, so the plugin's own save on close never runs: this
+/// runs when it's hidden, before quitting and before an update restarts Augur.
+pub fn remember_window(app: &AppHandle) {
+    use tauri_plugin_window_state::AppHandleExt;
+    let _ = app.save_window_state(WINDOW_STATE);
+}
+
 pub fn open_main(app: &AppHandle, tab: Option<&str>) {
     in_dock(app, true);
     if let Some(w) = app.get_webview_window("main") {
@@ -717,6 +730,7 @@ fn about(shared: tauri::State<'_, Arc<Shared>>) -> Cmd<About> {
 #[tauri::command]
 fn quit_app(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>) {
     shared.stop.store(true, Ordering::Relaxed);
+    remember_window(&app);
     app.exit(0);
 }
 
@@ -833,6 +847,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
+        // the main window opens at the size and place it was last left (the popover and sign-in place themselves)
+        .plugin(tauri_plugin_window_state::Builder::default().with_state_flags(WINDOW_STATE).with_denylist(&["tray", "signin"]).build())
         .manage(shared.clone())
         .invoke_handler(tauri::generate_handler![
             live,
@@ -893,6 +909,7 @@ pub fn run() {
                     "open" => open_main(app, None),
                     "quit" => {
                         app.state::<Arc<Shared>>().stop.store(true, Ordering::Relaxed);
+                        remember_window(app);
                         app.exit(0)
                     }
                     _ => {}
@@ -922,6 +939,7 @@ pub fn run() {
                 w.on_window_event(move |e| match e {
                     WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
+                        remember_window(w2.app_handle());
                         let _ = w2.hide();
                         in_dock(w2.app_handle(), false);
                     }

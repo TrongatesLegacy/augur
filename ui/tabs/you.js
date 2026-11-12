@@ -1,9 +1,15 @@
 // You (only when signed in): your PalDuels profile as Augur last read it (your balance, predictions, duels, spending
-// and titles), your pet and your Hall, and your bets next to Augur's calls.
+// and titles), your pet and your Hall, and your bets next to Augur's calls. Its Titles view is in titles.js.
 import { invoke } from '../lib/bridge.js';
 import { ago, esc, fmt, pct } from '../lib/format.js';
 import { orb, passivePills } from '../lib/pal.js';
 import { empty, formDots, icon, ring, signedBar, split, stack } from '../lib/viz.js';
+import { titlesView, wire as wireTitles } from './titles.js';
+
+const YOU_VIEWS = [
+  ['profile', 'Profile'],
+  ['titles', 'Titles'],
+];
 
 const shortDay = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 
@@ -114,12 +120,15 @@ function hallPanel(h) {
     <div class="hpals fillin">${h.pals.map(([pal, slug, tier, d]) => `<span class="chip" title="Tier ${esc(tier)} · found ${esc(d)}">${orb(pal, slug, 'h av', 22)}${esc(pal)} <small>${esc(shortDay(d))}</small></span>`).join('')}</div></div>`;
 }
 
+// the panel keeps room for the badges; You › Titles has the rest
+const CLOSEST_HERE = 2;
+
 function titlesPanel(pg) {
   const t = pg.titles_earned;
   if (!t && !pg.titles.length) return `<div class="panel col"><div class="ph"><h3>Titles</h3></div>${empty('star', 'No titles yet', 'Win duels and picks to earn them.')}</div>`;
-  return `<div class="panel col"><div class="ph"><h3>Titles</h3>${t ? `<span>${fmt(t[0])} of ${fmt(t[1])} earned · ${fmt(t[1] - t[0])} to unlock</span>` : ''}</div>
+  return `<div class="panel col"><div class="ph"><h3>Titles</h3><span>${t ? `${fmt(t[0])} of ${fmt(t[1])} earned · ` : ''}<a href="#" id="yt">All titles ›</a></span></div>
     ${t ? `<div class="progress thick"><i style="width:${(100 * t[0]) / t[1]}%"></i></div>` : ''}
-    ${(pg.closest || []).length ? `<div class="yq"><span class="label">Closest to unlock</span>${pg.closest.map((q) => `<div class="hbar" title="${esc(q.about)}"><span>${esc(q.icon)} ${esc(q.name)}</span><b>${fmt(q.have)}<small>/${fmt(q.need)}</small></b><div class="b"><i style="width:${Math.min(100, (100 * q.have) / q.need)}%"></i></div></div>`).join('')}</div>` : ''}
+    ${(pg.closest || []).length ? `<div class="yq"><span class="label">Closest to unlock</span>${pg.closest.slice(0, CLOSEST_HERE).map((q) => `<div class="hbar" title="${esc(q.about)}"><span>${esc(q.icon)} ${esc(q.name)}</span><b>${fmt(q.have)}<small>/${fmt(q.need)}</small></b><div class="b"><i style="width:${Math.min(100, (100 * q.have) / q.need)}%"></i></div></div>`).join('')}</div>` : ''}
     <div class="badges fillin">${pg.titles.map((b) => `<span class="badge ${b.rare ? 'rare' : ''}" title="${esc(b.about)}"><i>${esc(b.icon)}</i>${esc(b.name)}${b.times ? ` <b>×${b.times}</b>` : ''}</span>`).join('')}</div></div>`;
 }
 
@@ -129,8 +138,13 @@ export async function render(app) {
   if (state.tab !== 'you') return;
   const pg = y.page;
   const find = (t) => pg?.panels.find((p) => p.title.toLowerCase().startsWith(t));
-  const refresh = `<span class="sub ml">${y.read_at ? `read ${ago(y.read_at)}` : 'not read yet'}</span><button class="btn ghost" id="yr">Read now</button>`;
-  if (!pg) {
+  const titles = state.youView === 'titles' && pg;
+  const views = pg ? `<div class="seg ml">${YOU_VIEWS.map(([k, l]) => `<button class="${(titles ? 'titles' : 'profile') === k ? 'on' : ''}" data-yv="${k}">${l}</button>`).join('')}</div>` : '';
+  const refresh = `${views}<span class="sub ${pg ? '' : 'ml'}">${y.read_at ? `read ${ago(y.read_at)}` : 'not read yet'}</span><button class="btn ghost" id="yr">Read now</button>`;
+  if (titles) {
+    main.innerHTML = header(`You · ${esc(y.name || 'PalDuels')} · Titles`, refresh) + titlesView(y);
+    wireTitles(main);
+  } else if (!pg) {
     main.innerHTML =
       header(`You${y.name ? ' · ' + esc(y.name) : ''}`, refresh) +
       `<div class="panel col grow">${empty('eye', 'Reading your profile…', "Augur reads it with your picks list, every few minutes while you're signed in.")}</div>`;
@@ -148,6 +162,17 @@ export async function render(app) {
     e.target.disabled = true;
     e.target.textContent = 'Reading…';
     await invoke('import_bets');
+  });
+  main.querySelectorAll('.seg button[data-yv]').forEach((b) => {
+    b.onclick = () => {
+      state.youView = b.dataset.yv;
+      render(app);
+    };
+  });
+  document.getElementById('yt')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    state.youView = 'titles';
+    render(app);
   });
   document.getElementById('yb')?.addEventListener('click', (e) => {
     e.preventDefault();

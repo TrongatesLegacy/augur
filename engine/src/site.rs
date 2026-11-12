@@ -729,6 +729,65 @@ pub struct AccountPage {
     /// the titles you're closest to earning, as the page lists them
     #[serde(default)]
     pub closest: Vec<Quest>,
+    /// every title on the site, by category, and how far you are with each
+    #[serde(default)]
+    pub groups: Vec<TitleGroup>,
+}
+
+/// A category of titles on the profile's every-title list ("In the pit", "Predictions").
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct TitleGroup {
+    pub name: String,
+    /// the category's one-line blurb
+    pub about: String,
+    /// (earned, of): a ladder or an element ring counts each of its titles
+    pub earned: Option<(u32, u32)>,
+    pub titles: Vec<Title>,
+}
+
+/// How the page draws a title.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TitleKind {
+    /// one title, earned or not, maybe with a progress bar
+    #[default]
+    Plain,
+    /// titles earned one after another ("Duels fought": Veteran, then Pit regular), in `steps`
+    Ladder,
+    /// held by one chatter at a time (the most duel wins on the channel), in `holders`
+    Crown,
+    /// one title per element (Grass master, Dark master...), in `steps`
+    Ring,
+}
+
+/// One title (or a ladder or ring of them) on the every-title list.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Title {
+    pub kind: TitleKind,
+    pub icon: String,
+    pub name: String,
+    /// what earns it
+    pub about: String,
+    /// earned (for a ladder or ring: every step of it)
+    pub earned: bool,
+    /// (have, need), when the page counts it: for a ladder, towards its next step
+    pub progress: Option<(u64, u64)>,
+    /// what the page says in the corner: "Locked", "Complete", "1 holder", "2 of 9 titles"
+    pub status: String,
+    /// a ladder's steps or a ring's elements, in order
+    pub steps: Vec<TitleStep>,
+    /// who holds a crown
+    pub holders: Vec<String>,
+}
+
+/// A step of a ladder ("II", "PIT REGULAR") or an element of a ring ("Grass", "GRASS MASTER").
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct TitleStep {
+    /// the step's number (I, II) or the element's name
+    pub label: String,
+    pub name: String,
+    pub earned: bool,
+    pub progress: Option<(u64, u64)>,
 }
 
 /// A title still to earn, and how far along you are.
@@ -792,6 +851,7 @@ pub fn parse_account(page: &str) -> AccountPage {
                         .collect()
                 })
                 .unwrap_or_default();
+            out.groups = parse_title_groups(body);
             continue;
         }
         let stats: Vec<(String, String, String)> = regex!(r#"<div class="stat-v ?([^"]*)">([^<]*)</div><div class="stat-k">([^<]*)</div>"#)
@@ -805,6 +865,91 @@ pub fn parse_account(page: &str) -> AccountPage {
         out.panels.push(Panel { title, stats, form });
     }
     out
+}
+
+/// The Titles panel's every-title list: `<details class="qmore">` per category, each with its quests.
+fn parse_title_groups(body: &str) -> Vec<TitleGroup> {
+    let Some(all) = body.find("qcats-all").map(|i| &body[i..]) else { return vec![] };
+    all.split(r#"<details class="qmore">"#)
+        .skip(1)
+        .filter_map(|cat| {
+            let name = regex!(r#"<span class="qcat-n">(.*?)</span>"#).captures(cat).map(|c| text(&c[1]))?;
+            let earned = regex!(r#"<span class="qcat-c">\s*(\d+) of (\d+)"#)
+                .captures(cat)
+                .and_then(|c| Some((c[1].parse().ok()?, c[2].parse().ok()?)));
+            let about = regex!(r#"(?s)<p class="qcat-b">(.*?)</p>"#).captures(cat).map(|c| text(&c[1])).unwrap_or_default();
+            // each quest runs from its opening tag to the next one's (`quests`, the list itself, doesn't match)
+            let starts: Vec<_> = regex!(r#"<div class="quest(?: ([^"]*))?">"#)
+                .captures_iter(cat)
+                .map(|c| (c.get(0).unwrap().start(), c.get(1).map_or("", |m| m.as_str())))
+                .collect();
+            let titles = starts
+                .iter()
+                .enumerate()
+                .map(|(i, &(at, class))| parse_title(class, &cat[at..starts.get(i + 1).map_or(cat.len(), |n| n.0)]))
+                .collect();
+            Some(TitleGroup { name, about, earned, titles })
+        })
+        .collect()
+}
+
+fn parse_title(class: &str, q: &str) -> Title {
+    let classes: Vec<&str> = class.split_whitespace().collect();
+    let kind = if classes.contains(&"qlad") {
+        TitleKind::Ladder
+    } else if classes.contains(&"qcrown") {
+        TitleKind::Crown
+    } else if classes.contains(&"qring") {
+        TitleKind::Ring
+    } else {
+        TitleKind::Plain
+    };
+    let head = regex!(r#"(?s)<span class="quest-n">(.*?)</span><span class="quest-c">(.*?)</span>"#).captures(q);
+    let head_n = head.as_ref().map_or("", |c| c.get(1).unwrap().as_str());
+    let head_c = head.as_ref().map_or("", |c| c.get(2).unwrap().as_str());
+    let icon = regex!(r#"<span class="ico"[^>]*>(.*?)</span>"#).captures(head_n).map(|i| text(&i[1])).unwrap_or_default();
+    let name = text(&regex!(r#"<span class="ico"[^>]*>.*?</span>"#).replace(head_n, ""));
+    let about = regex!(r#"(?s)<(?:div|p) class="quest-d">(.*?)</(?:div|p)>"#).captures(q).map(|c| text(&c[1])).unwrap_or_default();
+    let steps: Vec<TitleStep> = match kind {
+        TitleKind::Ladder => regex!(r#"(?s)<div class="lrung( is-got)?">.*?<span class="lnum">(.*?)</span><span class="lname">(.*?)</span><span class="lstate">(.*?)</span>"#)
+            .captures_iter(q)
+            .map(|c| TitleStep { label: text(&c[2]), name: text(&c[3]), earned: c.get(1).is_some(), progress: have_need(&text(&c[4])) })
+            .collect(),
+        TitleKind::Ring => regex!(r#"(?s)<span class="ehex[^"]*?( is-got)?"><img[^>]*><span class="ehex-c">(.*?)</span></span><span class="ecell-n[^"]*">(.*?)</span><span class="sr-only">(.*?)</span>"#)
+            .captures_iter(q)
+            .map(|c| TitleStep {
+                label: text(&c[3]),
+                // "EARTH MASTER 1 of 2" / "GRASS MASTER earned"
+                name: regex!(r"\s+(?:\d+ of \d+|earned)$").replace(&text(&c[4]), "").into_owned(),
+                earned: c.get(1).is_some(),
+                progress: have_need(&text(&c[2])),
+            })
+            .collect(),
+        _ => vec![],
+    };
+    let status = text(head_c);
+    let bar = regex!(r#"<span class="quest-c">([\d,]+)<small>/([\d,]+)</small>"#)
+        .captures(q)
+        .and_then(|c| Some((c[1].replace(',', "").parse().ok()?, c[2].replace(',', "").parse().ok()?)));
+    let progress = match kind {
+        TitleKind::Ladder => steps.iter().find(|s| !s.earned).and_then(|s| s.progress),
+        _ => bar,
+    };
+    let earned = match kind {
+        TitleKind::Ladder | TitleKind::Ring => !steps.is_empty() && steps.iter().all(|s| s.earned),
+        _ => classes.contains(&"is-earned"),
+    };
+    let holders = regex!(r#"(?s)<p class="qcrown-h">(.*?)</p>"#)
+        .captures(q)
+        .map(|h| regex!(r"(?s)<a [^>]*>(.*?)</a>").captures_iter(&h[1]).map(|a| text(&a[1])).collect())
+        .unwrap_or_default();
+    Title { kind, icon, name, about, earned, progress, status, steps, holders }
+}
+
+/// "7/9" as (7, 9)
+fn have_need(s: &str) -> Option<(u64, u64)> {
+    let c = regex!(r"^([\d,]+)\s*/\s*([\d,]+)$").captures(s.trim())?;
+    Some((c[1].replace(',', "").parse().ok()?, c[2].replace(',', "").parse().ok()?))
 }
 
 // --- your pet (/pet) and your Hall (/hall), signed in ---
@@ -1031,15 +1176,62 @@ mod tests {
         assert_eq!(pred.stats[4], ("Net".into(), "+4,310".into(), "good".into()));
         assert_eq!(pred.form.len(), 10);
         assert_eq!(a.titles_earned, Some((16, 52)));
-        assert_eq!(a.titles.len(), 4);
+        assert_eq!(a.titles.len(), 16);
         assert!(a.titles[0].rare && a.titles[0].name == "Tournament champion" && a.titles[0].icon == "🥇");
         assert_eq!((a.titles[2].name.as_str(), a.titles[2].times), ("Kingslayer", Some(3)));
         assert_eq!(a.titles[1].about, "Won with every element");
         assert!(a.titles.iter().all(|t| !t.name.contains("Closest") && t.name.len() < 30), "{:?}", a.titles);
         let closest: Vec<_> = a.closest.iter().map(|q| (q.icon.as_str(), q.name.as_str(), q.have, q.need)).collect();
-        assert_eq!(closest, [("🎯", "BIG CALL", 8_250, 10_000), ("🐾", "BEAST MASTER", 2, 3)]);
+        assert_eq!(closest[..2], [("🎯", "BIG CALL", 8_250, 10_000), ("🐾", "BEAST MASTER", 2, 3)]);
+        assert_eq!(closest.len(), 4, "just the closest, not the every-title list after them");
         assert_eq!(a.closest[1].about, "Owns three or more beast pals");
+        // every title, by category
+        let groups: Vec<_> = a.groups.iter().map(|g| (g.name.as_str(), g.earned)).collect();
+        assert_eq!(groups[0], ("In the pit", Some((2, 9))));
+        assert_eq!(groups.len(), 7);
+        assert_eq!(a.groups[0].about, "Send your pal in and win fights.");
+        let count = |g: &TitleGroup| g.titles.iter().map(|t| t.steps.len().max(1)).sum::<usize>() as u32;
+        assert!(a.groups.iter().all(|g| Some(count(g)) == g.earned.map(|e| e.1)), "each title counted once");
+        assert_eq!(a.groups.iter().map(count).sum::<u32>(), 52);
+        let find = |n: &str| a.groups.iter().flat_map(|g| &g.titles).find(|t| t.name == n).unwrap_or_else(|| panic!("no {n}"));
+        let duels = find("Duels fought");
+        assert_eq!((duels.kind, duels.earned, duels.status.as_str(), duels.steps.len()), (TitleKind::Ladder, true, "Complete", 2));
+        assert_eq!((duels.steps[1].label.as_str(), duels.steps[1].name.as_str()), ("II", "PIT REGULAR"));
+        let eggs = find("Eggs hatched");
+        assert_eq!(
+            (eggs.earned, eggs.progress, eggs.steps[0].earned, eggs.steps[1].progress),
+            (false, Some((38, 50)), true, Some((38, 50)))
+        );
+        let top_dog = find("TOP DOG");
+        assert_eq!((top_dog.kind, top_dog.icon.as_str(), top_dog.status.as_str()), (TitleKind::Crown, "♛", "1 holder"));
+        assert_eq!((top_dog.about.as_str(), top_dog.holders.clone()), ("Most duel wins on the channel", vec!["player-44".to_string()]));
+        assert!(find("UNLUCKIEST").holders.is_empty());
+        let kingslayer = find("KINGSLAYER");
+        assert_eq!(
+            (kingslayer.kind, kingslayer.earned, kingslayer.icon.as_str(), kingslayer.progress),
+            (TitleKind::Plain, true, "🗡", None)
+        );
+        assert_eq!(kingslayer.about, "Three or more wins over the channel's top duellist");
+        let champ = find("CHAMPION");
+        assert_eq!((champ.earned, champ.status.as_str(), champ.progress), (false, "Locked", None));
+        let grinder = find("GRINDER");
+        assert_eq!((grinder.earned, grinder.progress), (false, Some((312, 400))));
+        let ring = find("Element masters");
+        assert_eq!((ring.kind, ring.status.as_str(), ring.steps.len(), ring.earned), (TitleKind::Ring, "2 of 9 titles", 9, false));
+        let ground = &ring.steps[0];
+        assert_eq!(
+            (ground.label.as_str(), ground.name.as_str(), ground.earned, ground.progress),
+            ("Ground", "EARTH MASTER", false, Some((1, 2)))
+        );
+        assert_eq!((ring.steps[7].name.as_str(), ring.steps[7].earned, ring.steps[7].progress), ("GRASS MASTER", true, None));
+        // the saved public profile has the same list, in the site's own spacing
         let public = parse_account(&page("user-trongateslegacy.html"));
+        assert_eq!(public.groups.len(), 7);
+        assert_eq!(public.groups.iter().map(count).sum::<u32>(), 52);
+        assert!(public.groups.iter().all(|g| Some(count(g)) == g.earned.map(|e| e.1) && !g.about.is_empty()));
+        // saved before categories were read, a profile still loads
+        let old: AccountPage = serde_json::from_str(r#"{"balance":1,"panels":[],"titles_earned":[1,52],"titles":[]}"#).unwrap();
+        assert!(old.groups.is_empty() && old.closest.is_empty());
         assert_eq!(public.balance, None, "signed out, there's no balance");
     }
 

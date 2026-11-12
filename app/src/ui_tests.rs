@@ -285,7 +285,7 @@ const MAIN_DRIVER: &str = r#"
       .map((el) => `${el.tagName.toLowerCase()}.${[...el.classList].join('.')} (${el.clientWidth}px, needs ${el.scrollWidth}px): ${el.textContent.trim().replace(/\s+/g, ' ').slice(0, 50)}`);
   if (!window.augur) window.__errors.push('the page never started (a module failed to load)');
   else {
-    for (const tab of only ? [only] : ['live', 'history', 'bets', 'pals', 'players', 'you', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'updates', 'offair']) {
+    for (const tab of only ? [only] : ['live', 'history', 'bets', 'pals', 'players', 'you', 'titles', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'updates', 'offair']) {
       // "ownmodel" is Settings › Model with self-tuning off and your own values
       const own = DATA.get_settings;
       if (tab === 'ownmodel') DATA.get_settings = { ...own, model_auto: false };
@@ -296,12 +296,14 @@ const MAIN_DRIVER: &str = r#"
       }
       // "bets" is History's Your bets view; "staking", "sync" and "updates" are Settings pages
       window.augur.state.view = tab === 'bets' ? 'bets' : 'calls';
+      // "titles" is You › Titles, every title by category
+      window.augur.state.youView = tab === 'titles' ? 'titles' : 'profile';
       // "offair" is Live with no duel up, after a stream
       if (tab === 'offair') window.augur.state.live = { ...DATA.live, prediction: null, queue: [], off_air: DATA.off_air, title: 'Last duel' };
       else window.augur.state.live = DATA.live;
       window.augur.state.settingsPage = ['staking', 'sync', 'updates'].includes(tab) ? tab : tab === 'ownmodel' ? 'model' : 'general';
       // "welcome" is the fresh install's overlay, over Live
-      await window.augur.show(tab === 'bets' ? 'history' : ['staking', 'sync', 'updates', 'ownmodel'].includes(tab) ? 'settings' : ['welcome', 'offair'].includes(tab) ? 'live' : tab);
+      await window.augur.show(tab === 'bets' ? 'history' : ['staking', 'sync', 'updates', 'ownmodel'].includes(tab) ? 'settings' : ['welcome', 'offair'].includes(tab) ? 'live' : tab === 'titles' ? 'you' : tab);
       await sleep(300);
       out[tab] = document.getElementById('main').innerText;
       out.spills[tab] = spills();
@@ -452,9 +454,10 @@ fn big_numbers_fit() {
     if let Some(folder) = std::env::var_os("AUGUR_UI_SHOTS").map(PathBuf::from) {
         let folder = folder.join("big");
         std::fs::create_dir_all(&folder).unwrap();
-        for tab in
-            ["live", "history", "bets", "pals", "players", "you", "model", "settings", "staking", "ownmodel", "sync", "updates", "offair"]
-        {
+        for tab in [
+            "live", "history", "bets", "pals", "players", "you", "titles", "model", "settings", "staking", "ownmodel", "sync", "updates",
+            "offair",
+        ] {
             render(port, tab, Some((&folder, tab)));
         }
     }
@@ -494,6 +497,30 @@ fn every_tab_renders_headless() {
         text("you")
     );
     assert!(text("sidebar").contains("you"), "signed in, the sidebar has You: {}", text("sidebar"));
+    assert!(text("you").contains("all titles ›"), "You links to its Titles view: {}", text("you"));
+    assert!(
+        text("titles").contains("16 titles earned")
+            && text("titles").contains("36 still to unlock")
+            && text("titles").contains("closest to unlock")
+            && text("titles").contains("every title")
+            && text("titles").contains("in the pit")
+            && text("titles").contains("send your pal in and win fights.")
+            && text("titles").contains("tournaments"),
+        "Titles: {}",
+        text("titles")
+    );
+    // a ladder's steps, a crown's holder, the element ring and a locked title's progress
+    assert!(
+        text("titles").contains("pit regular")
+            && text("titles").contains("held by player-44")
+            && text("titles").contains("nobody holds it yet")
+            && text("titles").contains("dragon")
+            && text("titles").contains("312/400")
+            && text("titles").contains("sparring bag"),
+        "Titles: {}",
+        text("titles")
+    );
+    assert!(!text("titles").contains("your balance"), "Titles is its own view: {}", text("titles"));
     assert!(
         text("offair").contains("off air") && text("offair").contains("last stream") && text("offair").contains("latest calls"),
         "Live off air: {}",
@@ -567,8 +594,8 @@ fn every_tab_renders_headless() {
         std::fs::create_dir_all(&folder).unwrap();
         let port = serve("index.html", &data, MAIN_DRIVER);
         for tab in [
-            "live", "history", "bets", "pals", "players", "you", "model", "settings", "staking", "ownmodel", "sync", "welcome", "updates",
-            "offair",
+            "live", "history", "bets", "pals", "players", "you", "titles", "model", "settings", "staking", "ownmodel", "sync", "welcome",
+            "updates", "offair",
         ] {
             render(port, tab, Some((&folder, tab)));
         }

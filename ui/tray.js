@@ -3,13 +3,23 @@
 import { invoke, listen } from './lib/bridge.js';
 import { copyText } from './lib/clipboard.js';
 import { esc, fmt, pct, signed } from './lib/format.js';
-import { SHORT, dial, pickVoice, tapeRows, voiceLine, whyLine } from './lib/pal.js';
+import { SHORT, dial, face, pickVoice, tapeRows, voiceLine, whyLine } from './lib/pal.js';
 import { betCommand, stakeLine } from './lib/stake.js';
 
 const el = document.getElementById('pop');
 const state = { view: null, settings: null, voice: null, update: null };
 
 const shortDay = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+// today's date as the calls are dated (YYYY-MM-DD, local)
+const todayIso = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+
+// the next duel: each owner's face and name on their side, a long name trimmed with "…" (the full one on hover)
+function nextUp(queue) {
+  const [q, ...rest] = queue;
+  const side = (name, cls) => `<span class="nu-s ${cls}" title="${esc(name)}">${face(name, `${cls === 'h' ? 'h' : 'a'} av`, 26)}<span>${esc(name)}</span></span>`;
+  return `<div class="nu"><div class="nu-t"><b>Next up</b>${rest.length ? `<small>+${rest.length} queued</small>` : ''}</div>
+    <div class="nu-m">${side(q.home, 'h')}<span class="nu-v">vs</span>${side(q.away, 'a')}</div></div>`;
+}
 
 // no duel up: between duels (something's queued) or off air, and how the last stream went
 function quiet(view) {
@@ -19,12 +29,12 @@ function quiet(view) {
   const hero = view?.error
     ? '<b>Can’t reach PalDuels</b><small>Augur keeps trying every 30 seconds.</small>'
     : between
-      ? `<b>Next up</b><small>${(view.queue || []).slice(0, 2).map((q) => `${esc(q.home)} vs ${esc(q.away)}`).join(' · ')}</small>`
+      ? nextUp(view.queue)
       : '<b>See you next stream</b><small>Augur calls the next fight the moment it’s up.</small>';
   const ls = o?.last_stream;
   const stream = ls
-    ? `<div class="qs"><div class="qh"><span>${between ? 'Today' : 'Last stream'} · ${esc(shortDay(ls[0]))}</span><span>best run ${ls[3]}</span></div>
-        <div class="qn"><b>${ls[1]}<i>/${ls[2]}</i></b><span>${pct(ls[1] / ls[2])} right</span></div>
+    ? `<div class="qs"><div class="qh"><span>${ls[0] === todayIso() ? 'Today' : 'Last stream'} · ${esc(shortDay(ls[0]))}</span><span>best run ${fmt(ls[3])}</span></div>
+        <div class="qn"><b>${fmt(ls[1])}<i>/${fmt(ls[2])}</i></b><span>${pct(ls[1] / ls[2])} right</span></div>
         ${o.last_bets ? `<div class="qb"><span>You <b class="${o.last_bets[0] >= 0 ? 'ok' : 'bad'}">${signed(o.last_bets[0])}</b></span><span>Following Augur <b class="${o.last_bets[1] >= 0 ? 'ok' : 'bad'}">${signed(o.last_bets[1])}</b></span></div>` : ''}</div>`
     : '';
   const recent = o?.recent?.length

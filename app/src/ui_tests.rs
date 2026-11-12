@@ -601,3 +601,39 @@ fn tray_popover_off_air_renders_headless() {
         render_at(serve("tray.html", &fixture_data(), TRAY_OFF_AIR_DRIVER), "tray-off-air", Some((&folder, "tray-off-air")), (340, 540));
     }
 }
+
+// Between duels: the next one queued, with a long name, and another behind it.
+const TRAY_BETWEEN_DRIVER: &str = r#"
+DATA.live = { ...DATA.live, prediction: null, off_air: DATA.off_air, title: 'Last duel',
+  queue: [{ pos: 1, home: 'player-28', away: 'a-very-long-kick-name-indeed-2026' }, { pos: 2, home: 'player-37', away: 'player-20' }] };
+(async () => {
+  document.body.style.width = '340px'; // the popover's width
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  for (let i = 0; i < 60 && !window.augur; i++) await sleep(100);
+  await sleep(200);
+  // the long name stays on one line, trimmed inside its half
+  const names = [...document.querySelectorAll('.nu-s > span:last-child')];
+  const oneLine = names.every((n) => n.getClientRects().length === 1 && n.scrollWidth >= n.clientWidth);
+  const inside = names.every((n) => n.getBoundingClientRect().right <= document.getElementById('pop').getBoundingClientRect().right);
+  document.getElementById('report').textContent = JSON.stringify({ tray: document.getElementById('pop').innerText, oneLine, inside, errors: window.__errors });
+})();
+"#;
+
+#[test]
+fn tray_popover_between_duels_shows_the_next_one() {
+    if !have_chrome() {
+        return;
+    }
+    let r = render(serve("tray.html", &fixture_data(), TRAY_BETWEEN_DRIVER), "tray-between", None);
+    assert_eq!(r["errors"], json!([]), "script errors: {}", r["errors"]);
+    let tray = r["tray"].as_str().unwrap();
+    let t = tray.to_lowercase();
+    assert!(t.contains("between duels") && t.contains("next up") && t.contains("player-28"), "the next duel: {tray}");
+    assert!(t.contains("+1 queued") && !t.contains("player-37"), "only the next duel, and how many more: {tray}");
+    assert!(t.contains("last stream"), "the stream card isn't called today when it wasn't: {tray}");
+    assert_eq!((r["oneLine"].as_bool(), r["inside"].as_bool()), (Some(true), Some(true)), "long names stay on one line inside the card");
+    if let Some(folder) = std::env::var_os("AUGUR_UI_SHOTS").map(PathBuf::from) {
+        std::fs::create_dir_all(&folder).unwrap();
+        render_at(serve("tray.html", &fixture_data(), TRAY_BETWEEN_DRIVER), "tray-between", Some((&folder, "tray-between")), (340, 600));
+    }
+}

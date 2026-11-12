@@ -5,6 +5,7 @@ mod app;
 mod cli;
 mod secure;
 mod settings;
+mod sync;
 mod views;
 
 use clap::Parser;

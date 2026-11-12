@@ -1,6 +1,6 @@
 // Model: the settings and what they were fitted on, a suggested change, the species with secret moves, data health.
 import { invoke } from '../lib/bridge.js';
-import { esc, fmt, pct } from '../lib/format.js';
+import { ago, esc, fmt, pct } from '../lib/format.js';
 
 const slider = (label, v, lo, hi, shown) =>
   `<div class="set"><span>${label}</span><div class="sl"><i style="left:${((v - lo) / (hi - lo)) * 100}%"></i></div><span class="v">${shown}</span></div>`;
@@ -38,7 +38,7 @@ export async function render(app) {
         <div class="panel"><div class="ph"><h3>Pals with secret moves</h3><span>share of damage</span></div><table><tbody>${m.unlisted.map((u) => `<tr><td>${esc(u.pal)}<div class="small">${u.moves.map((x) => esc(x[0])).join(', ')}</div></td><td class="num gold">${pct(u.share)}</td></tr>`).join('')}</tbody></table></div></div>
       <div style="display:grid;gap:14px;align-content:start">
         <div class="panel"><div class="ph"><h3>Data health</h3></div>
-          <div class="hb"><span class="small">Live feed</span><span>${m.synced_at ? `synced ${Math.max(0, Math.round((Date.now() - m.synced_at) / 1000))}s ago` : 'not yet'}</span><span class="${m.synced_at ? 'ok' : 'muted'}">●</span></div>
+          <div class="hb"><span class="small">Live feed</span><span>${m.synced_at ? `synced ${Date.now() - m.synced_at < 90000 ? `${Math.max(0, Math.round((Date.now() - m.synced_at) / 1000))}s ago` : ago(m.synced_at)}` : 'not yet'}</span><span class="${m.synced_at ? 'ok' : 'muted'}">●</span></div>
           <div class="hb"><span class="small">Past duels</span><span>${fmt(m.duels)}</span><span class="${m.duels ? 'ok' : 'muted'}">●</span></div>
           <div class="hb"><span class="small">Species</span><span>${fmt(m.species)}</span><span class="${m.species ? 'ok' : 'muted'}">●</span></div>
           <div class="hb"><span class="small">Backfill</span><span>${backfillLine(b)}</span><span class="${b.last_error ? 'bad' : 'ok'}">●</span></div>

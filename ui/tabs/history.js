@@ -1,7 +1,7 @@
 // History: Augur's own calls (today, this week or all time), calibration and the record by stream; and Your bets:
 // the developer's bets next to Augur's calls and stakes, with missed fights kept apart from deviations.
 import { invoke } from '../lib/bridge.js';
-import { esc, fmt, pct, signed } from '../lib/format.js';
+import { ago, esc, fmt, pct, signed } from '../lib/format.js';
 
 const RANGES = [
   ['today', 'Today'],
@@ -24,16 +24,13 @@ const LABELS = { followed: 'Followed', deviated: 'Deviated', missed: 'Missed', n
 const side = (f, s) => (s == null ? '—' : esc(s === 'home' ? f.home_pal : f.away_pal));
 const money = (n, est) => (n == null ? '<span class="muted">—</span>' : `<span class="${n > 0 ? 'ok' : n < 0 ? 'bad' : 'muted'}">${signed(n)}</span>${est ? ' <span class="est" title="Estimated at your usual payout">est.</span>' : ''}`);
 
-function betRow(f) {
-  const augur = f.pick ? `${side(f, f.pick)} <span class="muted">${pct(f.prob)}</span>${f.augur_command ? ` · <b>${esc(f.augur_command)}</b>` : ' · no bet'}` : '<span class="muted">no call</span>';
-  const yours = f.backed ? `${side(f, f.backed)} <span class="muted">${fmt(f.stake)}</span>` : '<span class="muted">no bet</span>';
-  return `<tr><td>${esc(f.home_pal)} <span class="muted">vs</span> ${esc(f.away_pal)}</td><td>${augur}</td><td>${yours}</td><td><span class="lab ${f.label}">${LABELS[f.label]}</span></td><td class="num">${money(f.result)}</td><td class="num">${f.pick ? money(f.augur_result, f.estimated) : money(null)}</td></tr>`;
-}
+// a cell with the pal on top and the detail under it
+const cell = (top, under) => `<div class="two"><span>${top}</span><small>${under}</small></div>`;
 
-function ago(ms) {
-  if (!ms) return 'never';
-  const m = Math.round((Date.now() - ms) / 60000);
-  return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`;
+function betRow(f) {
+  const augur = f.pick ? cell(side(f, f.pick), `${pct(f.prob)} · ${f.augur_command ? `<b>${esc(f.augur_command)}</b>` : 'no bet'}`) : '<span class="muted">no call</span>';
+  const yours = f.backed ? cell(side(f, f.backed), `${fmt(f.stake)} credits`) : '<span class="muted">no bet</span>';
+  return `<tr><td>${esc(f.home_pal)} <span class="muted">vs</span> ${esc(f.away_pal)}</td><td>${augur}</td><td>${yours}</td><td><span class="lab ${f.label}">${LABELS[f.label]}</span></td><td class="num">${money(f.result)}</td><td class="num">${f.pick ? money(f.augur_result, f.estimated) : money(null)}</td></tr>`;
 }
 
 async function renderBets(app, controls) {

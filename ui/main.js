@@ -32,6 +32,17 @@ listen('live', (v) => {
   if (app.state.tab === 'live') live.render(app);
 });
 listen('navigate', (tab) => app.show(tab));
+listen('settings', (s) => {
+  // another computer's change arrived through sync
+  app.state.settings = s;
+  if (app.state.tab === 'settings') settings.render(app);
+});
+listen('sync', () => {
+  if (app.state.tab === 'settings' && app.state.settingsPage === 'sync') settings.render(app);
+});
+listen('calls', () => {
+  if (app.state.tab === 'history') history.render(app);
+});
 listen('bets', (p) => {
   // redraw Your bets when an import finishes or moves on a page
   if (app.state.tab === 'history' && app.state.view === 'bets' && (p.phase === 'done' || p.done % 25 === 0)) history.render(app);

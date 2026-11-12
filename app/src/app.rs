@@ -1,5 +1,6 @@
 //! The desktop app: the tray (pick in the menu bar on macOS, a confidence ring on Windows), the popover, the main
-//! window, the live sync loop, the background backfill, the bets import and the commands the pages call.
+//! window, the live sync loop, the background backfill, the bets import and the commands the pages call (Settings ›
+//! Sync & data's are in `sync.rs`).
 
 use crate::secure;
 use crate::settings::{self, AppSettings};
@@ -10,6 +11,7 @@ use augur_engine::history::{self, Backtest};
 use augur_engine::predict;
 use augur_engine::site::{self, State};
 use augur_engine::stake::{self, Stake};
+use augur_engine::sync::{DeviceFile, SyncState};
 use augur_engine::{db, model, rusqlite};
 use base64::Engine;
 use serde::Serialize;
@@ -39,6 +41,10 @@ pub struct Shared {
     pub rosters: Mutex<HashMap<String, (Instant, Vec<site::BoxPal>)>>,
     pub busy: AtomicBool,
     pub stop: AtomicBool,
+    /// Settings › Sync: this computer's state, the other computers last seen, and "sync now"
+    pub sync: Mutex<SyncState>,
+    pub others: Mutex<Vec<DeviceFile>>,
+    pub sync_now: AtomicBool,
     pub tray: Mutex<Option<TrayIcon>>,
 }
 
@@ -48,7 +54,7 @@ impl Shared {
     }
 }
 
-fn now_ms() -> u64 {
+pub fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
@@ -90,6 +96,23 @@ fn ring_icon(chance: Option<f64>, home: bool) -> Image<'static> {
         }
     }
     Image::new_owned(px, n, n)
+}
+
+/// Re-works the stake for the call that's up (the staking settings or the payout changed).
+pub fn restake(app: &AppHandle, shared: &Shared) {
+    let Ok(conn) = shared.db() else { return };
+    let settings = shared.settings.lock().unwrap().clone();
+    let mut live = shared.live.lock().unwrap();
+    if let Some(p) = live.prediction.clone() {
+        let st = stake_for(&conn, &settings, &p.pick, p.prob);
+        if let Ok(Some(id)) = db::open_call(&conn, &p.home.owner, &p.away.owner) {
+            let _ = db::set_call_stake(&conn, id, st.amount, &st.command);
+        }
+        live.stake = Some(st);
+    }
+    let _ = app.emit("live", &*live);
+    drop(live);
+    update_tray(app, shared);
 }
 
 fn update_tray(app: &AppHandle, shared: &Shared) {
@@ -287,6 +310,23 @@ fn bets_loop(app: AppHandle, shared: Arc<Shared>) {
     }
 }
 
+/// The pages are laid out for 1280x720. A bigger or smaller window zooms them to fit, so they look the same at any
+/// size instead of stretching (or crowding) the layout.
+fn fit_zoom(w: &tauri::WebviewWindow) {
+    let (Ok(size), Ok(scale)) = (w.inner_size(), w.scale_factor()) else { return };
+    let size = size.to_logical::<f64>(scale);
+    let _ = w.set_zoom((size.width / 1280.0).min(size.height / 720.0).clamp(0.8, 2.0));
+}
+
+/// What each staking choice would suggest at a spread of chances, for Settings › Staking.
+#[tauri::command]
+fn stake_preview(shared: tauri::State<'_, Arc<Shared>>, staking: stake::StakeSettings) -> Cmd<Vec<(f64, Stake)>> {
+    let conn = shared.db()?;
+    let odds = bets::odds(&conn).unwrap_or_default();
+    let balance = bets::balance(&conn);
+    Ok([0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9].iter().map(|&p| (p, stake::suggest("home", p, &staking, &odds, balance))).collect())
+}
+
 fn toggle_popover(app: &AppHandle) {
     let Some(w) = app.get_webview_window("tray") else { return };
     if w.is_visible().unwrap_or(false) {
@@ -385,20 +425,10 @@ fn save_settings(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>, settings
     settings.save(&shared.dir)?;
     let autostart = app.autolaunch();
     let _ = if settings.launch_at_login { autostart.enable() } else { autostart.disable() };
-    // the staking settings may have changed: re-work the stake for the call that's up
-    if let Ok(conn) = shared.db() {
-        let mut live = shared.live.lock().unwrap();
-        if let Some(p) = live.prediction.clone() {
-            let st = stake_for(&conn, &settings, &p.pick, p.prob);
-            if let Ok(Some(id)) = db::open_call(&conn, &p.home.owner, &p.away.owner) {
-                let _ = db::set_call_stake(&conn, id, st.amount, &st.command);
-            }
-            live.stake = Some(st);
-        }
-        let _ = app.emit("live", &*live);
-    }
     *shared.settings.lock().unwrap() = settings;
-    update_tray(&app, &shared);
+    // the staking settings may have changed: re-work the stake for the call that's up
+    restake(&app, &shared);
+    shared.sync_now.store(true, Ordering::Relaxed);
     Ok(())
 }
 
@@ -501,6 +531,10 @@ fn sign_out(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>) {
 pub fn run() {
     let dir = settings::data_dir();
     let _ = std::fs::create_dir_all(&dir);
+    let mut sync_state = SyncState::load(&dir);
+    if sync_state.name.is_empty() {
+        sync_state.name = crate::sync::default_name();
+    }
     let shared = Arc::new(Shared {
         settings: Mutex::new(AppSettings::load(&dir)),
         dir,
@@ -512,11 +546,15 @@ pub fn run() {
         rosters: Mutex::new(HashMap::new()),
         busy: AtomicBool::new(false),
         stop: AtomicBool::new(false),
+        sync: Mutex::new(sync_state),
+        others: Mutex::new(vec![]),
+        sync_now: AtomicBool::new(false),
         tray: Mutex::new(None),
     });
     tauri::Builder::default()
         .plugin(tauri_plugin_positioner::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .manage(shared.clone())
         .invoke_handler(tauri::generate_handler![
@@ -524,6 +562,7 @@ pub fn run() {
             history,
             bets_view,
             import_bets,
+            stake_preview,
             species_list,
             species,
             player,
@@ -535,7 +574,12 @@ pub fn run() {
             hide_popover,
             account,
             sign_in,
-            sign_out
+            sign_out,
+            crate::sync::sync_view,
+            crate::sync::sync_set,
+            crate::sync::choose_sync_folder,
+            crate::sync::backup,
+            crate::sync::import_file
         ])
         .setup(move |app| {
             #[cfg(target_os = "macos")]
@@ -580,12 +624,15 @@ pub fn run() {
             }
             if let Some(w) = app.get_webview_window("main") {
                 let w2 = w.clone();
-                w.on_window_event(move |e| {
-                    if let WindowEvent::CloseRequested { api, .. } = e {
+                w.on_window_event(move |e| match e {
+                    WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
                         let _ = w2.hide();
                     }
+                    WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => fit_zoom(&w2),
+                    _ => {}
                 });
+                fit_zoom(&w);
             }
             // first launch: show the window so it's clear the app is running (afterwards it starts in the tray)
             if !shared.dir.join("settings.json").exists() {
@@ -598,6 +645,8 @@ pub fn run() {
             std::thread::spawn(move || backfill_loop(h2, s2));
             let (h3, s3) = (app.handle().clone(), shared.clone());
             std::thread::spawn(move || bets_loop(h3, s3));
+            let (h4, s4) = (app.handle().clone(), shared.clone());
+            std::thread::spawn(move || crate::sync::sync_loop(h4, s4));
             Ok(())
         })
         .run(tauri::generate_context!())

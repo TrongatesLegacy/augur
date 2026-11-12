@@ -311,7 +311,9 @@ fn every_tab_renders_headless() {
     assert!(text("players").contains("nyafia primo"), "Players: {}", text("players"));
     assert!(text("model").contains("history test"), "Model: {}", text("model"));
     assert!(
-        text("settings").contains("chat lines") && text("settings").contains("notify with each result") && text("settings").contains("a new random wait"),
+        text("settings").contains("chat lines")
+            && text("settings").contains("notify with each result")
+            && text("settings").contains("a new random wait"),
         "Settings: {}",
         text("settings")
     );

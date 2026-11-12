@@ -111,6 +111,7 @@ impl Prediction {
             away: self.away.fighter.clone(),
             picks_open: self.picks_open,
             stats_from: format!("home: {}; away: {}", self.home.stats_from, self.away.stats_from),
+            version: env!("CARGO_PKG_VERSION").into(),
         }
     }
 }

@@ -105,7 +105,21 @@ pub fn fixture_data() -> Value {
             need: 200,
         };
         learn::save(&conn, &l).unwrap();
-        views::model_view(&conn, &s, true, None, Default::default(), recent).unwrap()
+        let mut mv = views::model_view(&conn, &s, true, None, Default::default(), recent).unwrap();
+        // made-up eras: a new version, then the self-tuning keeping a change
+        let era = |version: &str, changes: &[&str], since: i64, right, total| augur_engine::history::Era {
+            version: version.into(),
+            changes: changes.iter().map(|c| c.to_string()).collect(),
+            since,
+            right,
+            total,
+        };
+        mv.eras = vec![
+            era("0.1.5", &["TYPE_BONUS 1.4 → 1.5"], recent as i64 - 3_600_000, 4, 5),
+            era("0.1.5", &["version 0.1.4 → 0.1.5"], recent as i64 - 20_000_000, 9, 13),
+            era("0.1.4", &[], recent as i64 - 90_000_000, 13, 18),
+        ];
+        mv
     };
     json!({
         "live": live,

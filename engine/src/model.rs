@@ -259,11 +259,11 @@ pub fn strength(s: &Settings, skills: &[Move], opp_types: &[String]) -> f64 {
         / usable.len() as f64
 }
 
-fn logit(p: f64) -> f64 {
+pub fn logit(p: f64) -> f64 {
     (p / (1.0 - p)).ln()
 }
 
-fn sigmoid(x: f64) -> f64 {
+pub fn sigmoid(x: f64) -> f64 {
     1.0 / (1.0 + (-x).exp())
 }
 

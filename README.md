@@ -6,7 +6,7 @@
 
 Calls the [PalDuels](https://palduels.com/live) fights (chat-run Palworld duels on a Kick stream) before the bell, and keeps score.
 
-Augur lives in the menu bar (macOS) or the tray (Windows). The menu bar shows the favourite and its chance; on Windows the tray icon is a gold ring filled to the chance around a dot in the favourite's colour. Click it for the call: the pick, why, the stats, the bet to type (`!h`, `!h 2300` or `!h all`) and the chat line in five voices, each with a copy button. The main window has the rest: Live, History (Augur's calls, and your bets next to them), Pals, Players (pal boxes and reroll advice), Model and Settings.
+Augur lives in the menu bar (macOS) or the tray (Windows). The menu bar shows the favourite and its chance; on Windows the tray icon is a gold ring filled to the chance around a dot in the favourite's colour. Click it for the call: the pick, why, the stats, the bet to type (`!h`, `!h 2300` or `!h all`) and the chat line in five voices, each with a copy button. The main window has the rest: Live, History (Augur's calls, and your bets next to them; click one for how the duel went and how Augur called it), Pals, Players (pal boxes and reroll advice), Model and Settings.
 
 Built with [Tauri 2](https://tauri.app): a Rust engine and a small web page for the screens. About 9 MB.
 

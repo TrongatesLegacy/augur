@@ -76,6 +76,21 @@ pub fn fixture_data() -> Value {
     if let Some(c) = history.calls.first_mut() {
         c.late = Some((if c.pick == "home" { "away" } else { "home" }.into(), 0.575));
     }
+    // a call's breakdown: the newest call (the first row) with a made-up fight tape, re-called after the bell like
+    // its row, and its home side's stats taken from the owner's box (a store of its own, so the counts above hold)
+    let call_detail = {
+        let conn = seed::store();
+        let newest = augur_engine::db::settled(&conn).unwrap().pop().unwrap();
+        seed::tape(&conn, newest.duel_id.unwrap());
+        conn.execute(
+            "UPDATE predictions SET stats_from = 'home: from their box; away: shown', app_version = '0.1.5' WHERE id = ?",
+            [newest.id],
+        )
+        .unwrap();
+        let mut d = views::call_detail(&conn, newest.id).unwrap().unwrap();
+        d.call.late = history.calls.first().and_then(|c| c.late.clone());
+        d
+    };
     let model_view = {
         // a made-up self-tuning run: one change kept, one held, the stat settings still waiting for calls
         let mut l = learn::learn(&conn, &s, recent - 3_600_000).unwrap();
@@ -124,6 +139,7 @@ pub fn fixture_data() -> Value {
     json!({
         "live": live,
         "history": history,
+        "call_detail": call_detail,
         "bets_view": views::bets_view(&conn, &StakeSettings::default(), "all", 0, Default::default()).unwrap(),
         "import_bets": null,
         "species_list": augur_engine::history::species_records(&conn).unwrap(),
@@ -285,7 +301,7 @@ const MAIN_DRIVER: &str = r#"
       .map((el) => `${el.tagName.toLowerCase()}.${[...el.classList].join('.')} (${el.clientWidth}px, needs ${el.scrollWidth}px): ${el.textContent.trim().replace(/\s+/g, ' ').slice(0, 50)}`);
   if (!window.augur) window.__errors.push('the page never started (a module failed to load)');
   else {
-    for (const tab of only ? [only] : ['live', 'history', 'bets', 'pals', 'players', 'you', 'titles', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'updates', 'offair']) {
+    for (const tab of only ? [only] : ['live', 'history', 'call', 'bets', 'pals', 'players', 'you', 'titles', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'updates', 'offair']) {
       // "ownmodel" is Settings › Model with self-tuning off and your own values
       const own = DATA.get_settings;
       if (tab === 'ownmodel') DATA.get_settings = { ...own, model_auto: false };
@@ -298,15 +314,42 @@ const MAIN_DRIVER: &str = r#"
       window.augur.state.view = tab === 'bets' ? 'bets' : 'calls';
       // "titles" is You › Titles, every title by category
       window.augur.state.youView = tab === 'titles' ? 'titles' : 'profile';
+      // "call" is History with the first call's breakdown opened from its row
+      window.augur.state.call = null;
       // "offair" is Live with no duel up, after a stream
       if (tab === 'offair') window.augur.state.live = { ...DATA.live, prediction: null, queue: [], off_air: DATA.off_air, title: 'Last duel' };
       else window.augur.state.live = DATA.live;
       window.augur.state.settingsPage = ['staking', 'sync', 'updates'].includes(tab) ? tab : tab === 'ownmodel' ? 'model' : 'general';
       // "welcome" is the fresh install's overlay, over Live
-      await window.augur.show(tab === 'bets' ? 'history' : ['staking', 'sync', 'updates', 'ownmodel'].includes(tab) ? 'settings' : ['welcome', 'offair'].includes(tab) ? 'live' : tab === 'titles' ? 'you' : tab);
+      await window.augur.show(['bets', 'call'].includes(tab) ? 'history' : ['staking', 'sync', 'updates', 'ownmodel'].includes(tab) ? 'settings' : ['welcome', 'offair'].includes(tab) ? 'live' : tab === 'titles' ? 'you' : tab);
       await sleep(300);
+      if (tab === 'bets') out.betRows = document.querySelectorAll('#main tr[data-call]').length;
+      if (tab === 'call') {
+        document.querySelector('#main tr[data-call]')?.click();
+        await sleep(400);
+        out.chart = { lines: document.querySelectorAll('.hpc path.line').length, hits: document.querySelectorAll('.hpc circle').length, ko: !!document.querySelector('.hpc .ko') };
+        out.fits = document.getElementById('main').scrollHeight <= document.getElementById('main').clientHeight + 1;
+      }
       out[tab] = document.getElementById('main').innerText;
       out.spills[tab] = spills();
+      if (tab === 'call' && !only) {
+        // an old call: no tape, no fighters, no factors kept
+        const full = DATA.call_detail;
+        DATA.call_detail = { ...full, call: { ...full.call, fighters: null }, sides: [], model: null, settings: null, fight: { ...full.fight, hits: [], hp: [[[0, 100]], [[0, 100]]], moves: [[], []], biggest: [] } };
+        window.augur.state.call = null;
+        await window.augur.show('history');
+        await sleep(200);
+        document.querySelector('#main tr[data-call]')?.click();
+        await sleep(300);
+        out.callBare = document.getElementById('main').innerText;
+        out.spills.callBare = spills();
+        DATA.call_detail = full;
+        // Back: the list again, in the same range and view
+        document.getElementById('back')?.click();
+        await sleep(300);
+        out.callBack = document.getElementById('main').innerText;
+        out.callBackRange = document.querySelector('.seg button[data-r].on')?.dataset.r;
+      }
       DATA.get_settings = own;
     }
   }
@@ -455,7 +498,7 @@ fn big_numbers_fit() {
         let folder = folder.join("big");
         std::fs::create_dir_all(&folder).unwrap();
         for tab in [
-            "live", "history", "bets", "pals", "players", "you", "titles", "model", "settings", "staking", "ownmodel", "sync", "updates",
+            "live", "history", "call", "bets", "pals", "players", "you", "titles", "model", "settings", "staking", "ownmodel", "sync", "updates",
             "offair",
         ] {
             render(port, tab, Some((&folder, tab)));
@@ -486,6 +529,38 @@ fn every_tab_renders_headless() {
         text("live")
     );
     assert!(text("history").contains("14 / 19"), "History: {}", text("history"));
+    // a call's breakdown, opened from its row
+    let d = &data["call_detail"];
+    let call = text("call");
+    let (home, away) = (d["call"]["home_pal"].as_str().unwrap().to_lowercase(), d["call"]["away_pal"].as_str().unwrap().to_lowercase());
+    let ko = d["fight"]["ko"].as_str().unwrap();
+    assert!(call.contains(&home) && call.contains(&away) && call.contains("augur called"), "the breakdown names both pals: {call}");
+    assert!(call.contains(&format!("k.o. {ko}")) && call.contains("% hp left"), "the result, K.O. and HP left: {call}");
+    assert!(call.contains("how it went") && call.contains("damage by move") && call.contains("top hits"), "how the duel went: {call}");
+    assert!(
+        call.contains("how augur called it") && call.contains("records") && call.contains("pal h2h") && call.contains("together"),
+        "the model's sum: {call}"
+    );
+    assert!(
+        call.contains("tale of the tape") && call.contains("augur 0.1.5") && call.contains("type edge"),
+        "the tape and the settings: {call}"
+    );
+    assert!(call.contains("after the bell") && call.contains("taken from its owner’s box"), "how the call was made: {call}");
+    assert_eq!(r["chart"]["lines"], json!(2), "an HP line per side");
+    assert_eq!(r["chart"]["hits"].as_u64().unwrap() as usize, d["fight"]["hits"].as_array().unwrap().len(), "a dot per hit");
+    assert_eq!(r["chart"]["ko"], json!(true), "the K.O. is marked");
+    assert_eq!(r["fits"], json!(true), "the breakdown fits the window without scrolling");
+    let bare = r["callBare"].as_str().unwrap().to_lowercase();
+    assert!(
+        bare.contains("no fight tape")
+            && bare.contains("no fighters saved")
+            && bare.contains("no numbers kept")
+            && bare.contains("not saved with this call"),
+        "an old call without a tape or fighters still opens: {bare}"
+    );
+    assert!(r["callBack"].as_str().unwrap().to_lowercase().contains("calibration"), "Back returns to the calls");
+    assert_eq!(r["callBackRange"], json!("today"), "in the range it was in");
+    assert!(r["betRows"].as_u64().unwrap() > 0, "Your bets rows with a call open its breakdown too");
     assert!(
         text("you").contains("248,120")
             && text("you").contains("predictions")
@@ -594,7 +669,7 @@ fn every_tab_renders_headless() {
         std::fs::create_dir_all(&folder).unwrap();
         let port = serve("index.html", &data, MAIN_DRIVER);
         for tab in [
-            "live", "history", "bets", "pals", "players", "you", "titles", "model", "settings", "staking", "ownmodel", "sync", "welcome",
+            "live", "history", "call", "bets", "pals", "players", "you", "titles", "model", "settings", "staking", "ownmodel", "sync", "welcome",
             "updates", "offair",
         ] {
             render(port, tab, Some((&folder, tab)));

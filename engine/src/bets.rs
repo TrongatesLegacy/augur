@@ -127,6 +127,9 @@ pub enum Label {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Fight {
+    /// Augur's call on it (None for no-call fights), to open its breakdown
+    #[serde(default)]
+    pub call_id: Option<i64>,
     pub duel_id: Option<u64>,
     pub home_pal: String,
     pub away_pal: String,
@@ -222,6 +225,7 @@ pub fn compare(calls: &[CallRecord], bets: &[Pick], s: &StakeSettings, odds: &Od
             Label::NoCall => {}
         }
         c.fights.push(Fight {
+            call_id: Some(call.id),
             duel_id: call.duel_id,
             home_pal: call.home_pal.clone(),
             away_pal: call.away_pal.clone(),
@@ -242,6 +246,7 @@ pub fn compare(calls: &[CallRecord], bets: &[Pick], s: &StakeSettings, odds: &Od
         c.no_call += 1;
         c.no_call_yours += b.result.unwrap_or(0);
         c.fights.push(Fight {
+            call_id: None,
             duel_id: b.duel_id,
             home_pal: b.home_pal.clone(),
             away_pal: b.away_pal.clone(),

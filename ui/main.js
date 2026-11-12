@@ -21,9 +21,11 @@ const showYou = (on) => {
 
 const app = {
   main: document.getElementById('main'),
-  state: { tab: 'live', range: 'today', view: 'calls', youView: 'profile', pal: null, player: null, voice: null, live: null, settings: null, speciesList: null },
+  state: { tab: 'live', range: 'today', view: 'calls', call: null, youView: 'profile', pal: null, player: null, voice: null, live: null, settings: null, speciesList: null },
   header: (sub, right = '') => `<div class="top"><div class="bm">AUGUR</div><span class="sub">${sub}</span>${right}</div>`,
   show(tab) {
+    // another tab closes a call's breakdown in History
+    if (tab !== app.state.tab) app.state.call = null;
     app.state.tab = tab;
     document.querySelectorAll('.nav').forEach((n) => n.classList.toggle('on', n.dataset.tab === tab));
     return TABS[tab].render(app);

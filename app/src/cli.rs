@@ -70,7 +70,7 @@ pub fn run(cli: Cli) -> CliResult {
             ) {
                 None => println!("No duel up right now ({}).", if state.title.is_empty() { "idle" } else { &state.title }),
                 Some(p) => {
-                    let st = stake::suggest(&p.pick, p.prob, &app.staking, &bets::odds(&conn)?, bets::balance(&conn));
+                    let st = stake::suggest(&p.pick, p.prob, &app.staking, &bets::odds(&conn)?);
                     if saved.is_none() {
                         let id = db::add_call(&conn, &p.to_call())?;
                         db::set_call_stake(&conn, id, st.amount, &st.command)?;
@@ -123,7 +123,7 @@ pub fn run(cli: Cli) -> CliResult {
         Command::Bets => {
             let synced = db::meta_get(&conn, "bets_synced_at")?.and_then(|v| v.parse().ok()).unwrap_or(0);
             let odds = bets::odds(&conn)?;
-            let c = bets::compare(&db::settled(&conn)?, &db::bets(&conn)?, &app.staking, &odds, bets::balance(&conn), synced);
+            let c = bets::compare(&db::settled(&conn)?, &db::bets(&conn)?, &app.staking, &odds, synced);
             if synced == 0 {
                 println!("No bets read yet: the app reads your picks list once you sign in (Settings > Account).");
             }

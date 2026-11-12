@@ -752,6 +752,91 @@ pub fn parse_account(page: &str) -> AccountPage {
     out
 }
 
+// --- your pet (/pet) and your Hall (/hall), signed in ---
+
+/// Your pet as /pet shows it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Pet {
+    pub name: String,
+    /// its path, Potato to Mythic: (stage, done, now)
+    pub path: Vec<(String, bool, bool)>,
+    /// "Hard Skin: Defense +10%"
+    pub passives: Vec<String>,
+    /// recent growth: (growth gained, what for), newest first
+    pub log: Vec<(Option<i32>, String)>,
+}
+
+pub fn parse_pet(page: &str) -> Option<Pet> {
+    let name = regex!(r#"(?s)<h2 class="pt-name">(.*?)</h2>"#).captures(page).map(|c| text(&c[1]))?;
+    let path_html = between(page, r#"<ol class="pt-path">"#, &["</ol>"]).unwrap_or("");
+    let path = regex!(r#"(?s)<li class="([^"]*)">(.*?)</li>"#)
+        .captures_iter(path_html)
+        .map(|c| {
+            // "Potato, Tier D, Done": the stage is before the first comma
+            let label = regex!(r#"<span class="sr-only">([^<,]*)"#).captures(&c[2]).map(|l| text(&l[1])).unwrap_or_default();
+            (label, c[1].contains("is-done"), c[1].contains("is-now"))
+        })
+        .collect();
+    let passives = regex!(r#"(?s)<li class="pt-pass">(.*?)</li>"#)
+        .captures_iter(page)
+        .map(|c| squash(&regex!(r#"<span class="pt-passk">[^<]*</span>"#).replace(&c[1], "")).replace(" :", ":"))
+        .collect();
+    let log = regex!(r#"(?s)<ul class="pt-log-l">(.*?)</ul>"#)
+        .captures(page)
+        .map(|l| {
+            regex!(r#"(?s)<li[^>]*>(.*?)</li>"#)
+                .captures_iter(&l[1])
+                .map(|c| {
+                    let gain = regex!(r"<b>([+\-]?\d+)</b>").captures(&c[1]).and_then(|g| g[1].parse().ok());
+                    let what = regex!(r#"<span class="pt-lg-w">(.*?)</span>"#).captures(&c[1]).map(|w| text(&w[1])).unwrap_or_default();
+                    (gain, what)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(Pet { name, path, passives, log })
+}
+
+/// Your Hall: every pal your pets have become, by tier.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Hall {
+    pub found: u32,
+    pub total: u32,
+    /// (tier, stage, found, of)
+    pub tiers: Vec<(String, String, u32, u32)>,
+    /// (pal, slug, tier, found on YYYY-MM-DD), in the page's order
+    pub pals: Vec<(String, String, String, String)>,
+}
+
+pub fn parse_hall(page: &str) -> Option<Hall> {
+    let sum = regex!(r"You have found <b>(\d+)</b> of (\d+)").captures(page)?;
+    let mut hall = Hall { found: sum[1].parse().ok()?, total: sum[2].parse().ok()?, ..Default::default() };
+    for part in page.split(r#"<h2 class="hl-th">"#).skip(1) {
+        let tier = regex!(r#"<span class="hl-tn">Tier (\w+)</span>"#).captures(part).map(|c| c[1].to_string()).unwrap_or_default();
+        let stage = regex!(r#"<span class="hl-ts">([^<]*)</span>"#).captures(part).map(|c| text(&c[1])).unwrap_or_default();
+        if let Some(c) = regex!(r#"<span aria-hidden="true">(\d+) of (\d+)</span>"#).captures(part) {
+            hall.tiers.push((tier.clone(), stage, c[1].parse().unwrap_or(0), c[2].parse().unwrap_or(0)));
+        }
+        let grid = part.split("</h2>").nth(1).unwrap_or("");
+        for c in regex!(
+            r#"(?s)<li class="hl-t is-found">.*?/img/pals/([a-z0-9-]+)\.webp.*?<span class="hl-n">(.*?)</span>.*?<time datetime="([\d-]+)""#
+        )
+        .captures_iter(grid)
+        {
+            hall.pals.push((text(&c[2]), c[1].to_string(), tier.clone(), c[3].to_string()));
+        }
+    }
+    Some(hall)
+}
+
+/// Your pet and Hall pages, with the session cookie. None for a page the site didn't show (signed out).
+pub fn pet_and_hall(cookie: &str) -> Result<(Option<Pet>, Option<Hall>)> {
+    let pet = parse_pet(&fetch_once(&format!("{BASE}/pet"), Some(cookie))?);
+    std::thread::sleep(Duration::from_millis(700));
+    let hall = parse_hall(&fetch_once(&format!("{BASE}/hall"), Some(cookie))?);
+    Ok((pet, hall))
+}
+
 /// A page of your picks, with the session cookie. Ok(None) when the site didn't show them (signed out).
 pub fn picks(user_key: &str, page: u32, cookie: &str) -> Result<Option<(PicksPage, Option<u64>)>> {
     let body = fetch_once(&format!("{BASE}/u/{user_key}?bp={page}"), Some(cookie))?;
@@ -855,5 +940,27 @@ mod tests {
         assert_eq!(a.titles[1].about, "Won with every element");
         let public = parse_account(&page("user-trongateslegacy.html"));
         assert_eq!(public.balance, None, "signed out, there's no balance");
+    }
+
+    #[test]
+    fn pet_page() {
+        let p = parse_pet(&page("pet.html")).unwrap();
+        assert_eq!(p.name, "Lamball Cryst");
+        assert_eq!(p.path.len(), 7);
+        assert_eq!(p.path.iter().find(|s| s.2).map(|s| s.0.as_str()), Some("Elder"), "the stage it's at now");
+        assert_eq!(p.path.iter().filter(|s| s.1).count(), 3);
+        assert_eq!(p.passives, ["Hard Skin: Defense +10%", "Swift: Speed +30%"]);
+        assert_eq!(p.log[0], (Some(3), "Raid: night won, 2h ago".into()));
+        assert_eq!(p.log[2], (None, "Your pick: lost, 3h ago".into()));
+        assert!(parse_pet(&page("user-trongateslegacy.html")).is_none());
+    }
+
+    #[test]
+    fn hall_page() {
+        let h = parse_hall(&page("hall.html")).unwrap();
+        assert_eq!((h.found, h.total, h.tiers.len()), (4, 356, 5));
+        assert_eq!(h.tiers[0], ("D".into(), "Potato stage".into(), 2, 107));
+        assert_eq!(h.pals.len(), 4);
+        assert_eq!(h.pals[3], ("Rushoar".into(), "rushoar".into(), "B".into(), "2026-11-01".into()));
     }
 }

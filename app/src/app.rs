@@ -73,7 +73,7 @@ pub fn now_ms() -> u64 {
 
 /// The stake for a call: the staking settings, the payout the developer's wins have had and their last balance.
 fn stake_for(conn: &rusqlite::Connection, settings: &AppSettings, pick: &str, prob: f64) -> Stake {
-    stake::suggest(pick, prob, &settings.staking, &bets::odds(conn).unwrap_or_default(), bets::balance(conn))
+    stake::suggest(pick, prob, &settings.staking, &bets::odds(conn).unwrap_or_default())
 }
 
 /// A 32px tray icon: a gold ring filled to the chance around a dot in the favourite's colour (cyan home, pink away).
@@ -318,6 +318,17 @@ fn bets_loop(app: AppHandle, shared: Arc<Shared>) {
             let ctl = backfill::Control { stop: &shared.stop, busy: &busy, progress: &progress };
             let mut page = |n: u32, p: &mut Progress| pacer.get(&format!("{}/u/{user}?bp={n}", site::BASE), |b| b.to_string(), &ctl, p);
             let outcome = bets::import(&conn, &mut page, &ctl, now_ms());
+            // your pet and Hall: two more pages, at most every 30 minutes
+            let last: u64 = db::meta_get(&conn, "pet_page_at").ok().flatten().and_then(|v| v.parse().ok()).unwrap_or(0);
+            if outcome.is_ok() && now_ms().saturating_sub(last) > 30 * 60_000 {
+                if let Some(cookie) = pacer.cookie.as_deref() {
+                    if let Ok((pet, hall)) = site::pet_and_hall(cookie) {
+                        let _ = db::meta_set(&conn, "pet_page", &serde_json::to_string(&pet).unwrap_or_default());
+                        let _ = db::meta_set(&conn, "hall_page", &serde_json::to_string(&hall).unwrap_or_default());
+                        let _ = db::meta_set(&conn, "pet_page_at", &now_ms().to_string());
+                    }
+                }
+            }
             let mut p = shared.bets.lock().unwrap();
             p.phase = "done".into();
             p.last_error = outcome.err().map(|e| e.to_string());
@@ -347,8 +358,7 @@ fn fit_zoom(w: &tauri::WebviewWindow) {
 fn stake_preview(shared: tauri::State<'_, Arc<Shared>>, staking: stake::StakeSettings) -> Cmd<Vec<(f64, Stake)>> {
     let conn = shared.db()?;
     let odds = bets::odds(&conn).unwrap_or_default();
-    let balance = bets::balance(&conn);
-    Ok([0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9].iter().map(|&p| (p, stake::suggest("home", p, &staking, &odds, balance))).collect())
+    Ok([0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9].iter().map(|&p| (p, stake::suggest("home", p, &staking, &odds))).collect())
 }
 
 fn toggle_popover(app: &AppHandle) {

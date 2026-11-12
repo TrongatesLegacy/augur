@@ -28,7 +28,7 @@ function quiet(view) {
         ${o.last_bets ? `<div class="qb"><span>You <b class="${o.last_bets[0] >= 0 ? 'ok' : 'bad'}">${signed(o.last_bets[0])}</b></span><span>Following Augur <b class="${o.last_bets[1] >= 0 ? 'ok' : 'bad'}">${signed(o.last_bets[1])}</b></span></div>` : ''}</div>`
     : '';
   const recent = o?.recent?.length
-    ? `<div class="qr">${o.recent.map(([pick, other, right]) => `<div><span class="res ${right ? 'o' : 'x'}">${right ? '✓' : '✕'}</span><span><b>${esc(pick)}</b> over ${esc(other)}</span></div>`).join('')}</div>`
+    ? `<div class="qr">${o.recent.slice(0, 3).map(([pick, other, right]) => `<div><span class="res ${right ? 'o' : 'x'}">${right ? '✓' : '✕'}</span><span><b>${esc(pick)}</b> over ${esc(other)}</span></div>`).join('')}</div>`
     : '';
   const all = o?.all_time?.[1] ? `<div class="qa">All time <b>${o.all_time[0]}/${o.all_time[1]}</b> · ${pct(o.all_time[0] / o.all_time[1])}</div>` : '';
   return `<div class="hd"><span>${head}</span><span class="c">AUGUR</span></div><div class="quiet">${hero}</div>${stream}${recent}${all}`;

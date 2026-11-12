@@ -127,7 +127,7 @@ Hidden stats (an owner with several of the pal) are estimated from base stats at
 
 Augur never bets for you: it suggests a stake and the chat command, and you type it. Settings > Staking picks how:
 
-- **Kelly** (the default, a quarter of it): bet a share of your balance that grows with the edge, and sit out calls with none. The payout is the median of your own recent wins (the site shows no odds or crowd split before a fight), so at a typical 0.45 a credit a call needs about 69% to be worth a bet.
+- **Scale with chance** (the default): the default bet (a bare `!h`) below 55%, rising steadily to the max (`!h all`) at 85% and above. Both chances are settings.
 - **Fixed amount** on every call.
 - **Default or max:** the max (`!h all`) from a chance you choose (70% to start), the default bet (a bare `!h`) below it.
 

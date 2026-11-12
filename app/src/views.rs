@@ -54,13 +54,16 @@ pub struct OffAir {
     pub last_bets: Option<(i64, i64)>,
     /// every call: right, total
     pub all_time: (usize, usize),
-    /// the latest calls, newest first: (pal called, beaten pal, right)
-    pub recent: Vec<(String, String, bool)>,
+    /// the latest calls, newest first: (pal called, the other pal, right, the chance it gave)
+    pub recent: Vec<(String, String, bool, f64)>,
     /// the latest stream days, oldest first: (date, right, total)
     pub days: Vec<(String, usize, usize)>,
     /// what's stored: duels, fight tapes, species, your bets
     pub store: (i64, i64, i64, i64),
 }
+
+/// Enough latest calls to fill Live's list when off air (the popover shows the first few).
+const RECENT_CALLS: usize = 10;
 
 /// How the last stream went, for the quiet times.
 pub fn off_air(conn: &Connection, staking: &StakeSettings) -> R<OffAir> {
@@ -81,7 +84,7 @@ pub fn off_air(conn: &Connection, staking: &StakeSettings) -> R<OffAir> {
             calls.iter().filter(|c| c.fought_at.as_deref().is_some_and(|f| f.starts_with(&day))).cloned().collect();
         out.last_stream = Some((day, right, total, history::tally(&on_day, None).best_run));
         let synced = db::meta_get(conn, "bets_synced_at")?.and_then(|v| v.parse().ok()).unwrap_or(0);
-        let c = bets::compare(&on_day, &db::bets(conn)?, staking, &bets::odds(conn)?, bets::balance(conn), synced);
+        let c = bets::compare(&on_day, &db::bets(conn)?, staking, &bets::odds(conn)?, synced);
         if c.bet_on > 0 {
             out.last_bets = Some((c.yours, c.augur));
         }
@@ -89,10 +92,10 @@ pub fn off_air(conn: &Connection, staking: &StakeSettings) -> R<OffAir> {
     out.recent = calls
         .iter()
         .rev()
-        .take(3)
+        .take(RECENT_CALLS)
         .map(|c| {
             let (pick, other) = if c.pick == "home" { (&c.home_pal, &c.away_pal) } else { (&c.away_pal, &c.home_pal) };
-            (pick.clone(), other.clone(), c.right())
+            (pick.clone(), other.clone(), c.right(), c.prob)
         })
         .collect();
     Ok(out)
@@ -172,7 +175,7 @@ pub fn bets_view(conn: &Connection, s: &StakeSettings, range: &str, now_secs: u6
         .collect();
     let synced_at = db::meta_get(conn, "bets_synced_at")?.and_then(|v| v.parse().ok());
     let balance = bets::balance(conn);
-    let mut comparison = bets::compare(&calls, &bets, s, &bets::odds(conn)?, balance, synced_at.unwrap_or(0));
+    let mut comparison = bets::compare(&calls, &bets, s, &bets::odds(conn)?, synced_at.unwrap_or(0));
     comparison.fights.truncate(200);
     let stored = conn.query_row("SELECT COUNT(*) FROM bets", [], |r| r.get::<_, i64>(0))? as usize;
     Ok(BetsView { comparison, balance, synced_at, stored, import })
@@ -186,8 +189,11 @@ pub struct YouView {
     /// when the profile was read (ms)
     pub read_at: Option<u64>,
     pub comparison: Comparison,
-    /// your record from the history of duels (as an owner)
+    /// Augur's calls: right, total
     pub augur_calls: (usize, usize),
+    /// your pet and your Hall, as last read
+    pub pet: Option<augur_engine::site::Pet>,
+    pub hall: Option<augur_engine::site::Hall>,
 }
 
 pub fn you_view(conn: &Connection, s: &StakeSettings) -> R<YouView> {
@@ -195,7 +201,7 @@ pub fn you_view(conn: &Connection, s: &StakeSettings) -> R<YouView> {
     let synced = db::meta_get(conn, "bets_synced_at")?.and_then(|v| v.parse().ok()).unwrap_or(0);
     let calls = db::settled(conn)?;
     let t = history::tally(&calls, None);
-    let mut comparison = bets::compare(&calls, &db::bets(conn)?, s, &bets::odds(conn)?, bets::balance(conn), synced);
+    let mut comparison = bets::compare(&calls, &db::bets(conn)?, s, &bets::odds(conn)?, synced);
     comparison.fights.clear();
     Ok(YouView {
         name: db::meta_get(conn, "account")?,
@@ -203,6 +209,8 @@ pub fn you_view(conn: &Connection, s: &StakeSettings) -> R<YouView> {
         page: page.map(|(p, _)| p),
         comparison,
         augur_calls: (t.right, t.total),
+        pet: db::meta_get(conn, "pet_page")?.and_then(|p| serde_json::from_str(&p).ok()).flatten(),
+        hall: db::meta_get(conn, "hall_page")?.and_then(|h| serde_json::from_str(&h).ok()).flatten(),
     })
 }
 
@@ -306,6 +314,16 @@ pub fn model_view(conn: &Connection, s: &model::Settings, backtest: Option<Backt
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn off_air_lists_the_latest_calls_newest_first() {
+        let conn = augur_engine::seed::store();
+        let o = super::off_air(&conn, &Default::default()).unwrap();
+        assert_eq!(o.recent.len(), super::RECENT_CALLS);
+        let newest = augur_engine::db::settled(&conn).unwrap().pop().unwrap();
+        assert_eq!(o.recent[0].3, newest.prob);
+        assert!(o.recent.iter().all(|r| r.3 > 0.0 && r.3 <= 1.0));
+    }
+
     #[test]
     fn civil_dates() {
         assert_eq!(super::civil_date(0), "1970-01-01");

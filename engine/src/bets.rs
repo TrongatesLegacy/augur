@@ -169,7 +169,7 @@ pub struct Comparison {
 
 /// Lines up Augur's calls (oldest first, as `db::settled` gives them) with the developer's bets. `synced_ms`: when the
 /// picks list was last read (calls after it are pending). Calls without a saved stake get one from today's settings.
-pub fn compare(calls: &[CallRecord], bets: &[Pick], s: &StakeSettings, odds: &Odds, balance: Option<u64>, synced_ms: u64) -> Comparison {
+pub fn compare(calls: &[CallRecord], bets: &[Pick], s: &StakeSettings, odds: &Odds, synced_ms: u64) -> Comparison {
     let mut c = Comparison { odds: odds.clone(), ..Default::default() };
     let mut used = std::collections::HashSet::new();
     for call in calls {
@@ -185,7 +185,7 @@ pub fn compare(calls: &[CallRecord], bets: &[Pick], s: &StakeSettings, odds: &Od
         if let Some(b) = bet {
             used.insert(b.seq);
         }
-        let suggested = stake::suggest(&call.pick, call.prob, s, odds, balance);
+        let suggested = stake::suggest(&call.pick, call.prob, s, odds);
         let amount = call.stake.unwrap_or(suggested.amount);
         let won = call.winner.as_deref() == Some(call.pick.as_str());
         // the developer's bet on Augur's side shows exactly what that side paid, scaled to Augur's stake
@@ -324,7 +324,7 @@ mod tests {
         let bets = db::bets(&conn).unwrap();
         let s = StakeSettings { strategy: stake::Strategy::DefaultOrMax, ..Default::default() };
         let o = Odds { rate: 0.5, wins: 8 };
-        let c = compare(&calls, &bets, &s, &o, None, crate::seed::BETS_READ_AT);
+        let c = compare(&calls, &bets, &s, &o, crate::seed::BETS_READ_AT);
         let fight = |d: u64| c.fights.iter().find(|f| f.duel_id == Some(d)).unwrap();
         // 9019: Augur away at 68% (default bet, !a); you backed away with 5,000 and lost
         assert_eq!((fight(9019).label, fight(9019).augur_command.as_str(), fight(9019).augur_result), (Label::Followed, "!a", Some(-500)));
@@ -344,7 +344,7 @@ mod tests {
         assert_eq!(c.missed, calls.len() - 5, "every other call had no bet");
         assert_eq!((c.yours, c.augur), (-5000 + 2105 - 500 + 1290 + 310, -500 + 2105 + 250 - 5000 + 310));
         assert_eq!(c.no_call_yours, 277 + 512 - 500 + 230 + 480 + 50 - 100 - 200);
-        let before = compare(&calls, &bets, &s, &o, None, 0);
+        let before = compare(&calls, &bets, &s, &o, 0);
         assert_eq!(before.missed, 0, "not judged before the picks list was read");
     }
 }

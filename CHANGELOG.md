@@ -2,7 +2,10 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.5 (current)
+## 0.1.6 (current)
+- The damaged mark syncs, so every computer adds up the money the same
+
+## 0.1.5
 - Score the call that was showing when picks closed
 - Hidden stats come from the owner's pal box instead of a guess
 - Titles: just the closest to unlock, with room for your badges

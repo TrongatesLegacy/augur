@@ -59,7 +59,6 @@ Once `gh pr view <n> --json state` says `MERGED`, from the main checkout:
 
 ```sh
 git worktree remove .worktrees/<branch> && git branch -d <branch>
-git push origin --delete <branch>
 ```
 
-Never delete the branch on GitHub before the merge: that closes the PR.
+GitHub deletes the branch there itself on merge (the repo's "Automatically delete head branches"), and moves any PR stacked on it onto `main`. Never delete a branch on GitHub before its merge: that closes the PR.

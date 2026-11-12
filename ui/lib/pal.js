@@ -6,21 +6,32 @@ export const VOICES = ['Yoda', 'Gollum', 'Dr. Rockso', 'Scooby-Doo', 'Daffy Duck
 export const SHORT = { Yoda: 'Yoda', Gollum: 'Gollum', 'Dr. Rockso': 'Rockso', 'Scooby-Doo': 'Scooby', 'Daffy Duck': 'Daffy' };
 
 // A pal's orb: coloured initials straight away, swapped for its art once cached (palduels.com, personal use).
+// A player's face works the same way with their Kick profile picture.
 const artCache = new Map();
 
 export function orb(pal, slug, cls, size, crown) {
-  const id = `orb-${Math.random().toString(36).slice(2)}`;
-  queueMicrotask(() => loadArt(slug, id));
-  return `<div class="orb ${cls}" id="${id}" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.36)}px">${crown ? '<span class="crown">♛</span>' : ''}<span>${esc(initials(pal))}</span></div>`;
+  return orbFor(pal, slug && ['pal_image', { slug }], cls, size, crown);
 }
 
-async function loadArt(slug, id) {
-  if (!slug) return;
-  let url = artCache.get(slug);
+export function face(name, cls, size) {
+  return orbFor(name, name && ['player_image', { name }], cls, size);
+}
+
+function orbFor(label, art, cls, size, crown) {
+  const id = `orb-${Math.random().toString(36).slice(2)}`;
+  if (art) queueMicrotask(() => loadArt(art, id));
+  return `<div class="orb ${cls}" id="${id}" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.36)}px">${crown ? '<span class="crown">♛</span>' : ''}<span>${esc(initials(label))}</span></div>`;
+}
+
+async function loadArt([cmd, args], id) {
+  const key = `${cmd}:${Object.values(args)[0].toLowerCase()}`;
+  let url = artCache.get(key);
   if (url === undefined) {
-    url = await invoke('pal_image', { slug }).catch(() => null);
-    artCache.set(slug, url);
+    // shared while it loads, so a page with the same face twice asks once
+    url = invoke(cmd, args).catch(() => null);
+    artCache.set(key, url);
   }
+  url = await url;
   const el = document.getElementById(id);
   if (url && el) el.querySelector('span:not(.crown)')?.replaceWith(Object.assign(document.createElement('img'), { src: url, alt: '' }));
 }
@@ -74,4 +85,20 @@ export function pickVoice(current, settings) {
   const voices = settings?.voices?.length ? settings.voices : VOICES;
   if (voices.includes(current)) return { voices, voice: current };
   return { voices, voice: voices.includes(settings?.default_voice) ? settings.default_voice : voices[0] };
+}
+
+// Passive talents as pills: green when they help (more of a stat, a shorter cooldown), red when they hurt.
+// Takes "ATK +10%", or a named one like "Lucky: Attack +15%, Defense +15%".
+export function passivePills(list) {
+  return list
+    .map((x) => {
+      const [named, effects] = x.includes(':') ? x.split(/:\s*/, 2) : ['', x];
+      const parts = effects.split(/,\s*/).map((e) => /^(.*?)\s*([+\-−])\s*(\d+)%$/.exec(e.trim()));
+      if (!parts.every(Boolean)) return `<span class="pill">${esc(x)}</span>`;
+      const good = parts.map(([, n, sign]) => (/cooldown/i.test(n) ? sign !== '+' : sign === '+'));
+      const tone = good.every(Boolean) ? 'ok' : good.some(Boolean) ? '' : 'bad';
+      const text = parts.map(([, n, sign, v]) => `${n.length > 3 ? n[0].toUpperCase() + n.slice(1).toLowerCase() : n.toUpperCase()} ${sign === '+' ? '+' : '−'}${v}%`).join(', ');
+      return `<span class="pill ${tone}">${named ? `<b>${esc(named)}</b> ` : ''}${esc(text)}</span>`;
+    })
+    .join('');
 }

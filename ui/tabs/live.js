@@ -1,7 +1,7 @@
 // Live: the duel that's up, the call and why, the head-to-heads, what's next and the chat line.
 import { copyText } from '../lib/clipboard.js';
 import { esc, fmt, pct, signed } from '../lib/format.js';
-import { SHORT, dial, orb, pickVoice, tapeRows, voiceLine, whyLine } from '../lib/pal.js';
+import { SHORT, dial, face, orb, pickVoice, tapeRows, voiceLine, whyLine } from '../lib/pal.js';
 import { betCommand, stakeLine } from '../lib/stake.js';
 import { columns, empty, icon, ring, signedBar } from '../lib/viz.js';
 
@@ -14,7 +14,7 @@ function upNext(live) {
 }
 
 function side(s, cls, isFav) {
-  return `<div class="fx ${cls === 'a' ? 'r' : ''}">${orb(s.pal, s.slug, cls + (isFav ? '' : ' dim'), 86, isFav)}<div><div class="nm" style="${isFav ? '' : 'color:var(--t2)'}">${esc(s.pal)}</div><div class="ow">${cls === 'h' ? 'HOME' : 'AWAY'} · ${esc(s.owner)}</div><div class="els">${s.fighter.types.map((t) => `<span class="el">${esc(t)}</span>`).join('')}</div></div></div>`;
+  return `<div class="fx ${cls === 'a' ? 'r' : ''}">${orb(s.pal, s.slug, cls + (isFav ? '' : ' dim'), 86, isFav)}<div><div class="nm" style="${isFav ? '' : 'color:var(--t2)'}">${esc(s.pal)}</div><div class="ow">${face(s.owner, 'a av', 18)}${cls === 'h' ? 'HOME' : 'AWAY'} · ${esc(s.owner)}</div><div class="els">${s.fighter.types.map((t) => `<span class="el">${esc(t)}</span>`).join('')}</div></div></div>`;
 }
 
 // one factor's home win chance as a bar from the middle: left for home, right for away

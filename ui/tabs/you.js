@@ -2,7 +2,7 @@
 // and titles), your pet and your Hall, and your bets next to Augur's calls.
 import { invoke } from '../lib/bridge.js';
 import { ago, esc, fmt, pct } from '../lib/format.js';
-import { orb } from '../lib/pal.js';
+import { orb, passivePills } from '../lib/pal.js';
 import { empty, formDots, icon, ring, signedBar, split, stack } from '../lib/viz.js';
 
 const shortDay = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
@@ -101,7 +101,7 @@ function petPanel(p) {
   const reached = now >= 0 ? now : p.path.filter((s) => s[1]).length - 1;
   return `<div class="panel col ypet"><div class="ph"><h3>Your pet</h3><span>${now >= 0 ? esc(p.path[now][0]) : ''}</span></div>
     <div class="yp">${orb(p.name, p.name.toLowerCase().replace(/\s+/g, '-'), 'h', 54, true)}<div><b>${esc(p.name)}</b>
-      ${p.passives.length ? `<div class="chips">${p.passives.map((x) => `<span class="chip">${esc(x)}</span>`).join('')}</div>` : ''}</div></div>
+      ${p.passives.length ? `<div class="pills">${passivePills(p.passives)}</div>` : ''}</div></div>
     <div class="steps" style="--n:${p.path.length};--at:${Math.max(0, reached)}">${p.path.map(([s, done, isNow]) => `<span class="${isNow ? 'now' : done ? 'done' : ''}" title="${esc(s)}"><i></i>${esc(s)}</span>`).join('')}</div>
     <div class="plog fillin">${p.log.length ? p.log.map(([g, w]) => `<div><b class="${g ? 'ok' : 'muted'}">${g ? '+' + g : '·'}</b><span>${esc(w)}</span></div>`).join('') : '<div class="small">No growth logged yet.</div>'}</div></div>`;
 }
@@ -119,6 +119,7 @@ function titlesPanel(pg) {
   if (!t && !pg.titles.length) return `<div class="panel col"><div class="ph"><h3>Titles</h3></div>${empty('star', 'No titles yet', 'Win duels and picks to earn them.')}</div>`;
   return `<div class="panel col"><div class="ph"><h3>Titles</h3>${t ? `<span>${t[0]} of ${t[1]} earned · ${t[1] - t[0]} to unlock</span>` : ''}</div>
     ${t ? `<div class="progress thick"><i style="width:${(100 * t[0]) / t[1]}%"></i></div>` : ''}
+    ${(pg.closest || []).length ? `<div class="yq"><span class="label">Closest to unlock</span>${pg.closest.map((q) => `<div class="hbar" title="${esc(q.about)}"><span>${esc(q.icon)} ${esc(q.name)}</span><b>${fmt(q.have)}<small>/${fmt(q.need)}</small></b><div class="b"><i style="width:${Math.min(100, (100 * q.have) / q.need)}%"></i></div></div>`).join('')}</div>` : ''}
     <div class="badges fillin">${pg.titles.map((b) => `<span class="badge ${b.rare ? 'rare' : ''}" title="${esc(b.about)}"><i>${esc(b.icon)}</i>${esc(b.name)}${b.times ? ` <b>×${b.times}</b>` : ''}</span>`).join('')}</div></div>`;
 }
 

@@ -132,6 +132,8 @@ pub fn fixture_data() -> Value {
         "off_air": views::off_air(&conn, &StakeSettings::default()).unwrap(),
         "backfill_progress": augur_engine::backfill::Progress { phase: "duels".into(), done: 1200, total: 4702, ..Default::default() },
         "pal_image": null,
+        // a stand-in Kick picture, so the screenshots show faces swapped in
+        "player_image": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMCAxMCI+PHJlY3Qgd2lkdGg9IjEwIiBoZWlnaHQ9IjEwIiBmaWxsPSIjNTNmYzE4Ii8+PGNpcmNsZSBjeD0iNSIgY3k9IjQiIHI9IjIiIGZpbGw9IiMwYjEwMjAiLz48cmVjdCB4PSIyIiB5PSI3IiB3aWR0aD0iNiIgaGVpZ2h0PSI0IiByeD0iMyIgZmlsbD0iIzBiMTAyMCIvPjwvc3ZnPg==",
     })
 }
 

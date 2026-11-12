@@ -66,6 +66,9 @@ pub struct SyncState {
     pub error: Option<String>,
     /// how many calls this computer last wrote to its calls file
     pub calls_written: usize,
+    /// what the calls file last held: settled calls and how many are marked damaged. A new result or mark (or an
+    /// update that adds something to the file, which starts this empty) writes the file again
+    pub calls_mark: String,
 }
 
 /// A computer's file in the folder.
@@ -173,10 +176,12 @@ impl SyncState {
 
     fn write_own(&mut self, conn: &Connection, dir: &Path, os: &str, app: &str, now: u64) -> crate::Result<()> {
         let calls_file = dir.join("calls").join(format!("{}.jsonl", self.device));
-        let settled = db::settled(conn)?.len();
-        if self.what.calls && (settled != self.calls_written || !calls_file.exists()) {
+        let settled = db::settled(conn)?;
+        let mark = format!("{}:{}", settled.len(), settled.iter().filter(|c| c.damaged).count());
+        if self.what.calls && (mark != self.calls_mark || !calls_file.exists()) {
             std::fs::create_dir_all(calls_file.parent().unwrap())?;
             self.calls_written = calls::export(conn, &calls_file)?;
+            self.calls_mark = mark;
         }
         let file = DeviceFile {
             device: self.device.clone(),
@@ -382,6 +387,24 @@ mod tests {
         let got = mac.sync(&mac_db, &mac_vals, "macOS", "0.1.0", 5_000);
         assert_eq!(got.settings, BTreeMap::from([("default_voice".into(), json!("Gollum"))]));
         assert_eq!(got.calls, 0, "calls already there aren't added twice");
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn a_damaged_mark_reaches_the_other_computer_without_a_new_result() {
+        let folder = temp("mark");
+        let (mac_db, pc_db) = (crate::seed::store(), db::open_memory().unwrap());
+        let (mut mac, mut pc) = (computer("Mac", &folder), computer("PC", &folder));
+        let none = BTreeMap::new();
+        mac.sync(&mac_db, &none, "macOS", "0.1.0", 1_000);
+        pc.sync(&pc_db, &none, "Windows", "0.1.0", 2_000);
+        // the Mac marks a call it already shared: no new result, but its calls file is written again
+        let id = db::settled(&mac_db).unwrap()[0].id;
+        mac_db.execute("UPDATE predictions SET damaged = 1 WHERE id = ?1", [id]).unwrap();
+        mac.sync(&mac_db, &none, "macOS", "0.1.0", 3_000);
+        pc.sync(&pc_db, &none, "Windows", "0.1.0", 4_000);
+        let marked: i64 = pc_db.query_row("SELECT COUNT(*) FROM predictions WHERE damaged = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(marked, 1, "the PC has the Mac's mark");
         let _ = std::fs::remove_dir_all(folder);
     }
 

@@ -1,36 +1,130 @@
-// Live: the duel that's up, the call and why, the head-to-heads, what's next and the chat line.
+// Live: the duel that's up, built from the same pieces as a call's breakdown in History (the headline, how Augur is
+// calling it and the tale of the tape), plus what only Live has: the bet to copy, the projected HP race (the "before"
+// of the breakdown's How it went), the head to head, what's next and the chat line.
+import { headline, tape, waterfall } from '../lib/callparts.js';
 import { copyText } from '../lib/clipboard.js';
-import { esc, feedProblem, fmt, pct, short, signed } from '../lib/format.js';
-import { SHORT, dial, face, orb, pickVoice, tapeRows, voiceLine, whyLine } from '../lib/pal.js';
-import { betCommand, stakeLine } from '../lib/stake.js';
+import { esc, feedProblem, fmt, pct, short } from '../lib/format.js';
+import { SHORT, face, orb, pickVoice, voiceLine, whyLine } from '../lib/pal.js';
+import { betCommand } from '../lib/stake.js';
 import { columns, empty, icon, ring, signedBar } from '../lib/viz.js';
 
-// a side whose stats the site hides until the bell: taken from the owner's box, or guessed (with why)
-function statsNote(p) {
-  const hidden = [p.home, p.away].filter((s) => s.stats_from && s.stats_from !== 'shown');
-  if (!hidden.length) return '';
-  const guessed = hidden.some((s) => s.estimated);
-  return `<div class="small ${guessed ? 'gold' : ''}">${hidden.map((s) => `${esc(s.pal)}'s stats are hidden until the bell: ${esc(s.stats_from.replace(/^from their box$/, 'taken from its owner’s box'))}`).join(' · ')}</div>`;
-}
-
-function upNext(live) {
+// the queue. Off air it's a panel of its own; with a duel up it sits compact under the chat line, two to a row
+function upNext(live, compact) {
   const q = live?.queue || [];
+  if (compact) {
+    const body = q.length
+      ? `<div class="unx">${q.map((x) => `<div class="unr" title="${esc(x.home)} vs ${esc(x.away)}"><span class="unp">#${x.pos}</span><span class="unn">${esc(x.home)} <i>vs</i> ${esc(x.away)}</span></div>`).join('')}</div>`
+      : '<div class="small">Nothing queued: fights show here as chat lines them up.</div>';
+    return `<div class="panel un"><div class="ph"><h3>Up next</h3><span>pals show at the bell</span></div>${body}</div>`;
+  }
   const body = q.length
     ? `<div class="fillin">${q.map((x) => `<div class="row"><span>${esc(x.home)} <span class="small">vs</span> ${esc(x.away)}</span><span class="small">#${x.pos}</span></div>`).join('')}</div>`
     : empty('queue', 'Nothing queued', 'Fights show here as chat lines them up.');
   return `<div class="panel col list"><div class="ph"><h3>Up next</h3><span>pals show at the bell</span></div>${body}</div>`;
 }
 
-function side(s, cls, isFav) {
-  return `<div class="fx ${cls === 'a' ? 'r' : ''}">${orb(s.pal, s.slug, cls + (isFav ? '' : ' dim'), 86, isFav)}<div><div class="nm" style="${isFav ? '' : 'color:var(--t2)'}">${esc(s.pal)}</div><div class="ow">${face(s.owner, 'a av', 18)}${cls === 'h' ? 'HOME' : 'AWAY'} · ${esc(s.owner)}</div><div class="els">${s.fighter.types.map((t) => `<span class="el">${esc(t)}</span>`).join('')}</div></div></div>`;
+// what Augur says to bet, under its pick in the headline: the command with a copy button, the credits, and why
+function bet(p, stake, command) {
+  const copy = command ? `<button class="btn sm" id="cmd" title="Copy ${esc(command)} for chat">Copy</button>` : '';
+  if (!stake) return { verdict: `<div class="lbet"><b>${esc(command)}</b>${copy}</div>`, line: esc(whyLine(p)) };
+  if (!stake.amount) return { verdict: `<div class="lbet off"><b>No bet</b>${copy}</div>`, line: esc(stake.why) };
+  return { verdict: `<div class="lbet"><b>${esc(stake.command)}</b><span>${fmt(stake.amount)} credits</span>${copy}</div>`, line: esc(stake.why) };
 }
 
-// one factor's home win chance as a bar from the middle: left for home, right for away
-function factor(label, ph) {
-  const l = Math.min(ph, 0.5) * 100;
-  const r = Math.max(ph, 0.5) * 100;
-  const color = ph >= 0.5 ? 'var(--home)' : 'var(--away)';
-  return `<div class="tr"><span>${label}</span><div class="track"><span class="fill" style="left:${100 - r}%;right:${l}%;background:${color}"></span></div><span class="pc">${pct(ph)}</span></div>`;
+// a name as one of the owners: a meeting's sides and the rivalry's records name them as the site shows them
+const same = (name, s) => [s.owner, s.owner_key].some((n) => n && n.toLowerCase() === String(name || '').toLowerCase());
+
+// the two owners face to face, their record, their latest meetings, then the two species' own record
+function headToHead(p) {
+  const r = p.owners;
+  const h = p.home;
+  const a = p.away;
+  const ms = r?.meetings || [];
+  // each meeting from this duel's sides: the home owner's pal and the away owner's (the site's order is that duel's)
+  const rows = ms.map((m) => {
+    const [mh, ma] = same(m.sides[1].owner, h) || same(m.sides[0].owner, a) ? [m.sides[1], m.sides[0]] : m.sides;
+    return { when: m.when, h: mh, a: ma };
+  });
+  const wins = (s, mine) => r?.owners?.find(([n]) => same(n, s))?.[1] ?? rows.filter((x) => x[mine].won).length;
+  const [hw, aw] = [wins(h, 'h'), wins(a, 'a')];
+  const n = hw + aw || ms.length;
+  const since = r?.since ? new Date(r.since + 'T12:00:00Z').toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '';
+  const sub = !r ? 'owners · pals' : n ? `${fmt(n)} meeting${n === 1 ? '' : 's'}${since ? ` since ${esc(since)}` : ''}` : 'first meeting';
+  const owner = (s, cls) => `<div class="hho ${cls}">${face(s.owner, `${cls} hf`, 22)}<span title="${esc(s.owner)}">${esc(s.owner)}</span></div>`;
+  const lead = hw > aw ? 'h' : aw > hw ? 'a' : '';
+  const score = n
+    ? `<b class="hhs${lead ? ` l${lead}` : ''}" aria-label="${esc(h.owner)} ${fmt(hw)}, ${esc(a.owner)} ${fmt(aw)}"><i class="h">${fmt(hw)}</i>–<i class="a">${fmt(aw)}</i></b>`
+    : '<span class="hhx">vs</span>';
+  const bar = n ? `<div class="sb hhb">${hw ? `<i class="home" style="flex:${hw}"></i>` : ''}${aw ? `<i class="away" style="flex:${aw}"></i>` : ''}</div>` : '';
+  const record = r ? `<div class="hhv${n ? '' : ' new'}">${owner(h, 'h')}${score}${owner(a, 'a')}</div>${bar}` : '';
+  const pal = (x, cls) => `<span class="hp ${cls}${x.won ? ' w' : ''}" title="${esc(x.pal)}${x.won ? ' won' : ''}">${x.won ? '<i class="cr" aria-label="won">♛</i>' : ''}${esc(x.pal)}</span>`;
+  const list = !r
+    ? `<div class="hhe">Owner head to head not loaded</div>`
+    : rows.length
+      ? `<div class="hhm">${rows.map((x) => `<div class="hhr"><span class="wn">${esc(x.when)}</span>${pal(x.h, 'h')}<span class="vs">vs</span>${pal(x.a, 'a')}</div>`).join('')}</div>`
+      : `<div class="hhe">They haven’t met before: this is the first</div>`;
+  const ph = p.pal_h2h;
+  const met = ph.home_wins + ph.away_wins;
+  const palLead = ph.home_wins > ph.away_wins ? 'h' : ph.away_wins > ph.home_wins ? 'a' : '';
+  const mid =
+    h.pal === a.pal
+      ? '<span class="hpn">mirror match</span>'
+      : met
+        ? `<b class="hhs sm${palLead ? ` l${palLead}` : ''}"><i class="h">${fmt(ph.home_wins)}</i>–<i class="a">${fmt(ph.away_wins)}</i></b>`
+        : '<span class="hpn">never met</span>';
+  const species = `<div class="hhp"><span class="label">Pals</span>
+    <div class="hpo h">${orb(h.pal, h.slug, 'h', 24)}<span title="${esc(h.pal)}">${esc(h.pal)}</span></div>${mid}<div class="hpo a"><span title="${esc(a.pal)}">${esc(a.pal)}</span>${orb(a.pal, a.slug, 'a', 24)}</div></div>`;
+  // the body scrolls as one only in a window too short for it; otherwise just the meetings scroll
+  return `<div class="panel col hh"><div class="ph"><h3>Head to head</h3><span>${sub}</span></div><div class="fillin hhw">${record}${list}${species}</div></div>`;
+}
+
+// The model's race: each side's HP falling at its projected rate. The favourite lands the K.O. first (at t_fav) and
+// keeps 1 - t_fav / t_dog of its HP; its line carries on faintly to where it would have fallen. The end values sit in
+// a column beside the chart, so they never overlap however close the lines run.
+function hpRace(p) {
+  const fav = p.pick === 'home' ? p.home : p.away;
+  const dog = p.pick === 'home' ? p.away : p.home;
+  const [fc, dc] = p.pick === 'home' ? ['h', 'a'] : ['a', 'h'];
+  const tFav = p.pick === 'home' ? p.score.t_home : p.score.t_away;
+  const tDog = p.pick === 'home' ? p.score.t_away : p.score.t_home;
+  // a side that does no damage on paper never lands its K.O. (t is infinite)
+  const ok = tFav > 0 && Number.isFinite(tFav) && tDog > 0;
+  const left = ok ? Math.max(0, 1 - tFav / tDog) : 0;
+  const W = 230;
+  const H = 92;
+  const L = 28;
+  const T = 8;
+  const B = 18;
+  // a little past the K.O., or to where the favourite would fall when that's sooner
+  const end = ok ? Math.min(tDog, tFav * 1.3) : 1;
+  const x = (t) => (L + ((W - L - 4) * t) / end).toFixed(1);
+  const y = (v) => (T + (H - T - B) * (1 - v)).toFixed(1);
+  const ko = ok ? tFav : end;
+  const koX = +x(ko);
+  const ghost = ok && end > tFav ? `<path class="gh ${fc}" d="M${x(tFav)} ${y(left)} L${x(end)} ${y(1 - end / tDog)}"/>` : '';
+  // the underdog's dashed line goes on top: where the two all but meet, both colours still show
+  const svg = `<svg class="race" viewBox="0 0 ${W} ${H}" aria-hidden="true">
+    <g class="grid">${[1, 0.5, 0].map((v) => `<line x1="${L}" x2="${W - 4}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 5}" y="${+y(v) + 3.5}" text-anchor="end">${v * 100}%</text>`).join('')}</g>
+    <line class="ko" x1="${koX}" x2="${koX}" y1="${T - 4}" y2="${H - B}"/><text class="kot" x="${koX}" y="${H - 5}" text-anchor="${koX > W - 24 ? 'end' : 'middle'}">K.O.</text>
+    ${ghost}
+    <path class="ln ${fc}" d="M${x(0)} ${y(1)} L${x(ko)} ${y(left)}"/>
+    <path class="ln ${dc} dog" d="M${x(0)} ${y(1)} L${x(ko)} ${y(0)}"/>
+    <circle class="${fc}" cx="${koX}" cy="${y(left)}" r="3.2"/><circle class="${dc}" cx="${koX}" cy="${y(0)}" r="3.2"/></svg>`;
+  const longer = ok ? tDog / tFav - 1 : 0;
+  const small = (f) => (f > 0 && f < 0.01 ? '&lt;1%' : pct(f));
+  const endCard = (s, cls, value, sub, dashed) =>
+    `<div class="re ${cls}"><div class="rn"><i class="${dashed ? 'd' : ''}"></i><span title="${esc(s.pal)}">${esc(s.pal)}</span></div><div class="rv"><b>${value}</b><small>${sub}</small></div></div>`;
+  const note = !ok
+    ? 'Not enough to project the race'
+    : !Number.isFinite(longer)
+      ? `<b class="${dc}">${esc(dog.pal)}</b> does no damage on paper`
+      : longer < 0.05
+        ? `Neck and neck: <b class="${dc}">${esc(dog.pal)}</b> would need only ${small(longer)} longer`
+        : `<b class="${dc}">${esc(dog.pal)}</b> would need ${pct(longer)} longer to land its K.O.`;
+  return `<div class="panel hr"><div class="ph"><h3>Projected HP race</h3><span>model estimate</span></div>
+    <div class="hrw" role="img" aria-label="${esc(fav.pal)} projected to win with about ${pct(left)} HP left">${svg}
+      <div class="rends">${endCard(fav, fc, small(left), 'HP left', false)}${endCard(dog, dc, 'K.O.', 'out first', true)}</div></div>
+    <div class="small rnote">${note}</div></div>`;
 }
 
 export function render(app) {
@@ -81,58 +175,35 @@ export function render(app) {
           all,
         )}</div>`
       : `<div class="panel col lstreams"><div class="ph"><h3>Recent streams</h3></div>${empty('chart', 'No streams yet', 'One bar per stream, once Augur has called some fights.')}</div>`;
-    main.innerHTML = header('Live · PalDuels', status) + hero + `<div class="loff grow">${stream}${upNext(live)}${recent}${days}</div>`;
+    main.innerHTML = header('Live · PalDuels', status) + hero + `<div class="loff grow">${stream}${upNext(live, false)}${recent}${days}</div>`;
     return;
   }
-  const fav = p.pick === 'home' ? p.home : p.away;
-  // the projected race: the favourite knocks the other out first; by then it has lost t_fav / t_dog of its HP
-  const tFav = p.pick === 'home' ? p.score.t_home : p.score.t_away;
-  const tDog = p.pick === 'home' ? p.score.t_away : p.score.t_home;
-  const left = Math.max(0, 1 - tFav / tDog);
-  const hidden = [p.home, p.away]
-    .filter((s) => s.hidden.moves.length)
-    .map((s) => `<span class="chip">${esc(s.pal)}: unlisted <b>${s.hidden.moves.slice(0, 2).map((m) => esc(m[0] || 'unnamed')).join(', ')}</b></span>`)
-    .join('');
-  const owners = p.owners;
   const { voices, voice } = pickVoice(state.voice, state.settings);
   state.voice = voice;
   const command = betCommand(p, live.stake);
-  main.innerHTML =
-    header(`Live · ${esc(p.title || 'PalDuels')}`, status + (command ? `<button class="btn ghost" id="cmd">Copy ${esc(command)}</button>` : '')) +
-    `<div class="stage">${side(p.home, 'h', p.pick === 'home')}
-      <div class="center">${dial(p.prob, 100)}<div class="cond" style="font-weight:800;font-size:24px;letter-spacing:.06em;margin-top:4px;text-transform:uppercase">${esc(fav.pal)}</div><div class="small" style="color:var(--t2)">${esc(whyLine(p))}</div>${statsNote(p)}${stakeLine(live.stake)}</div>
-      ${side(p.away, 'a', p.pick === 'away')}</div>
-    <div class="g3">
-      <div class="panel"><div class="ph"><h3>Tale of the tape</h3><span>Lv 70</span></div>${tapeRows(p)}
-        <div class="small">Passives: ${esc(p.home.fighter.passives.join(', ') || 'none')} vs ${esc(p.away.fighter.passives.join(', ') || 'none')} · ${fmt(p.home.usable_moves)} vs ${fmt(p.away.usable_moves)} moves</div></div>
-      <div class="panel"><div class="ph"><h3>Projected HP race</h3><span>model estimate</span></div>
-        <svg width="100%" height="100" viewBox="0 0 340 100" role="img" aria-label="${esc(fav.pal)} projected to win with about ${pct(left)} HP left">
-          <g stroke="rgba(255,255,255,.06)"><line x1="0" y1="6" x2="340" y2="6"/><line x1="0" y1="48" x2="340" y2="48"/><line x1="0" y1="90" x2="340" y2="90"/></g>
-          <path d="M0 6 L 220 90" stroke="${p.pick === 'home' ? '#ff5ca8' : '#4fe3ff'}" stroke-width="2.4" fill="none" stroke-dasharray="6 4"/>
-          <path d="M0 6 L 220 ${90 - 84 * left}" stroke="${p.pick === 'home' ? '#4fe3ff' : '#ff5ca8'}" stroke-width="2.4" fill="none"/>
-          <text x="228" y="${94 - 84 * left}" fill="#b3aec9" font-size="12">${esc(fav.pal)} ~${pct(left)}</text><text x="228" y="94" fill="#b3aec9" font-size="12">K.O.</text></svg>
-        <div class="small">Solid: ${esc(fav.pal)} · dashed: the other side</div></div>
-      <div class="panel"><div class="ph"><h3>What decides it</h3><span>home ◂ ▸ away</span></div>
-        ${factor('Stats', p.score.p_stats)}${factor('Records', p.score.p_species)}${factor('Pal H2H', p.score.p_h2h)}
-        <div class="chips">${fav.type_edge_moves.length ? `<span class="chip"><b>${fav.type_edge_moves.length}</b> type-edge moves</span>` : ''}${hidden || '<span class="chip">No unlisted moves</span>'}</div></div>
-    </div>
-    <div class="g3 grow">
-      <div class="panel list"><div class="ph"><h3>Head to head</h3><span>owners · pals</span></div>
-        <div class="row"><span>${esc(owners?.summary || 'Owners: not loaded')}</span></div>
-        ${(owners?.meetings || [])
-          .slice(0, 2)
-          .map((m) => `<div class="row"><span class="small">${esc(m.when)} · ${esc(m.sides[0].pal)} vs ${esc(m.sides[1].pal)}</span><span class="small">${esc(m.sides[0].won ? m.sides[0].owner : m.sides[1].owner)}</span></div>`)
-          .join('')}
-        <div class="row"><span>${esc(p.home.pal)} vs ${esc(p.away.pal)}</span><b class="gold">${fmt(p.pal_h2h.home_wins)}–${fmt(p.pal_h2h.away_wins)}</b></div></div>
-      ${upNext(live)}
-      ${
-        state.settings?.chat_lines === false
-          ? ''
-          : `<div class="panel"><div class="ph"><h3>Say it in chat</h3><span>${voices.length} voices</span></div>
+  const d = live.detail;
+  const chat =
+    state.settings?.chat_lines === false
+      ? ''
+      : `<div class="panel lchat"><div class="ph"><h3>Say it in chat</h3><span>${voices.length} voices</span></div>
         <div class="vo" id="vb">${voices.map((v) => `<button class="${v === voice ? 'on' : ''}" data-v="${esc(v)}">${esc(SHORT[v] || v)}</button>`).join('')}</div>
-        <div class="q" id="vq">${esc(voiceLine(p, voice, state.settings?.include_chance !== false))}</div><button class="btn" id="cp" style="width:100%;margin-top:4px">Copy for chat</button></div>`
-      }
-    </div>`;
+        <div class="lq"><div class="q" id="vq">${esc(voiceLine(p, voice, state.settings?.include_chance !== false))}</div><button class="btn sm" id="cp">Copy</button></div></div>`;
+  main.innerHTML =
+    header(`Live · ${esc(p.title || 'PalDuels')}`, status) +
+    (d
+      ? headline(d, { ...bet(p, live.stake, command), chance: p.prob }) +
+        `<div class="cgrid lgrid grow">
+          <div class="stackc">${hpRace(p)}${headToHead(p)}</div>
+          <div class="stackc">${waterfall(d)}</div>
+          <div class="stackc">${tape(d)}${chat}${upNext(live, true)}</div>
+        </div>`
+      : `<div class="panel col grow">${empty('eye', 'Working out the call', 'The breakdown shows as soon as Augur has made it.')}</div>`);
+  // a panel with more below fades out at its foot, until it's scrolled to the end
+  main.querySelectorAll('.lgrid .fillin').forEach((el) => {
+    const more = () => el.classList.toggle('more', el.scrollTop + el.clientHeight < el.scrollHeight - 2);
+    el.addEventListener('scroll', more, { passive: true });
+    more();
+  });
   main.querySelectorAll('#vb button').forEach((b) => {
     b.onclick = () => {
       state.voice = b.dataset.v;

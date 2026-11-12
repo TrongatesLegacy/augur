@@ -53,12 +53,42 @@ pub fn fixture_data() -> Value {
     let state = seed::state("state-leaflit-wumpo.json");
     // sync times two minutes ago, so they read like real ones
     let recent = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64 - 120_000;
-    let p = predict::predict(&state, &predict::Options { lookups: false, db_path: PathBuf::from("/nonexistent"), settings: s.clone() })
+    let mut p = predict::predict(&state, &predict::Options { lookups: false, db_path: PathBuf::from("/nonexistent"), settings: s.clone() })
         .unwrap();
+    // the head-to-heads the lookups would bring: the owners have met five times (a long pal name among them), the
+    // pals three times
+    let row = |when: &str, home: (&str, &str), away: (&str, &str), home_won: bool| site::DuelRow {
+        id: None,
+        when: when.into(),
+        sides: [
+            site::RowSide { side: "home".into(), won: home_won, owner: home.0.into(), pal: home.1.into() },
+            site::RowSide { side: "away".into(), won: !home_won, owner: away.0.into(), pal: away.1.into() },
+        ],
+    };
+    p.owners = Some(site::Rivalry {
+        summary: "player-51 leads player-12 3–2. 5 meetings, the first on Mon, Aug 17.".into(),
+        since: Some("2026-08-17".into()),
+        owners: vec![("player-12".into(), 2, "41–37 in every duel".into()), ("player-51".into(), 3, "58–30 in every duel".into())],
+        meetings: vec![
+            row("16d ago", ("player-51", "Splatterina"), ("player-12", "Woolipop Ryu"), true),
+            row("23d ago", ("player-12", "Finsider Ignis"), ("player-51", "Chillet Noct"), true),
+            row("Sep 30", ("player-12", "Jormuntide Ignis Terra"), ("player-51", "Wumpo Botan"), false),
+            row("Sep 2", ("player-51", "Lamball"), ("player-12", "Depresso"), true),
+            row("Aug 17", ("player-12", "Chikipi"), ("player-51", "Cattiva"), true),
+        ],
+    });
+    let pal_row = |home_won| row("", ("player-30", "Leaflit Slimey"), ("player-44", "Wumpo"), home_won);
+    p.pal_h2h = predict::PalHeadToHead {
+        home_wins: 1,
+        away_wins: 2,
+        meetings: vec![pal_row(true), pal_row(false), pal_row(false)],
+        pages_scanned: 1,
+    };
     let stake = stake::suggest(&p.pick, p.prob, &StakeSettings::default(), &bets::odds(&conn).unwrap());
     let live = views::LiveView {
         title: state.title.clone(),
         picks_open: true,
+        detail: Some(views::live_detail(&p, Some(&stake))),
         prediction: Some(p),
         stake: Some(stake),
         queue: state.upcoming().into_iter().take(3).collect(),
@@ -301,7 +331,7 @@ const MAIN_DRIVER: &str = r#"
       .map((el) => `${el.tagName.toLowerCase()}.${[...el.classList].join('.')} (${el.clientWidth}px, needs ${el.scrollWidth}px): ${el.textContent.trim().replace(/\s+/g, ' ').slice(0, 50)}`);
   if (!window.augur) window.__errors.push('the page never started (a module failed to load)');
   else {
-    for (const tab of only ? [only] : ['live', 'history', 'call', 'bets', 'pals', 'players', 'you', 'titles', 'titlesone', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'updates', 'offair']) {
+    for (const tab of only ? [only] : ['live', 'liveedge', 'history', 'call', 'bets', 'pals', 'players', 'you', 'titles', 'titlesone', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'updates', 'offair']) {
       // "ownmodel" is Settings › Model with self-tuning off and your own values
       const own = DATA.get_settings;
       if (tab === 'ownmodel') DATA.get_settings = { ...own, model_auto: false };
@@ -319,16 +349,41 @@ const MAIN_DRIVER: &str = r#"
       window.augur.state.call = null;
       // "offair" is Live with no duel up, after a stream
       if (tab === 'offair') window.augur.state.live = { ...DATA.live, prediction: null, queue: [], off_air: DATA.off_air, title: 'Last duel' };
-      else window.augur.state.live = DATA.live;
+      // "liveedge" is Live at its edges: a race too close to call (the favourite left with about 1.5% HP), owners
+      // meeting for the first time and pals that never have
+      else if (tab === 'liveedge') {
+        const p = DATA.live.prediction;
+        const t = p.pick === 'home' ? { t_home: p.score.t_away * 0.985 } : { t_away: p.score.t_home * 0.985 };
+        window.augur.state.live = { ...DATA.live, prediction: { ...p, score: { ...p.score, ...t }, owners: { summary: 'first meeting', since: null, owners: [], meetings: [] }, pal_h2h: { home_wins: 0, away_wins: 0, meetings: [], pages_scanned: 1 } } };
+      } else window.augur.state.live = DATA.live;
       window.augur.state.settingsPage = ['staking', 'sync', 'updates'].includes(tab) ? tab : tab === 'ownmodel' ? 'model' : 'general';
       // "welcome" is the fresh install's overlay, over Live
-      await window.augur.show(['bets', 'call'].includes(tab) ? 'history' : ['staking', 'sync', 'updates', 'ownmodel'].includes(tab) ? 'settings' : ['welcome', 'offair'].includes(tab) ? 'live' : ['titles', 'titlesone'].includes(tab) ? 'you' : tab);
+      await window.augur.show(['bets', 'call'].includes(tab) ? 'history' : ['staking', 'sync', 'updates', 'ownmodel'].includes(tab) ? 'settings' : ['welcome', 'offair', 'liveedge'].includes(tab) ? 'live' : ['titles', 'titlesone'].includes(tab) ? 'you' : tab);
       await sleep(300);
       if (tab === 'bets') out.betRows = document.querySelectorAll('#main tr[data-call]').length;
+      if (tab === 'live' || tab === 'liveedge') {
+        // the head to head and the HP race keep everything inside their panels (a list scrolls inside its own box),
+        // and the race's end labels apart. The report's window is shorter than the screenshots' (Chrome's toolbar
+        // takes its share), so this holds in a short window too
+        const inside = (panel) => !!panel && [...panel.querySelectorAll('*')].every((el) => {
+          if (el.parentElement.closest('.fillin')) return true;
+          const [r, b] = [el.getBoundingClientRect(), panel.getBoundingClientRect()];
+          return !r.height || (r.bottom <= b.bottom + 1 && r.right <= b.right + 1);
+        });
+        const ends = [...document.querySelectorAll('.hr .re')].map((e) => e.getBoundingClientRect());
+        out[tab + 'Panels'] = {
+          h2h: inside(document.querySelector('.hh')),
+          race: inside(document.querySelector('.hr')),
+          ends: ends.length,
+          apart: ends.length === 2 && (ends[0].bottom <= ends[1].top || ends[1].bottom <= ends[0].top),
+          meetings: document.querySelectorAll('.hh .hhr').length,
+          won: document.querySelectorAll('.hh .hhr .hp.w').length,
+        };
+      }
       if (tab === 'call') {
         document.querySelector('#main tr[data-call]')?.click();
         await sleep(400);
-        out.chart = { lines: document.querySelectorAll('.hpc path.line').length, hits: document.querySelectorAll('.hpc circle').length, ko: !!document.querySelector('.hpc .ko') };
+        out.chart = { lines: document.querySelectorAll('.hpc path.line').length, proj: document.querySelectorAll('.hpc path.proj').length, hits: document.querySelectorAll('.hpc circle').length, ko: !!document.querySelector('.hpc .ko') };
         out.fits = document.getElementById('main').scrollHeight <= document.getElementById('main').clientHeight + 1;
       }
       const visible = () => [...document.querySelectorAll('.tgrp')].filter((g) => !g.hidden).map((g) => g.querySelector('h4').textContent);
@@ -340,6 +395,19 @@ const MAIN_DRIVER: &str = r#"
       if (tab === 'titles') out.titlesAll = visible().length;
       out[tab] = document.getElementById('main').innerText;
       out.spills[tab] = spills();
+      if (tab === 'live' || tab === 'liveedge') {
+        // the page fits the window: its panels scroll inside, the page doesn't
+        out[tab + 'Fits'] = document.getElementById('main').scrollHeight <= document.getElementById('main').clientHeight + 1;
+      }
+      if ((tab === 'live' || tab === 'liveedge') && !only) {
+        // Windows draws text a few pixels wider than a Mac: Live keeps fitting with every letter 0.4px wider (not
+        // in the screenshots)
+        const els = [...document.querySelectorAll('#main *')];
+        const was = els.map((el) => getComputedStyle(el).letterSpacing);
+        els.forEach((el, i) => (el.style.letterSpacing = `calc(${was[i] === 'normal' ? '0px' : was[i]} + 0.4px)`));
+        await sleep(50);
+        out.spills[tab + 'Wide'] = spills();
+      }
       if (tab === 'call' && !only) {
         // an old call: no tape, no fighters, no factors kept
         const full = DATA.call_detail;
@@ -507,6 +575,7 @@ fn big_numbers_fit() {
         std::fs::create_dir_all(&folder).unwrap();
         for tab in [
             "live",
+            "liveedge",
             "history",
             "call",
             "bets",
@@ -550,6 +619,59 @@ fn every_tab_renders_headless() {
         "Live says the home stats were hidden and guessed: {}",
         text("live")
     );
+    // the breakdown's pieces before the bell: the pick and its bet, how Augur is calling it (told in the present, no
+    // result yet), the tale of the tape, and Live's own panels
+    assert!(text("live").contains("augur calls\nwumpo") && text("live").contains("augur's pick"), "Live's headline: {}", text("live"));
+    assert!(
+        text("live").contains("how augur called it")
+            && text("live").contains("counts most for wumpo")
+            && text("live").contains("together")
+            && text("live").contains("move power")
+            && text("live").contains("the model it’s using"),
+        "how Augur is calling it: {}",
+        text("live")
+    );
+    assert!(!text("live").contains("won anyway") && !text("live").contains("counted most"), "nothing's been won yet: {}", text("live"));
+    assert!(
+        ["tale of the tape", "rolls", "projected hp race", "head to head", "say it in chat", "up next"]
+            .iter()
+            .all(|x| text("live").contains(x)),
+        "Live's panels: {}",
+        text("live")
+    );
+    assert!(!text("live").contains("what decides it"), "the breakdown's sum stands in for What decides it: {}", text("live"));
+    // the head to head: the owners' record and meetings (home owner's pal first, the winner marked), the pals' own
+    assert!(
+        (text("live").contains("5 meetings since 17 aug") || text("live").contains("5 meetings since aug 17"))
+            && text("live").contains("player-12")
+            && text("live").contains("2–3"),
+        "Live shows the owners' record: {}",
+        text("live")
+    );
+    assert!(text("live").contains("woolipop ryu\nvs\n♛splatterina"), "each meeting from the home owner's side: {}", text("live"));
+    assert!(text("live").contains("pals") && text("live").contains("1–2"), "and the pals' record: {}", text("live"));
+    assert!(!text("live").contains(" ."), "no stray space before a full stop: {}", text("live"));
+    assert_eq!(r["livePanels"]["meetings"], json!(5), "every meeting is listed (the list scrolls)");
+    assert_eq!(r["livePanels"]["won"], json!(5), "with its winner marked");
+    // the race: both pals named with what's left, the K.O. marked, and a close race still apart
+    assert!(text("live").contains("21%\nhp left") && text("live").contains("k.o.\nout first"), "the race's ends: {}", text("live"));
+    assert!(text("live").contains("would need 27% longer"), "and the margin: {}", text("live"));
+    assert!(
+        text("liveedge").contains("neck and neck") && text("liveedge").contains("2%\nhp left"),
+        "a race too close to call: {}",
+        text("liveedge")
+    );
+    assert!(
+        text("liveedge").contains("first meeting") && text("liveedge").contains("haven’t met") && text("liveedge").contains("never met"),
+        "owners and pals who've never met: {}",
+        text("liveedge")
+    );
+    assert_eq!((&r["liveFits"], &r["liveedgeFits"]), (&json!(true), &json!(true)), "Live fits the window without scrolling");
+    for tab in ["livePanels", "liveedgePanels"] {
+        let f = &r[tab];
+        assert_eq!((&f["h2h"], &f["race"]), (&json!(true), &json!(true)), "{tab}: nothing spills out of the panels: {f}");
+        assert_eq!((&f["ends"], &f["apart"]), (&json!(2), &json!(true)), "{tab}: the race's end labels never overlap: {f}");
+    }
     assert!(text("history").contains("14 / 19"), "History: {}", text("history"));
     // a call's breakdown, opened from its row
     let d = &data["call_detail"];
@@ -559,6 +681,7 @@ fn every_tab_renders_headless() {
     assert!(call.contains(&home) && call.contains(&away) && call.contains("augur called"), "the breakdown names both pals: {call}");
     assert!(call.contains(&format!("k.o. {ko}")) && call.contains("% hp left"), "the result, K.O. and HP left: {call}");
     assert!(call.contains("how it went") && call.contains("damage by move") && call.contains("top hits"), "how the duel went: {call}");
+    assert!(call.contains("counted most for"), "the breakdown says what swung the call most: {call}");
     assert!(
         call.contains("how augur called it") && call.contains("records") && call.contains("pal h2h") && call.contains("together"),
         "the model's sum: {call}"
@@ -571,6 +694,7 @@ fn every_tab_renders_headless() {
     assert_eq!(r["chart"]["lines"], json!(2), "an HP line per side");
     assert_eq!(r["chart"]["hits"].as_u64().unwrap() as usize, d["fight"]["hits"].as_array().unwrap().len(), "a dot per hit");
     assert_eq!(r["chart"]["ko"], json!(true), "the K.O. is marked");
+    assert_eq!(r["chart"]["proj"], json!(2), "with Augur's projected race behind it");
     assert_eq!(r["fits"], json!(true), "the breakdown fits the window without scrolling");
     let bare = r["callBare"].as_str().unwrap().to_lowercase();
     assert!(
@@ -634,7 +758,11 @@ fn every_tab_renders_headless() {
     );
     assert!(text("sidebar").contains("25%") && text("sidebar").contains("fetching"), "the sidebar shows the fetch: {}", text("sidebar"));
     let stake = data["live"]["stake"]["command"].as_str().unwrap();
-    assert!(!stake.is_empty() && text("live").contains(&format!("copy {stake}")), "Live offers the bet {stake}: {}", text("live"));
+    assert!(
+        !stake.is_empty() && text("live").contains(&format!("{stake}\n")) && text("live").contains(" credits\ncopy\n"),
+        "Live offers the bet {stake} with a copy button: {}",
+        text("live")
+    );
     let b = &data["bets_view"]["comparison"];
     assert!(text("bets").contains("following augur") && text("bets").contains("deviated"), "Your bets: {}", text("bets"));
     assert!(
@@ -694,6 +822,7 @@ fn every_tab_renders_headless() {
         let port = serve("index.html", &data, MAIN_DRIVER);
         for tab in [
             "live",
+            "liveedge",
             "history",
             "call",
             "bets",

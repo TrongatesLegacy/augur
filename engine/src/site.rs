@@ -72,9 +72,10 @@ pub fn text(s: &str) -> String {
     html_escape::decode_html_entities(&regex!(r"<[^>]+>").replace_all(s, "")).trim().to_string()
 }
 
-/// Text with runs of whitespace collapsed.
+/// Text with runs of whitespace collapsed, and none left before punctuation (a tag before a full stop leaves one).
 fn squash(s: &str) -> String {
-    regex!(r"\s+").replace_all(&text(&regex!(r"<[^>]+>").replace_all(s, " ")), " ").trim().to_string()
+    let flat = regex!(r"\s+").replace_all(&text(&regex!(r"<[^>]+>").replace_all(s, " ")), " ").trim().to_string();
+    regex!(r"\s+([.,;:!?])").replace_all(&flat, "$1").into_owned()
 }
 
 fn num(s: &str) -> Option<f64> {
@@ -370,14 +371,19 @@ pub fn duel_rows(page: &str) -> Vec<DuelRow> {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Rivalry {
     pub summary: String,
+    /// the day of their first meeting (2026-10-28), when the page says
+    #[serde(default)]
+    pub since: Option<String>,
     /// (owner, wins here, overall record)
     pub owners: Vec<(String, u32, String)>,
     pub meetings: Vec<DuelRow>,
 }
 
 pub fn parse_rivalry(page: &str) -> Rivalry {
+    let sub = regex!(r#"(?s)<p class="sub">(.*?)</p>"#).captures(page).map(|c| c[1].to_string());
     Rivalry {
-        summary: regex!(r#"(?s)<p class="sub">(.*?)</p>"#).captures(page).map(|c| squash(&c[1])).unwrap_or_else(|| "first meeting".into()),
+        summary: sub.as_deref().map(squash).unwrap_or_else(|| "first meeting".into()),
+        since: sub.as_deref().and_then(|s| regex!(r#"<time datetime="(\d{4}-\d{2}-\d{2})""#).captures(s)).map(|c| c[1].to_string()),
         owners: regex!(r#"(?s)<p class="vs-name">(.*?)</p><p class="vs-wins"><b>(\d+)</b>.*?<p class="vs-all">(.*?)</p>"#)
             .captures_iter(page)
             .map(|c| (text(&c[1]), c[2].parse().unwrap_or(0), text(&c[3])))
@@ -991,7 +997,7 @@ pub fn parse_pet(page: &str) -> Option<Pet> {
         .collect();
     let passives = regex!(r#"(?s)<li class="pt-pass"[^>]*>(.*?)</li>"#)
         .captures_iter(page)
-        .map(|c| squash(&regex!(r#"<span class="pt-passk">[^<]*</span>"#).replace(&c[1], "")).replace(" :", ":"))
+        .map(|c| squash(&regex!(r#"<span class="pt-passk">[^<]*</span>"#).replace(&c[1], "")))
         .collect();
     let log = regex!(r#"(?s)<ul class="pt-log-l"[^>]*>(.*?)</ul>"#)
         .captures(page)
@@ -1147,7 +1153,8 @@ mod tests {
     #[test]
     fn rivalry_page() {
         let r = parse_rivalry(&page("vs-player-09-player-49.html"));
-        assert!(r.summary.contains("player-09"));
+        assert_eq!(r.summary, "player-09 leads player-49 8–3. 11 meetings, the first on Wed, Oct 28.", "no space before a full stop");
+        assert_eq!(r.since.as_deref(), Some("2026-10-28"));
         assert_eq!(r.owners.len(), 2);
         assert!(r.meetings.len() >= 10);
     }

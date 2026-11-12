@@ -498,8 +498,8 @@ fn big_numbers_fit() {
         let folder = folder.join("big");
         std::fs::create_dir_all(&folder).unwrap();
         for tab in [
-            "live", "history", "call", "bets", "pals", "players", "you", "titles", "model", "settings", "staking", "ownmodel", "sync", "updates",
-            "offair",
+            "live", "history", "call", "bets", "pals", "players", "you", "titles", "model", "settings", "staking", "ownmodel", "sync",
+            "updates", "offair",
         ] {
             render(port, tab, Some((&folder, tab)));
         }
@@ -669,8 +669,8 @@ fn every_tab_renders_headless() {
         std::fs::create_dir_all(&folder).unwrap();
         let port = serve("index.html", &data, MAIN_DRIVER);
         for tab in [
-            "live", "history", "call", "bets", "pals", "players", "you", "titles", "model", "settings", "staking", "ownmodel", "sync", "welcome",
-            "updates", "offair",
+            "live", "history", "call", "bets", "pals", "players", "you", "titles", "model", "settings", "staking", "ownmodel", "sync",
+            "welcome", "updates", "offair",
         ] {
             render(port, tab, Some((&folder, tab)));
         }

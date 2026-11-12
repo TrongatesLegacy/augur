@@ -83,8 +83,8 @@ function parts(m, c) {
 }
 
 // The model's sum on the log-odds scale: each factor moves the call toward home (left) or away (right), then the
-// total. footer goes at its foot (the model it used).
-export function waterfall(d, footer = modelFooter(d)) {
+// total. footer goes at its foot (the model it used), or on a tab of its own (tabbed)
+export function waterfall(d, footer = modelFooter(d), tabbed = false) {
   const c = d.call;
   const m = d.model;
   if (!m) return `<div class="panel col grow"><div class="ph"><h3>How Augur called it</h3></div>${empty('eye', 'No numbers kept for this call', 'It was logged before Augur saved its factors and fighters.')}${footer}</div>`;
@@ -117,9 +117,13 @@ export function waterfall(d, footer = modelFooter(d)) {
   const total = `<div class="wf total"><div class="wl"><b>Together</b><small>log-odds ${signedLogit(m.total)}</small></div>
     <div class="wt"><i class="gold" style="left:${Math.min(50, at(m.total))}%;width:${Math.abs(at(m.total) - 50)}%"></i></div>
     <div class="wv"><b class="gold">${pct(fav === 'home' ? m.p_home : 1 - m.p_home)}</b><small>${esc(pal(c, fav))}</small></div></div>`;
+  const sum = `${m.summary ? `<p class="csum">${esc(m.summary)}</p>` : ''}${rows}${total}
+    ${m.rescored ? '<div class="small">Re-run on the fighters it saw with its settings: the call didn’t keep its factors.</div>' : ''}`;
+  if (tabbed && footer)
+    return `<div class="panel col grow"><div class="ph"><h3>How Augur called it</h3><div class="seg sm"><button class="on" data-wv="sum">Sum</button><button data-wv="model">Model used</button></div></div>
+    <div class="fillin" data-wvp="sum">${sum}</div><div class="fillin" data-wvp="model" hidden>${footer}</div></div>`;
   return `<div class="panel col grow"><div class="ph"><h3>How Augur called it</h3><span>home ◂ ▸ away</span></div>
-    <div class="fillin">${m.summary ? `<p class="csum">${esc(m.summary)}</p>` : ''}${rows}${total}
-    ${m.rescored ? '<div class="small">Re-run on the fighters it saw with its settings: the call didn’t keep its factors.</div>' : ''}${footer}</div></div>`;
+    <div class="fillin">${sum}${footer}</div></div>`;
 }
 
 // the settings the call was made with, shown at the foot of How Augur called it: one panel fewer, so the page fits
@@ -167,6 +171,6 @@ export function tape(d) {
     <div class="fillin">${tapeRows({ home: { fighter: h }, away: { fighter: a } })}
     ${row('ROLLS', roll(h), roll(a), (v) => `${Math.round(v)}`)}
     ${row('MOVES', sh, sa, (v) => v.toFixed(1))}
-    <div class="cpass">${[h, a].map((f) => `<div class="pills">${f.passives.length ? passivePills(f.passives) : '<span class="small">no passives</span>'}</div>`).join('')}</div>
+    ${h.passives.length || a.passives.length ? `<div class="cpass">${[h, a].map((f) => `<div class="pills">${f.passives.length ? passivePills(f.passives) : '<span class="small">no passives</span>'}</div>`).join('')}</div>` : '<div class="small cnopass">Neither has passives</div>'}
     ${edgeLine}${moves}</div></div>`;
 }

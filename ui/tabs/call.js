@@ -23,7 +23,7 @@ function headline(d) {
 // each side's HP over the fight as steps, from the tape: home cyan, away pink; the hardest hits ringed, the K.O. marked
 function hpChart(f, c, m) {
   const W = 520;
-  const H = 150;
+  const H = 120;
   const L = 38;
   const B = 18;
   const end = Math.max(f.ko_secs || 0, ...f.hits.map((h) => h.t), 1) + 1;
@@ -94,9 +94,10 @@ function damage(d) {
       .map((m) => {
         const edge = m.mult > 1 ? '<span class="pill ok" title="A type edge against the other side">edge</span>' : m.mult != null && m.mult < 1 ? '<span class="pill bad" title="Resisted by the other side">resisted</span>' : '';
         const name = m.name ? esc(m.name) : '<span class="muted" title="Likely damage over time">Unnamed hits</span>';
-        return `<div class="mv"><div class="mvt"><span>${name}${edge}</span><b>${Math.round(m.total)}%</b></div>
-          <div class="b"><i class="${s}" style="width:${Math.min(100, m.total)}%"></i></div>
-          <small>${fmt(m.hits)} hit${m.hits === 1 ? '' : 's'} · best ${Math.round(m.max)}%${m.power != null ? ` · ${esc(m.el)} ${fmt(m.power)}` : ''}</small></div>`;
+        // the hits, the best one and the move's element and power are on hover
+        const more = `${fmt(m.hits)} hit${m.hits === 1 ? '' : 's'} · best ${Math.round(m.max)}%${m.power != null ? ` · ${m.el} ${fmt(m.power)}` : ''}`;
+        return `<div class="mv" title="${esc(more)}"><div class="mvt"><span>${name}${edge}</span><small>${fmt(m.hits)}×</small><b>${Math.round(m.total)}%</b></div>
+          <div class="b"><i class="${s}" style="width:${Math.min(100, m.total)}%"></i></div></div>`;
       })
       .join('');
     return `<div class="mvc"><div class="mvh ${s}"><b>${esc(pal(c, s))}</b><span>${Math.round(dealt)}% dealt</span></div>${rows || '<span class="small">no hits landed</span>'}</div>`;
@@ -116,14 +117,21 @@ export async function render(app, back) {
   } else {
     const c = d.call;
     main.innerHTML =
-      header(`History · ${esc(c.home_pal)} vs ${esc(c.away_pal)}${d.fight ? ` · duel #${d.fight.id}` : ''}`, bar) +
+      header(`History · ${esc(c.home_pal)} vs ${esc(c.away_pal)}${d.fight ? ` · duel #${d.fight.id}` : ''}${c.version ? ` · called by Augur ${esc(c.version)}` : ''}`, bar) +
       headline(d) +
       `<div class="cgrid grow">
         <div class="stackc">${howItWent(d)}${damage(d)}</div>
-        <div class="stackc">${waterfall(d, modelFooter(d))}</div>
+        <div class="stackc">${waterfall(d, modelFooter(d), true)}</div>
         ${tape(d)}
       </div>`;
   }
+  // How Augur called it: the sum, or the model it used
+  main.querySelectorAll('[data-wv]').forEach((t) => {
+    t.onclick = () => {
+      main.querySelectorAll('[data-wv]').forEach((x) => x.classList.toggle('on', x === t));
+      main.querySelectorAll('[data-wvp]').forEach((x) => (x.hidden = x.dataset.wvp !== t.dataset.wv));
+    };
+  });
   const b = document.getElementById('back');
   b.onclick = back;
   b.focus({ preventScroll: true });

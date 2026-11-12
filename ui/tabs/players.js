@@ -12,12 +12,13 @@ function boxPal(p) {
   const ivs = ['HP', 'ATK', 'DEF']
     .map((k) => {
       const iv = p.stats[k]?.[1] ?? 0;
-      return `<div class="iv"><span>${k}</span><div class="b"><i style="width:${iv}%;background:${ivColour(iv)}"></i></div><span>${fmt(iv)}</span></div>`;
+      return `<div class="iv"><span>${k}<b>${fmt(iv)}</b></span><div class="b"><i style="width:${iv}%;background:${ivColour(iv)}"></i></div></div>`;
     })
     .join('');
-  return `<div class="pcd" title="Beats a typical opponent ${pct(p.rating)} of the time on stats"><div class="t">${orb(p.pal, p.slug, 'h av', 22)}<b>${esc(p.pal)}</b></div>${ivs}
-    <div class="pft"><b class="cond rt">${pct(p.rating)}</b> <span class="small">vs typical</span><span class="tag ${TAG[p.advice] || 'no'}">${esc(p.advice)}</span></div>
-    <div class="pills">${passivePills(p.passives)}${p.rerolls ? `<span class="pill">rerolled ×${p.rerolls}</span>` : ''}</div></div>`;
+  // name and rating, the three rolls side by side, then the advice and talents
+  return `<div class="pcd" title="Beats a typical opponent ${pct(p.rating)} of the time on stats"><div class="t">${orb(p.pal, p.slug, 'h av', 22)}<b>${esc(p.pal)}</b><b class="cond rt">${pct(p.rating)}</b></div>
+    <div class="ivs">${ivs}</div>
+    <div class="pft"><span class="tag ${TAG[p.advice] || 'no'}">${esc(p.advice)}</span>${passivePills(p.passives)}${p.rerolls ? `<span class="pill">rerolled ×${p.rerolls}</span>` : ''}</div></div>`;
 }
 
 // a record per rival or pal: name, W–L and the share won as a bar
@@ -70,7 +71,7 @@ export async function render(app) {
         ${v.roster.length ? stack([[advice('Keep'), 'keep', 'ok'], [advice('Reroll') + advice('Maybe'), 'reroll / maybe', 'gold'], [advice('Replace'), 'replace', 'dim']]) : ''}</div></div>
     <div class="pgrid grow"><div class="panel col"><div class="ph"><h3>Pal box</h3><span>talents are fixed at hatch; a reroll redraws all three</span></div>
       ${v.roster_error ? `<div class="small bad">Couldn't load the box: ${esc(v.roster_error)}</div>` : ''}
-      ${v.roster.length ? `<div class="fillin"><div class="box">${v.roster.sort((a, b) => b.rating - a.rating).map(boxPal).join('')}</div>
+      ${v.roster.length ? `<div class="pboxw"><div class="box">${v.roster.sort((a, b) => b.rating - a.rating).map(boxPal).join('')}</div>
       <div class="pkey" title="Rough until the reroll cost is set in Settings"><span><i class="tag keep">Keep</i>strong pals</span><span><i class="tag rr">Reroll</i>a good species let down by one roll</span><span><i class="tag no">Replace</i>a weak species no roll can fix</span></div></div>` : empty('box', 'No pals in the box', 'Their pal box shows here once it can be read.')}</div>
       <div class="stackc">
         <div class="panel col grow"><div class="ph"><h3>Rivals</h3><span>most met</span></div>${d.rivals.length ? `<div class="fillin bars">${records(d.rivals)}</div>` : empty('swords', 'No duels yet', 'Who they meet most, and how it goes.')}</div>

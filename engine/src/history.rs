@@ -217,10 +217,6 @@ pub fn past_duels(conn: &Connection) -> R<Vec<PastDuel>> {
         let (pal, types, base) = row?;
         species.insert(pal, (serde_json::from_str(&types.unwrap_or_default()).unwrap_or_default(), base));
     }
-    let mut moves: HashMap<String, Vec<model::Move>> = HashMap::new();
-    for pal in species.keys() {
-        moves.insert(pal.clone(), db::moves_of(conn, pal)?);
-    }
     let duels: Vec<(u64, String, String, String)> = conn
         .prepare("SELECT id, home_pal, away_pal, winner FROM duels WHERE winner IS NOT NULL ORDER BY id")?
         .query_map([], |r| {
@@ -232,6 +228,15 @@ pub fn past_duels(conn: &Connection) -> R<Vec<PastDuel>> {
             ))
         })?
         .collect::<Rq<_>>()?;
+    // moves' real hit sizes from the older three quarters' tapes only: the learner checks on the newest quarter
+    let cutoff = duels.get(duels.len() * 3 / 4).map(|d| d.0);
+    let sizes = db::hit_sizes(conn, cutoff)?;
+    let mut moves: HashMap<String, Vec<model::Move>> = HashMap::new();
+    for pal in species.keys() {
+        let mut m = db::moves_of(conn, pal)?;
+        db::with_hit_sizes(&mut m, &sizes);
+        moves.insert(pal.clone(), m);
+    }
     let fighter = |pal: &str| -> Option<Fighter> {
         let (types, base) = species.get(pal)?;
         let skills = moves.get(pal).filter(|m| !m.is_empty())?.clone();

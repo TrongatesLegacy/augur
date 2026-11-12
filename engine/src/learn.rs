@@ -32,7 +32,7 @@ struct Knob {
     grid: &'static [f64],
 }
 
-const KNOBS: [Knob; 7] = [
+const KNOBS: [Knob; 8] = [
     Knob { key: "TYPE_BONUS", source: Source::PastDuels, grid: &[1.0, 1.1, 1.25, 1.4, 1.5, 1.65, 1.8, 2.0, 2.25, 2.5] },
     Knob { key: "TYPE_RESIST", source: Source::PastDuels, grid: &[1.0, 1.1, 1.25, 1.4, 1.5, 1.65, 1.8, 2.0] },
     Knob { key: "POWER_EXP", source: Source::PastDuels, grid: &[0.0, 0.1, 0.2, 0.3, 0.35, 0.4, 0.5, 0.65, 0.8, 1.0] },
@@ -40,6 +40,7 @@ const KNOBS: [Knob; 7] = [
     Knob { key: "PAL_H2H_WEIGHT", source: Source::PastDuels, grid: &[0.0, 0.25, 0.5, 0.75, 1.0, 1.5] },
     Knob { key: "STATS_STEEPNESS", source: Source::LiveCalls, grid: &[1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0] },
     Knob { key: "COOLDOWN_EXP", source: Source::LiveCalls, grid: &[0.0, 0.25, 0.5, 0.75, 1.0] },
+    Knob { key: "HIT_WEIGHT", source: Source::PastDuels, grid: &[0.0, 0.25, 0.5, 0.75, 1.0] },
 ];
 
 /// One setting after a learning run.
@@ -241,7 +242,7 @@ mod tests {
             hp: 4000.0,
             atk: 500.0,
             def: 600.0,
-            skills: vec![Move { name: "m".into(), el: el.into(), power: 100.0, lv: 1 }],
+            skills: vec![Move { name: "m".into(), el: el.into(), power: 100.0, lv: 1, hit: 1.0 }],
             passives: vec![],
             hidden_boost: 1.0,
             speed: 1.0,

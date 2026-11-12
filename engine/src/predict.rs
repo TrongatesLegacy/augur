@@ -210,7 +210,11 @@ pub fn predict(state: &State, opts: &Options) -> Option<Prediction> {
     let (h, a) = (state.home.as_ref()?, state.away.as_ref()?);
     let hud = state.hud.as_deref().unwrap_or("");
     let stats = site::parse_stats(hud);
-    let skills = site::parse_skills(state.skills.as_deref().unwrap_or(""));
+    let mut skills = site::parse_skills(state.skills.as_deref().unwrap_or(""));
+    // each move's real hit size from the stored fight tapes
+    if let Some(sizes) = db::open(&opts.db_path).ok().and_then(|c| db::hit_sizes(&c, None).ok()) {
+        skills.values_mut().for_each(|m| db::with_hit_sizes(m, &sizes));
+    }
     let passives = site::parse_passives(hud);
     let tale = site::parse_tale(hud);
     let species_rec = tale.species_records();

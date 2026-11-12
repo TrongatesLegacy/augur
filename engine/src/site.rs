@@ -237,7 +237,7 @@ pub fn parse_skills(skills_html: &str) -> Sides<Vec<Move>> {
         let sect = between(skills_html, &format!(r#"<div class="skl skl-{side}""#), &[r#"<div class="skl skl-"#]).unwrap_or("");
         let moves = regex!(r#"(?s)<span class="skl-lv">(\d+)</span>.*?alt="([^"]*)".*?<span class="skl-nm[^"]*">(.*?)</span>.*?<span class="skl-p">(\d+)</span>"#)
             .captures_iter(sect)
-            .map(|c| Move { lv: c[1].parse().unwrap_or(1), el: c[2].to_lowercase(), name: text(&c[3]), power: c[4].parse().unwrap_or(0.0) })
+            .map(|c| Move { lv: c[1].parse().unwrap_or(1), el: c[2].to_lowercase(), name: text(&c[3]), power: c[4].parse().unwrap_or(0.0), hit: 1.0 })
             .collect();
         out.insert(side.to_string(), moves);
     }
@@ -421,6 +421,7 @@ pub fn parse_moveset(page: &str) -> Vec<Move> {
                     .map(|e| e[1].to_lowercase())
                     .unwrap_or_else(|| "neutral".into()),
                 lv: regex!(r#"(?s)<span class="mv-lv">.*?(\d+)</span>"#).captures(li).and_then(|l| l[1].parse().ok()).unwrap_or(1),
+                hit: 1.0,
             })
         })
         .collect()

@@ -78,7 +78,8 @@ pub fn fixture_data() -> Value {
         "species": augur_engine::history::species_detail(&conn, "Chillet Lux").unwrap(),
         "player": views::player_view(&conn, &s, "TrongatesLegacy", roster).unwrap(),
         "model_view": views::model_view(&conn, &s, None, Default::default(), 1).unwrap(),
-        "get_settings": AppSettings::default(),
+        // checking at random times, so Settings shows the range
+        "get_settings": AppSettings { poll_secs: 4, poll_max_secs: Some(12), ..Default::default() },
         "stake_preview": preview,
         "sync_view": crate::sync::SyncView {
             on: true,
@@ -310,7 +311,7 @@ fn every_tab_renders_headless() {
     assert!(text("players").contains("nyafia primo"), "Players: {}", text("players"));
     assert!(text("model").contains("history test"), "Model: {}", text("model"));
     assert!(
-        text("settings").contains("chat lines") && text("settings").contains("notify with each result"),
+        text("settings").contains("chat lines") && text("settings").contains("notify with each result") && text("settings").contains("a new random wait"),
         "Settings: {}",
         text("settings")
     );

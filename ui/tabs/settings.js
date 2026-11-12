@@ -24,11 +24,13 @@ const row = (label, sub, control) => `<div class="srow"><div>${label}${sub ? `<s
 const toggle = (attr, on, label) => `<button class="tog ${on ? 'on' : ''}" ${attr} aria-pressed="${!!on}" aria-label="${esc(label)}"></button>`;
 
 function general(s) {
+  const ranged = s.poll_max_secs != null;
   const tog = (k, label, sub) => row(label, sub, toggle(`data-k="${k}"`, s[k], label));
   return `<div class="sg">
     <div class="panel"><div class="ph"><h3>Stream</h3></div>
       ${row('Duels', 'the live duels on palduels.com', '<span class="muted">palduels.com</span>')}
-      ${row('Check for new fights', 'while a duel is up (the site’s page checks every 2s)', `<select data-n="poll_secs">${[3, 5, 10, 15].map((n) => `<option value="${n}" ${s.poll_secs === n ? 'selected' : ''}>Every ${n} seconds</option>`).join('')}</select>`)}
+      ${row('Check for new fights', 'while a duel is up (the site’s page checks every 2s)', `<select id="pollmode">${[3, 5, 10, 15].map((n) => `<option value="${n}" ${!ranged && s.poll_secs === n ? 'selected' : ''}>Every ${n} seconds</option>`).join('')}<option value="range" ${ranged ? 'selected' : ''}>At random, in a range</option></select>`)}
+      ${ranged ? row('Between', 'a new random wait before each check', `<div class="st3"><input type="number" data-n="poll_secs" min="2" max="60" value="${s.poll_secs}" aria-label="Fewest seconds"><span class="muted">and</span><input type="number" data-n="poll_max_secs" min="2" max="120" value="${s.poll_max_secs}" aria-label="Most seconds"><span class="muted">seconds</span></div>`) : ''}
       ${tog('backfill', 'Fetch past duels in the background', 'Gently, one page at a time; pauses while a duel is up')}
       ${tog('launch_at_login', 'Launch at login')}</div>
     <div class="panel"><div class="ph"><h3>Tray &amp; notifications</h3></div>
@@ -177,11 +179,21 @@ export async function render(app) {
   main.querySelectorAll('[data-n]').forEach((input) => {
     input.onchange = () => {
       const k = input.dataset.n;
-      if (k === 'poll_secs') s[k] = +input.value;
+      if (k === 'poll_secs' || k === 'poll_max_secs') s[k] = Math.min(120, Math.max(2, Math.round(+input.value) || 2));
       else if (k === 'reroll_cost') s[k] = input.value ? +input.value : null;
       else s[k] = input.value.trim();
       save();
     };
+  });
+  document.getElementById('pollmode')?.addEventListener('change', (e) => {
+    const v = e.target.value;
+    if (v === 'range') {
+      s.poll_max_secs = Math.max(s.poll_secs + 5, 10);
+    } else {
+      s.poll_secs = +v;
+      s.poll_max_secs = null;
+    }
+    save(true);
   });
   main.querySelectorAll('[data-st]').forEach((input) => {
     input.onchange = () => {

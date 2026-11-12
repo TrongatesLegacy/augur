@@ -278,6 +278,16 @@ td .two small b { color: var(--gold); font-weight: 700; }
 .pop .quiet { display: grid; gap: 3px; padding: 18px 14px 14px; }
 .pop .quiet b { font: 800 26px/1 var(--cond); letter-spacing: .04em; text-transform: uppercase; }
 .pop .quiet small { color: var(--t2); font-size: 12.5px; }
+.pop .nu { display: grid; gap: 10px; }
+.pop .nu-t { display: flex; justify-content: space-between; align-items: baseline; }
+.pop .nu-t small { color: var(--t3); font: 600 10px var(--sans); letter-spacing: .12em; text-transform: uppercase; }
+.pop .nu-m { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 10px; align-items: center; }
+.pop .nu-s { display: flex; align-items: center; gap: 8px; min-width: 0; font: 600 14px var(--sans); }
+.pop .nu-s > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pop .nu-s.h > span:last-child { color: var(--home); } .pop .nu-s.a > span:last-child { color: var(--away); }
+.pop .nu-s.a { flex-direction: row-reverse; text-align: right; }
+.pop .nu-s .orb { box-shadow: none; font-size: 10px !important; }
+.pop .nu-v { color: var(--t3); font: 700 12px var(--cond); letter-spacing: .1em; text-transform: uppercase; }
 .pop .qs { margin: 0 14px 10px; padding: 12px 14px; border-radius: 14px; background: linear-gradient(160deg, rgba(255,207,107,.12), rgba(255,207,107,.02)); border: 1px solid rgba(255,207,107,.25); }
 .pop .qh { display: flex; justify-content: space-between; font: 600 10px var(--sans); letter-spacing: .12em; text-transform: uppercase; color: var(--t3); margin-bottom: 6px; }
 .pop .qr { display: grid; gap: 6px; padding: 4px 14px 10px; font-size: 12.5px; color: var(--t2); }

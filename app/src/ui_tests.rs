@@ -107,6 +107,22 @@ pub fn fixture_data() -> Value {
         },
         "account": { "signed_in": false, "name": null },
         "start_fresh": null,
+        // up to date, and (swapped in by the "updates" page and the tray test) a new version downloaded and ready
+        "update_view": crate::updates::UpdateView { current: "0.1.1".into(), checked_at: Some(recent), ..Default::default() },
+        "update_ready": crate::updates::UpdateView {
+            current: "0.1.1".into(),
+            checked_at: Some(recent),
+            ready: true,
+            latest: Some(crate::updates::Release {
+                version: "0.2.0".into(),
+                notes: "## What's Changed\n* Check for updates in the app by @player-01 in https://github.com/TrongatesLegacy/augur/pull/8\n* Faster History by @player-01 in https://github.com/TrongatesLegacy/augur/pull/9\n\n**Full Changelog**: https://github.com/TrongatesLegacy/augur/compare/0.1.1...0.2.0".into(),
+                published: Some(recent as i64),
+            }),
+            ..Default::default()
+        },
+        "update_check": null,
+        "update_install": null,
+        "update_seen": null,
         "backfill_progress": augur_engine::backfill::Progress { phase: "duels".into(), done: 1200, total: 4702, ..Default::default() },
         "pal_image": null,
     })
@@ -182,17 +198,23 @@ const MAIN_DRIVER: &str = r#"
   const only = (location.hash.match(/tab=(\w+)/) || [])[1];
   if (!window.augur) window.__errors.push('the page never started (a module failed to load)');
   else {
-    for (const tab of only ? [only] : ['live', 'history', 'bets', 'pals', 'players', 'model', 'settings', 'staking', 'sync']) {
+    for (const tab of only ? [only] : ['live', 'history', 'bets', 'pals', 'players', 'model', 'settings', 'staking', 'sync', 'updates']) {
+      // "updates" is Settings › Updates with a new version downloaded and ready (and its bar over the window)
+      if (tab === 'updates') {
+        DATA.update_view = DATA.update_ready;
+        window.augur.showUpdate(DATA.update_ready);
+      }
       // "bets" is History's Your bets view; "staking" and "sync" are Settings pages
       window.augur.state.view = tab === 'bets' ? 'bets' : 'calls';
-      window.augur.state.settingsPage = ['staking', 'sync'].includes(tab) ? tab : 'general';
+      window.augur.state.settingsPage = ['staking', 'sync', 'updates'].includes(tab) ? tab : 'general';
       // "welcome" is the fresh install's overlay, over Live
-      await window.augur.show(tab === 'bets' ? 'history' : ['staking', 'sync'].includes(tab) ? 'settings' : tab === 'welcome' ? 'live' : tab);
+      await window.augur.show(tab === 'bets' ? 'history' : ['staking', 'sync', 'updates'].includes(tab) ? 'settings' : tab === 'welcome' ? 'live' : tab);
       await sleep(300);
       out[tab] = document.getElementById('main').innerText;
     }
   }
   out.sidebar = document.querySelector('.side')?.innerText || '';
+  out.upbar = document.getElementById('upbar')?.innerText || '';
   // a fresh install's welcome, over everything
   window.augur?.showWelcome({ first_run: true });
   out.welcome = document.getElementById('welcome')?.innerText || '';
@@ -203,6 +225,8 @@ const MAIN_DRIVER: &str = r#"
 "#;
 
 const TRAY_DRIVER: &str = r#"
+// a new version downloaded and ready: the popover offers Restart to update
+DATA.update_view = DATA.update_ready;
 (async () => {
   document.body.style.width = '340px'; // the popover's width (headless Chrome's window can't be that narrow)
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -336,11 +360,24 @@ fn every_tab_renders_headless() {
     );
     assert!(text("staking").contains("what it would suggest") && text("staking").contains("sit out"), "Staking: {}", text("staking"));
     assert!(text("sync").contains("gaming pc") && text("sync").contains("back up"), "Sync & data: {}", text("sync"));
+    assert!(
+        text("updates").contains("augur 0.2.0 is ready")
+            && text("updates").contains("restart to update")
+            && text("updates").contains("faster history"),
+        "Updates: {}",
+        text("updates")
+    );
+    assert!(
+        !text("updates").contains("@player-01") && !text("updates").contains("full changelog"),
+        "the notes are tidied: {}",
+        text("updates")
+    );
+    assert!(text("upbar").contains("restart to update"), "a ready update floats a bar over the window: {}", text("upbar"));
 
     if let Some(folder) = std::env::var_os("AUGUR_UI_SHOTS").map(PathBuf::from) {
         std::fs::create_dir_all(&folder).unwrap();
         let port = serve("index.html", &data, MAIN_DRIVER);
-        for tab in ["live", "history", "bets", "pals", "players", "model", "settings", "staking", "sync", "welcome"] {
+        for tab in ["live", "history", "bets", "pals", "players", "model", "settings", "staking", "sync", "welcome", "updates"] {
             render(port, tab, Some((&folder, tab)));
         }
     }
@@ -357,9 +394,10 @@ fn tray_popover_renders_headless() {
     assert!(tray.contains("WUMPO") || tray.contains("Wumpo"), "tray: {tray}");
     assert!(tray.contains("Copy for chat"));
     assert!(tray.contains("Copy bet"), "the tray copies the bet command: {tray}");
+    assert!(tray.contains("Restart to update"), "the tray offers a ready update: {tray}");
     if let Some(folder) = std::env::var_os("AUGUR_UI_SHOTS").map(PathBuf::from) {
         std::fs::create_dir_all(&folder).unwrap();
-        render_at(serve("tray.html", &fixture_data(), TRAY_DRIVER), "tray", Some((&folder, "tray")), (340, 540));
+        render_at(serve("tray.html", &fixture_data(), TRAY_DRIVER), "tray", Some((&folder, "tray")), (340, 600));
     }
     assert!(tray.contains("Today 14/19"));
 }

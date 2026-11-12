@@ -47,6 +47,9 @@ pub struct Shared {
     pub sync_now: AtomicBool,
     /// a fresh install: the backfill waits (up to 10 minutes) for an import or "start fresh"
     pub setup_wait: AtomicBool,
+    /// Settings › Updates
+    pub update: Mutex<crate::updates::UpdateView>,
+    pub pending: Mutex<crate::updates::Pending>,
     pub tray: Mutex<Option<TrayIcon>>,
 }
 
@@ -594,12 +597,15 @@ pub fn run() {
         others: Mutex::new(vec![]),
         sync_now: AtomicBool::new(false),
         setup_wait: AtomicBool::new(first_run),
+        update: Mutex::new(Default::default()),
+        pending: Mutex::new(Default::default()),
         tray: Mutex::new(None),
     });
     tauri::Builder::default()
         .plugin(tauri_plugin_positioner::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         .manage(shared.clone())
         .invoke_handler(tauri::generate_handler![
@@ -626,7 +632,11 @@ pub fn run() {
             crate::sync::sync_set,
             crate::sync::choose_sync_folder,
             crate::sync::backup,
-            crate::sync::import_file
+            crate::sync::import_file,
+            crate::updates::update_view,
+            crate::updates::update_check,
+            crate::updates::update_install,
+            crate::updates::update_seen
         ])
         .setup(move |app| {
             #[cfg(target_os = "macos")]
@@ -694,6 +704,24 @@ pub fn run() {
             std::thread::spawn(move || bets_loop(h3, s3));
             let (h4, s4) = (app.handle().clone(), shared.clone());
             std::thread::spawn(move || crate::sync::sync_loop(h4, s4));
+            let started = crate::updates::UpdateView::at_start(&shared);
+            if let Some(from) = &started.updated_from {
+                notify(
+                    app.handle(),
+                    &format!("Augur updated to {}", started.current),
+                    &format!("from {from} · Settings › Updates says what's new"),
+                );
+            }
+            *shared.update.lock().unwrap() = started;
+            // restarted by an update with the window open: show it again
+            if let Ok(conn) = shared.db() {
+                if db::meta_get(&conn, "reopen_main").ok().flatten().as_deref() == Some("1") {
+                    let _ = db::meta_set(&conn, "reopen_main", "");
+                    open_main(app.handle(), None);
+                }
+            }
+            let (h5, s5) = (app.handle().clone(), shared.clone());
+            std::thread::spawn(move || crate::updates::check_loop(h5, s5));
             Ok(())
         })
         .run(tauri::generate_context!())

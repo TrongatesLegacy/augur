@@ -1,7 +1,8 @@
-// Settings, in five pages: General (checking, the tray and notifications), Staking (with what it would suggest),
-// Chat lines, Account, and Sync & data (sync across computers, back up, import).
+// Settings, in six pages: General (checking, the tray and notifications), Staking (with what it would suggest),
+// Chat lines, Account, Sync & data (sync across computers, back up, import) and Updates.
 import { invoke } from '../lib/bridge.js';
 import { ago, esc, fmt, pct } from '../lib/format.js';
+import { notesList } from '../lib/notes.js';
 import { SHORT, VOICES } from '../lib/pal.js';
 
 const PAGES = [
@@ -10,6 +11,7 @@ const PAGES = [
   ['chat', 'Chat lines'],
   ['account', 'Account'],
   ['sync', 'Sync & data'],
+  ['updates', 'Updates'],
 ];
 
 const STRATEGY = {
@@ -133,20 +135,70 @@ function syncPage(v, flashMsg) {
   </div>`;
 }
 
+const day = (ms) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+const mb = (n) => (n / 1e6).toFixed(n >= 1e7 ? 0 : 1);
+
+// the Updates page's hero: where things stand and the one thing to do next
+function updateHero(u) {
+  const r = u.latest;
+  const p = u.progress;
+  const share = p && p[1] ? p[0] / p[1] : null;
+  const ring = (cls, glyph, frac) =>
+    `<div class="uring ${cls}"><svg viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="19" class="t"/>${frac != null ? `<circle cx="22" cy="22" r="19" class="f" style="stroke-dasharray:${(frac * 119.4).toFixed(1)} 119.4"/>` : ''}</svg><span>${glyph}</span></div>`;
+  if (u.installing) return { ring: ring('go', '↻', 1), title: 'Restarting…', sub: `Installing Augur ${esc(r?.version || '')}. It’s back in a few seconds.`, act: '' };
+  if (p) return { ring: ring('go', share != null ? `${Math.floor(share * 100)}` : '…', share ?? 0.25), title: `Downloading ${esc(r?.version || '')}`, sub: share != null ? `${mb(p[0])} of ${mb(p[1])} MB` : `${mb(p[0])} MB`, act: '' };
+  if (r && u.ready)
+    return {
+      ring: ring('ready', '✦', 1),
+      title: `Augur ${esc(r.version)} is ready`,
+      sub: `Downloaded${r.published ? ` · published ${day(r.published)}` : ''}. Restarting takes a few seconds; your calls, settings and sign-in stay.${shown.live?.live ? ' <span class="gold">A duel is on: maybe wait for the result.</span>' : ''}`,
+      act: '<button class="btn big" id="ui">Restart to update</button>',
+    };
+  if (r)
+    return { ring: ring('ready', '↓', null), title: `Augur ${esc(r.version)} is out`, sub: r.published ? `published ${day(r.published)}` : '', act: '<button class="btn big" id="ui">Download and restart</button>' };
+  if (u.checking) return { ring: ring('spin', '', 0.25), title: 'Checking…', sub: 'Asking GitHub for the latest release', act: '' };
+  if (u.error) return { ring: ring('bad', '!', null), title: 'Couldn’t check', sub: esc(u.error), act: '' };
+  return { ring: ring('ok', '✓', 1), title: 'Up to date', sub: u.checked_at ? `Checked ${ago(u.checked_at)}` : 'Not checked yet', act: '' };
+}
+
+function updates(s, u) {
+  const h = updateHero(u);
+  const r = u.latest;
+  return `<div class="sg">
+    <div style="display:grid;gap:14px;align-content:start">
+      <div class="panel uhero">${h.ring}<div class="uh"><span class="label">Augur ${esc(u.current)}</span><b>${h.title}</b><small>${h.sub}</small></div>
+        <div class="ua">${h.act}<button class="btn ghost" id="uc" ${u.checking || u.progress || u.installing ? 'disabled' : ''}>Check now</button></div></div>
+      <div class="panel">
+        ${row('Check automatically', 'shortly after Augur starts, then every 6 hours', toggle('data-k="check_updates"', s.check_updates, 'Check for updates automatically'))}
+        ${row('Download automatically', 'so Restart to update is instant; installing always waits for your click', toggle('data-k="auto_update"', s.auto_update, 'Download updates automatically'))}
+        <div class="small" style="margin-top:4px">Updates come from the project’s GitHub releases and are signed with its own key. Augur refuses one that isn’t.</div></div>
+    </div>
+    <div style="display:grid;gap:14px;align-content:start">
+      ${u.updated_from ? `<div class="panel note-card"><div class="ph"><h3>Updated to ${esc(u.current)}</h3><button class="btn ghost" id="us">Got it</button></div><div class="small" style="margin-bottom:8px">from ${esc(u.updated_from)} · here’s what changed</div>${notesList(u.updated_notes)}</div>` : ''}
+      ${r ? `<div class="panel"><div class="ph"><h3>What’s new in ${esc(r.version)}</h3>${r.published ? `<span>${day(r.published)}</span>` : ''}</div>${notesList(r.notes)}</div>` : u.updated_from ? '' : '<div class="panel"><div class="ph"><h3>What’s new</h3></div><div class="small">When a new version is out, its notes show here.</div></div>'}
+    </div>
+  </div>`;
+}
+
+// the app's state, for the Updates page (is a duel on?)
+let shown = {};
+
 export async function render(app) {
+  shown = app.state;
   const { state, main, header, flash } = app;
   state.settings = await invoke('get_settings');
   state.settingsPage ||= 'general';
   const page = state.settingsPage;
   const s = state.settings;
-  const [acct, preview, sync] = await Promise.all([
+  const [acct, preview, sync, upd] = await Promise.all([
     page === 'account' ? invoke('account') : null,
     page === 'staking' ? invoke('stake_preview', { staking: s.staking }) : null,
     page === 'sync' ? invoke('sync_view') : null,
+    page === 'updates' ? invoke('update_view') : null,
   ]);
   if (state.tab !== 'settings' || state.settingsPage !== page) return;
   const tabs = `<div class="seg ml">${PAGES.map(([k, l]) => `<button class="${page === k ? 'on' : ''}" data-page="${k}">${l}</button>`).join('')}</div>`;
-  const body = { general: () => general(s), staking: () => staking(s, preview), chat: () => chat(s, state.live), account: () => account(s, acct), sync: () => syncPage(sync, state.syncFlash) }[page]();
+  const body = { general: () => general(s), staking: () => staking(s, preview), chat: () => chat(s, state.live), account: () => account(s, acct), sync: () => syncPage(sync, state.syncFlash), updates: () => updates(s, upd) }[page]();
   main.innerHTML = header('Settings', tabs) + body;
   state.syncFlash = null;
 
@@ -210,6 +262,22 @@ export async function render(app) {
   document.getElementById('si')?.addEventListener('click', () => invoke('sign_in'));
   document.getElementById('so')?.addEventListener('click', async () => {
     await invoke('sign_out');
+    render(app);
+  });
+
+  // Updates
+  document.getElementById('uc')?.addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    await invoke('update_check').catch(flash);
+    render(app);
+  });
+  document.getElementById('ui')?.addEventListener('click', (e) => {
+    e.target.disabled = true;
+    invoke('update_install').catch((err) => (flash(err), render(app)));
+  });
+  document.getElementById('us')?.addEventListener('click', async () => {
+    await invoke('update_seen');
+    app.badge?.(await invoke('update_view'));
     render(app);
   });
 

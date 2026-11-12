@@ -6,6 +6,7 @@ mod cli;
 mod secure;
 mod settings;
 mod sync;
+mod updates;
 mod views;
 
 use clap::Parser;

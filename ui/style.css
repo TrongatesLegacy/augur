@@ -781,3 +781,13 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 .tcat.on span { color: var(--t1); }
 .tgrp[hidden] { display: none; }
 .tall.one .tgh h4, .tall.one .tgc { display: none; }
+
+/* duel breakdown: the one-line summary, and what went into the stats factor */
+.csum { margin: 0 0 10px; padding: 9px 11px; border-radius: 10px; background: rgba(255,207,107,.07); border: 1px solid rgba(255,207,107,.22); color: var(--t1); font-size: 12.5px; line-height: 1.45; }
+.cparts { display: grid; gap: 4px; margin: -2px 0 8px 12px; padding-left: 10px; border-left: 2px solid var(--line); }
+.cpart { display: grid; grid-template-columns: 96px 1fr 84px; gap: 8px; align-items: center; font-size: 11px; color: var(--t3); }
+.cpart small { text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cpb { position: relative; height: 5px; border-radius: 3px; background: rgba(255,255,255,.05); }
+.cpb::after { content: ''; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: rgba(255,255,255,.18); }
+.cpb i { position: absolute; top: 0; bottom: 0; border-radius: 3px; }
+.cpb i.home { background: var(--home); } .cpb i.away { background: var(--away); }

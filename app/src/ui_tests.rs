@@ -559,6 +559,7 @@ fn every_tab_renders_headless() {
     assert!(call.contains(&home) && call.contains(&away) && call.contains("augur called"), "the breakdown names both pals: {call}");
     assert!(call.contains(&format!("k.o. {ko}")) && call.contains("% hp left"), "the result, K.O. and HP left: {call}");
     assert!(call.contains("how it went") && call.contains("damage by move") && call.contains("top hits"), "how the duel went: {call}");
+    assert!(call.contains("counted most for"), "the breakdown says what swung the call most: {call}");
     assert!(
         call.contains("how augur called it") && call.contains("records") && call.contains("pal h2h") && call.contains("together"),
         "the model's sum: {call}"

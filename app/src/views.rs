@@ -394,6 +394,154 @@ pub struct ModelCall {
     pub score: Option<model::Score>,
     /// the factors came from that re-run, not the call as stored (older calls didn't keep them)
     pub rescored: bool,
+    /// what went into the stats factor, each on the same log-odds scale (positive leans home); they add up to it
+    pub parts: Vec<Part>,
+    /// one sentence on what swung the call most, and what pulled against it
+    pub summary: String,
+}
+
+/// One input to the stats factor: HP, Attack, Defence, move power, type edges, unlisted moves or cooldowns.
+#[derive(Serialize)]
+pub struct Part {
+    pub key: String,
+    pub label: String,
+    /// log-odds toward home
+    pub logit: f64,
+    /// in words: "9,383 HP against 7,618"
+    pub detail: String,
+    /// each side's figure, for the summary: [home, away]
+    #[serde(skip)]
+    pub values: [String; 2],
+}
+
+/// The stats factor taken apart. Its log-odds are steepness × ln(home's time to be knocked out ÷ away's), and with
+/// time = HP × Defence ÷ (Attack × move strength) that is a sum of one log ratio per input.
+fn stats_parts(s: &model::Settings, h: &model::Fighter, a: &model::Fighter) -> Vec<Part> {
+    let k = s.stats_steepness;
+    let lr = |x: f64, y: f64| if x > 0.0 && y > 0.0 { k * (x / y).ln() } else { 0.0 };
+    let neutral: Vec<String> = vec![];
+    let power = |f: &model::Fighter| model::strength(s, &f.skills, &neutral) / model::type_mult(s, "neutral", &neutral);
+    let edge =
+        |f: &model::Fighter, them: &model::Fighter| model::strength(s, &f.skills, &them.types) / model::strength(s, &f.skills, &neutral);
+    let pace = |f: &model::Fighter| f.speed.powf(s.cooldown_exp / 0.5);
+    let n = |x: f64| fmt_n(x);
+    let mut parts = vec![
+        Part {
+            key: "hp".into(),
+            label: "HP".into(),
+            logit: lr(h.hp, a.hp),
+            detail: format!("{} HP against {}", n(h.hp), n(a.hp)),
+            values: [n(h.hp), n(a.hp)],
+        },
+        Part {
+            key: "atk".into(),
+            label: "Attack".into(),
+            logit: lr(h.atk, a.atk),
+            detail: format!("Attack {} against {}", n(h.atk), n(a.atk)),
+            values: [n(h.atk), n(a.atk)],
+        },
+        Part {
+            key: "def".into(),
+            label: "Defence".into(),
+            logit: lr(h.def, a.def),
+            detail: format!("Defence {} against {}", n(h.def), n(a.def)),
+            values: [n(h.def), n(a.def)],
+        },
+        Part {
+            key: "power".into(),
+            label: "Move power".into(),
+            logit: lr(power(h), power(a)),
+            detail: format!("move power {:.1} against {:.1}", power(h), power(a)),
+            values: [format!("{:.1}", power(h)), format!("{:.1}", power(a))],
+        },
+        Part {
+            key: "type".into(),
+            label: "Type edges".into(),
+            logit: lr(edge(h, a), edge(a, h)),
+            detail: format!("moves hit ×{:.2} for {} against ×{:.2} for {}", edge(h, a), h.pal, edge(a, h), a.pal),
+            values: [format!("×{:.2}", edge(h, a)), format!("×{:.2}", edge(a, h))],
+        },
+        Part {
+            key: "unlisted".into(),
+            label: "Unlisted moves".into(),
+            logit: lr(h.hidden_boost, a.hidden_boost),
+            detail: format!("unlisted moves ×{:.2} for {} against ×{:.2} for {}", h.hidden_boost, h.pal, a.hidden_boost, a.pal),
+            values: [format!("×{:.2}", h.hidden_boost), format!("×{:.2}", a.hidden_boost)],
+        },
+        Part {
+            key: "cooldown".into(),
+            label: "Cooldowns".into(),
+            logit: lr(pace(h), pace(a)),
+            detail: format!("cooldown passives ×{:.2} for {} against ×{:.2} for {}", pace(h), h.pal, pace(a), a.pal),
+            values: [format!("×{:.2}", pace(h)), format!("×{:.2}", pace(a))],
+        },
+    ];
+    parts.retain(|p| p.logit.abs() > 0.005);
+    parts.sort_by(|x, y| y.logit.abs().total_cmp(&x.logit.abs()));
+    parts
+}
+
+fn fmt_n(x: f64) -> String {
+    let v = x.round() as i64;
+    let s = v.abs().to_string();
+    let mut out = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    if v < 0 {
+        format!("-{out}")
+    } else {
+        out
+    }
+}
+
+/// A sentence or two: the input that pushed hardest toward the pick, the strongest one against it, and how it ended.
+/// Each figure leads with the side it helped: "Species records counted most for Grizzbolt: 58–20 against
+/// Mammorest's 48–65."
+fn summary(c: &db::CallRecord, parts: &[Part], factors: &[Factor]) -> String {
+    let pal = |home: bool| if home { c.home_pal.as_str() } else { c.away_pal.as_str() };
+    let toward_home = c.pick == "home";
+    // (label, log-odds toward home, [home figure, away figure])
+    let mut drivers: Vec<(String, f64, [String; 2])> = parts.iter().map(|p| (p.label.clone(), p.logit, p.values.clone())).collect();
+    for f in factors.iter().filter(|f| f.key != "stats") {
+        let values = match (f.key.as_str(), c.species_rec) {
+            // word joiners keep a record like 58–20 on one line
+            ("species", Some([[hw, hl], [aw, al]])) => [format!("{hw}\u{2060}–\u{2060}{hl}"), format!("{aw}\u{2060}–\u{2060}{al}")],
+            ("h2h", _) => [format!("{} wins", c.pal_h2h[0]), format!("{}", c.pal_h2h[1])],
+            _ => continue,
+        };
+        drivers.push((if f.key == "species" { "Species records" } else { "Their head-to-head" }.into(), f.logit, values));
+    }
+    if parts.is_empty() {
+        if let Some(f) = factors.iter().find(|f| f.key == "stats") {
+            drivers.push(("Stats".into(), f.logit, [pct_text(f.p_home, true), pct_text(f.p_home, false)]));
+        }
+    }
+    let lean = |d: &(String, f64, [String; 2])| if toward_home { d.1 } else { -d.1 };
+    let say = |d: &(String, f64, [String; 2]), home: bool| {
+        let (mine, theirs) = if home { (&d.2[0], &d.2[1]) } else { (&d.2[1], &d.2[0]) };
+        format!("{mine} against {}'s {theirs}", pal(!home))
+    };
+    let top = drivers.iter().filter(|d| lean(d) > 0.0).max_by(|x, y| lean(x).total_cmp(&lean(y)));
+    let against = drivers.iter().filter(|d| lean(d) < 0.0).min_by(|x, y| lean(x).total_cmp(&lean(y)));
+    let mut out = match top {
+        Some(d) => format!("{} counted most for {}: {}.", d.0, pal(toward_home), say(d, toward_home)),
+        None => format!("Nothing stood out for {}.", pal(toward_home)),
+    };
+    if let Some(d) = against {
+        out.push_str(&format!(" {} pulled toward {}: {}.", d.0, pal(!toward_home), say(d, !toward_home)));
+    }
+    if let Some(w) = c.winner.as_deref().filter(|w| *w != c.pick) {
+        out.push_str(&format!(" {} won anyway.", pal(w == "home")));
+    }
+    out
+}
+
+fn pct_text(p_home: f64, toward_home: bool) -> String {
+    format!("{:.0}%", 100.0 * if toward_home { p_home } else { 1.0 - p_home })
 }
 
 #[derive(Serialize)]
@@ -560,7 +708,9 @@ fn model_call(c: &db::CallRecord, s: &model::Settings) -> Option<ModelCall> {
         .map(|((key, weight), p)| Factor { key: key.to_string(), p_home: p, weight: *weight, logit: weight * model::logit(p) })
         .collect();
     let total = factors.iter().map(|f| f.logit).sum();
-    Some(ModelCall { factors, total, p_home: model::sigmoid(total), score, rescored })
+    let parts = c.fighters.as_ref().map(|(h, a)| stats_parts(s, &h.fighter, &a.fighter)).unwrap_or_default();
+    let summary = summary(c, &parts, &factors);
+    Some(ModelCall { factors, total, p_home: model::sigmoid(total), score, rescored, parts, summary })
 }
 
 fn side_detail(s: &model::Settings, me: &model::Fighter, them: &model::Fighter) -> SideDetail {
@@ -628,6 +778,13 @@ mod tests {
         // the factors add up to the call's chance (the seed's calls are re-run: their factors weren't kept)
         let m = d.model.as_ref().unwrap();
         assert!(m.rescored && m.score.is_some());
+        // the stats factor taken apart: its parts add up to its log-odds (re-run from the same fighters)
+        let stats = m.factors.iter().find(|f| f.key == "stats").unwrap();
+        let sum: f64 = m.parts.iter().map(|p| p.logit).sum();
+        assert!((sum - stats.logit).abs() < 0.02, "parts {sum} vs stats {}", stats.logit);
+        assert!(m.parts.windows(2).all(|w| w[0].logit.abs() >= w[1].logit.abs()), "biggest first");
+        let pick = if c.pick == "home" { &c.home_pal } else { &c.away_pal };
+        assert!(m.summary.contains(&format!("counted most for {pick}")), "{}", m.summary);
         assert_eq!(m.factors.len(), 3);
         let sum: f64 = m.factors.iter().map(|f| f.logit).sum();
         assert!((sum - m.total).abs() < 1e-12);

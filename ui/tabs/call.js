@@ -138,6 +138,20 @@ function damage(d) {
 }
 
 // the model's sum on the log-odds scale: each factor moves the call toward home (left) or away (right), then the total
+// what went into the stats factor, biggest first: each a small bar leaning to the side it helped
+function parts(m, c) {
+  if (!m.parts?.length) return '';
+  const most = Math.max(...m.parts.map((p) => Math.abs(p.logit)), 0.01);
+  return `<div class="cparts">${m.parts
+    .slice(0, 5)
+    .map((p) => {
+      const side = p.logit >= 0 ? 'home' : 'away';
+      const w = (50 * Math.abs(p.logit)) / most;
+      return `<div class="cpart" title="${esc(p.detail)}"><span>${esc(p.label)}</span><div class="cpb"><i class="${side}" style="${side === 'home' ? `right:50%` : `left:50%`};width:${w.toFixed(1)}%"></i></div><small>${esc(pal(c, side))}</small></div>`;
+    })
+    .join('')}</div>`;
+}
+
 function waterfall(d, model) {
   const c = d.call;
   const m = d.model;
@@ -164,7 +178,7 @@ function waterfall(d, model) {
       const lean = f.logit >= 0 ? 'home' : 'away';
       return `<div class="wf"><div class="wl"><b>${names[f.key]}${f.weight !== 1 ? ` <em>×${f.weight}</em>` : ''}</b><small>${detail[f.key]}</small></div>
         <div class="wt"><i class="${lean}" style="left:${l}%;width:${Math.max(0.6, r - l)}%"></i><s style="left:${at(b)}%"></s></div>
-        <div class="wv"><b>${pct(f.p_home > 0.5 ? f.p_home : 1 - f.p_home)}</b><small>${esc(pal(c, f.p_home >= 0.5 ? 'home' : 'away'))}</small></div></div>`;
+        <div class="wv"><b>${pct(f.p_home > 0.5 ? f.p_home : 1 - f.p_home)}</b><small>${esc(pal(c, f.p_home >= 0.5 ? 'home' : 'away'))}</small></div></div>${f.key === 'stats' ? parts(m, c) : ''}`;
     })
     .join('');
   const fav = m.p_home >= 0.5 ? 'home' : 'away';
@@ -172,7 +186,7 @@ function waterfall(d, model) {
     <div class="wt"><i class="gold" style="left:${Math.min(50, at(m.total))}%;width:${Math.abs(at(m.total) - 50)}%"></i></div>
     <div class="wv"><b class="gold">${pct(fav === 'home' ? m.p_home : 1 - m.p_home)}</b><small>${esc(pal(c, fav))}</small></div></div>`;
   return `<div class="panel col grow"><div class="ph"><h3>How Augur called it</h3><span>home ◂ ▸ away</span></div>
-    <div class="fillin">${rows}${total}
+    <div class="fillin">${m.summary ? `<p class="csum">${esc(m.summary)}</p>` : ''}${rows}${total}
     ${m.rescored ? '<div class="small">Re-run on the fighters it saw with its settings: the call didn’t keep its factors.</div>' : ''}${model}</div></div>`;
 }
 

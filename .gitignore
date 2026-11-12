@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.DS_Store
+# local databases: rebuilt by the backfill, never committed
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/
+# Rust and Tauri build output
+target/
+# Tauri generates these schemas on every build
+app/gen/
+.worktrees/

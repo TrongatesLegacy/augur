@@ -1,0 +1,150 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 440" width="1280" height="440" role="img" aria-label="Augur: calls each PalDuels fight before the bell. The menu bar shows the favourite and its chance; the popover sweeps the dial to 83%, shows the stats and gives the chat line in five voices">
+<title>Augur: calls each PalDuels fight before the bell</title>
+<style>
+text { font-family: "Barlow Condensed", "Avenir Next Condensed", "Arial Narrow", "Segoe UI", system-ui, sans-serif; }
+.sans { font-family: Inter, -apple-system, "Segoe UI", system-ui, sans-serif; }
+.pulse { transform-box: fill-box; transform-origin: center; animation: pulse 3.2s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: .85; transform: scale(1); } 50% { opacity: 1; transform: scale(1.06); } }
+.halo { animation: halo 3.2s ease-in-out infinite; }
+@keyframes halo { 0%, 100% { opacity: .35; } 50% { opacity: .7; } }
+.grid { animation: grid 24s linear infinite; }
+@keyframes grid { from { transform: translateY(0); } to { transform: translateY(40px); } }
+/* one 15s loop: the call appears, the dial sweeps, the stats grow, the voices take turns */
+.title { animation: title 15s ease-out infinite; }
+@keyframes title { 0%, 3% { opacity: 0; } 8%, 96% { opacity: 1; } 100% { opacity: 0; } }
+.dial { stroke-dasharray: 0 276.5; animation: dial 15s cubic-bezier(.2,.8,.2,1) infinite; }
+@keyframes dial { 0%, 6% { stroke-dasharray: 0 276.5; } 20%, 96% { stroke-dasharray: 229.5 276.5; } 100% { stroke-dasharray: 0 276.5; } }
+.pct { animation: pct 15s ease-out infinite; }
+@keyframes pct { 0%, 16% { opacity: 0; } 21%, 96% { opacity: 1; } 100% { opacity: 0; } }
+.bar { transform-box: fill-box; transform-origin: left; animation: bar 15s cubic-bezier(.2,.8,.2,1) infinite; }
+.bar.r { transform-origin: right; }
+@keyframes bar { 0%, 14% { transform: scaleX(0); } 26%, 96% { transform: scaleX(1); } 100% { transform: scaleX(0); } }
+.v { opacity: 0; animation: v 15s infinite; }
+.v1 { animation-delay: 0s; } .v2 { animation-delay: 2.2s; } .v3 { animation-delay: 4.4s; } .v4 { animation-delay: 6.6s; } .v5 { animation-delay: 8.8s; }
+@keyframes v { 0%, 22% { opacity: 0; transform: translateY(6px); } 25%, 36% { opacity: 1; transform: translateY(0); } 39%, 100% { opacity: 0; transform: translateY(-6px); } }
+.chip { opacity: .35; animation: chip 15s infinite; }
+.c1 { animation-delay: 0s; } .c2 { animation-delay: 2.2s; } .c3 { animation-delay: 4.4s; } .c4 { animation-delay: 6.6s; } .c5 { animation-delay: 8.8s; }
+@keyframes chip { 0%, 22% { opacity: .35; } 25%, 36% { opacity: 1; } 39%, 100% { opacity: .35; } }
+.menupick { animation: menu 15s ease-out infinite; }
+@keyframes menu { 0%, 18% { opacity: 0; } 23%, 96% { opacity: 1; } 100% { opacity: 0; } }
+.copy { animation: copy 15s infinite; }
+@keyframes copy { 0%, 60% { opacity: 1; } 62%, 70% { opacity: 0; } 72%, 100% { opacity: 1; } }
+.copied { opacity: 0; animation: copied 15s infinite; }
+@keyframes copied { 0%, 60% { opacity: 0; } 62%, 70% { opacity: 1; } 72%, 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; }
+  .dial { stroke-dasharray: 229.5 276.5; }
+  .v1, .chip.c1, .copied { opacity: 1; }
+  .copied { opacity: 0; }
+}
+</style>
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#17132b"/><stop offset="1" stop-color="#0a0812"/></linearGradient>
+  <radialGradient id="glow" cx="0.74" cy="0.12" r="0.7"><stop offset="0" stop-color="#7a5cff" stop-opacity=".28"/><stop offset="1" stop-color="#7a5cff" stop-opacity="0"/></radialGradient>
+  <radialGradient id="glow2" cx="0.2" cy="0.55" r="0.45"><stop offset="0" stop-color="#ffcf6b" stop-opacity=".12"/><stop offset="1" stop-color="#ffcf6b" stop-opacity="0"/></radialGradient>
+  <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#ffffff" stroke-opacity=".035"/></pattern>
+  <linearGradient id="word" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff6dc"/><stop offset=".55" stop-color="#ffcf6b"/><stop offset="1" stop-color="#c98a2e"/></linearGradient>
+  <linearGradient id="lid1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9ff3ff"/><stop offset="1" stop-color="#2bb6e0"/></linearGradient>
+  <linearGradient id="lid2" x1="1" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffb3d6"/><stop offset="1" stop-color="#e23f8e"/></linearGradient>
+  <radialGradient id="pupil" cx=".4" cy=".35" r=".7"><stop offset="0" stop-color="#fff6dc"/><stop offset=".5" stop-color="#ffcf6b"/><stop offset="1" stop-color="#b8741e"/></radialGradient>
+  <linearGradient id="card" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2a2252"/><stop offset="1" stop-color="#110e1f"/></linearGradient>
+  <radialGradient id="orbH" cx=".35" cy=".3" r=".75"><stop offset="0" stop-color="#9ff3ff"/><stop offset=".45" stop-color="#1aa9d6"/><stop offset="1" stop-color="#0b3d63"/></radialGradient>
+  <radialGradient id="orbA" cx=".35" cy=".3" r=".75"><stop offset="0" stop-color="#ffb3d6"/><stop offset=".45" stop-color="#d63a86"/><stop offset="1" stop-color="#4d0f32"/></radialGradient>
+  <linearGradient id="barH" x1="0" x2="1"><stop offset="0" stop-color="#4fe3ff" stop-opacity=".25"/><stop offset="1" stop-color="#4fe3ff"/></linearGradient>
+  <linearGradient id="barA" x1="1" x2="0"><stop offset="0" stop-color="#ff5ca8" stop-opacity=".25"/><stop offset="1" stop-color="#ff5ca8"/></linearGradient>
+  <linearGradient id="btn" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffe09a"/><stop offset="1" stop-color="#ffc04d"/></linearGradient>
+  <filter id="soft" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="14"/></filter>
+  <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#000" flood-opacity=".55"/></filter>
+  <clipPath id="frame"><rect width="1280" height="440" rx="22"/></clipPath>
+</defs>
+
+<g clip-path="url(#frame)">
+  <rect width="1280" height="440" fill="url(#bg)"/>
+  <rect y="-40" width="1280" height="520" fill="url(#grid)" class="grid"/>
+  <rect width="1280" height="440" fill="url(#glow)"/>
+  <rect width="1280" height="440" fill="url(#glow2)"/>
+
+  <!-- left: the logo and the name -->
+  <g transform="translate(96 108)">
+    <circle cx="96" cy="96" r="70" fill="#ffcf6b" filter="url(#soft)" opacity=".5" class="halo"/>
+    <g transform="translate(16 16) scale(1.333)">
+      <path d="M10 64 C 34 22, 86 22, 110 64 C 86 40, 34 40, 10 64 Z" fill="url(#lid1)"/>
+      <path d="M10 56 C 34 98, 86 98, 110 56 C 86 80, 34 80, 10 56 Z" fill="url(#lid2)"/>
+      <g class="pulse"><circle cx="60" cy="60" r="17" fill="url(#pupil)"/><circle cx="54" cy="54" r="4" fill="#fff" opacity=".9"/></g>
+    </g>
+  </g>
+  <text x="96" y="318" font-size="92" font-weight="800" letter-spacing="10" fill="url(#word)">AUGUR</text>
+  <text x="98" y="356" class="sans" font-size="22" fill="#b3aec9">Calls the duel before the bell.</text>
+  <text x="98" y="388" class="sans" font-size="15" fill="#8a85a3">A tray app for macOS and Windows · stats, types, moves and history</text>
+
+  <!-- the menu bar -->
+  <g transform="translate(560 28)">
+    <rect width="660" height="34" rx="9" fill="#2a2640" fill-opacity=".85" stroke="#ffffff" stroke-opacity=".07"/>
+    <text x="24" y="23" class="sans" font-size="14" fill="#e9e6f5" opacity=".5">⌘</text>
+    <g class="menupick">
+      <rect x="352" y="5" width="176" height="24" rx="6" fill="#ffffff" fill-opacity=".14"/>
+      <g transform="translate(362 9) scale(.135)"><path d="M10 64 C 34 22, 86 22, 110 64 C 86 40, 34 40, 10 64 Z" fill="#fff"/><path d="M10 56 C 34 98, 86 98, 110 56 C 86 80, 34 80, 10 56 Z" fill="#fff"/><circle cx="60" cy="60" r="20" fill="#fff"/></g>
+      <text x="386" y="22" class="sans" font-size="14" font-weight="600" fill="#f2f0fa">Chillet Lux</text>
+      <text x="476" y="22" class="sans" font-size="14" font-weight="700" fill="#ffcf6b">83%</text>
+    </g>
+    <text x="552" y="22" class="sans" font-size="14" fill="#e9e6f5" opacity=".5">Wed 21:12</text>
+  </g>
+
+  <!-- the popover -->
+  <g transform="translate(760 70)" filter="url(#shadow)">
+    <rect width="420" height="362" rx="20" fill="url(#card)" stroke="#ffffff" stroke-opacity=".1"/>
+    <text x="22" y="32" class="sans" font-size="11" font-weight="600" letter-spacing="1.8" fill="#8a85a3"><tspan fill="#ff4d6d">●</tspan>  PICKS OPEN</text>
+    <text x="398" y="32" font-size="15" font-weight="700" letter-spacing="1" fill="#ffcf6b" text-anchor="end">CLOSES 2:12</text>
+
+    <g class="title">
+      <text x="22" y="80" font-size="40" font-weight="800" letter-spacing="1.5" fill="#f2f0fa">CHILLET LUX</text>
+      <text x="22" y="104" class="sans" font-size="14" fill="#b3aec9">over <tspan font-weight="600" fill="#f2f0fa">Chikipi Ryu</tspan></text>
+      <text x="22" y="128" class="sans" font-size="13" fill="#b3aec9">Leads on every stat. No type edge either way.</text>
+    </g>
+
+    <g transform="translate(352 104)">
+      <circle r="44" fill="none" stroke="#ff5ca8" stroke-opacity=".22" stroke-width="7"/>
+      <circle r="44" fill="none" stroke="#ffcf6b" stroke-width="7" stroke-linecap="round" transform="rotate(-90)" class="dial"/>
+      <text y="11" font-size="30" font-weight="800" fill="#ffcf6b" text-anchor="middle" class="pct">83%</text>
+    </g>
+
+    <line x1="0" y1="152" x2="420" y2="152" stroke="#ffffff" stroke-opacity=".07"/>
+    <g class="sans" font-size="11" font-weight="600" letter-spacing="1.6" fill="#8a85a3" text-anchor="middle">
+      <text x="210" y="178">HP</text><text x="210" y="202">ATTACK</text><text x="210" y="226">DEFENCE</text>
+    </g>
+    <g font-size="16" font-weight="700">
+      <text x="62" y="179" text-anchor="end" fill="#f2f0fa">5,862</text><text x="62" y="203" text-anchor="end" fill="#f2f0fa">643</text><text x="62" y="227" text-anchor="end" fill="#f2f0fa">786</text>
+      <text x="358" y="179" fill="#8a85a3">4,873</text><text x="358" y="203" fill="#8a85a3">487</text><text x="358" y="227" fill="#8a85a3">666</text>
+    </g>
+    <g>
+      <rect x="72" y="172" width="98" height="6" rx="3" fill="#ffffff" fill-opacity=".06"/><rect x="72" y="172" width="98" height="6" rx="3" fill="url(#barH)" class="bar r"/>
+      <rect x="250" y="172" width="98" height="6" rx="3" fill="#ffffff" fill-opacity=".06"/><rect x="250" y="172" width="81" height="6" rx="3" fill="url(#barA)" class="bar"/>
+      <rect x="72" y="196" width="98" height="6" rx="3" fill="#ffffff" fill-opacity=".06"/><rect x="72" y="196" width="98" height="6" rx="3" fill="url(#barH)" class="bar r"/>
+      <rect x="250" y="196" width="98" height="6" rx="3" fill="#ffffff" fill-opacity=".06"/><rect x="250" y="196" width="74" height="6" rx="3" fill="url(#barA)" class="bar"/>
+      <rect x="72" y="220" width="98" height="6" rx="3" fill="#ffffff" fill-opacity=".06"/><rect x="72" y="220" width="98" height="6" rx="3" fill="url(#barH)" class="bar r"/>
+      <rect x="250" y="220" width="98" height="6" rx="3" fill="#ffffff" fill-opacity=".06"/><rect x="250" y="220" width="83" height="6" rx="3" fill="url(#barA)" class="bar"/>
+    </g>
+
+    <line x1="0" y1="246" x2="420" y2="246" stroke="#ffffff" stroke-opacity=".07"/>
+    <g class="sans" font-size="11" font-weight="600" text-anchor="middle">
+      <g class="chip c1"><rect x="22" y="258" width="70" height="22" rx="7" fill="#ffcf6b" fill-opacity=".14" stroke="#ffcf6b" stroke-opacity=".45"/><text x="57" y="273" fill="#ffcf6b">Yoda</text></g>
+      <g class="chip c2"><rect x="98" y="258" width="70" height="22" rx="7" fill="#ffcf6b" fill-opacity=".14" stroke="#ffcf6b" stroke-opacity=".45"/><text x="133" y="273" fill="#ffcf6b">Gollum</text></g>
+      <g class="chip c3"><rect x="174" y="258" width="70" height="22" rx="7" fill="#ffcf6b" fill-opacity=".14" stroke="#ffcf6b" stroke-opacity=".45"/><text x="209" y="273" fill="#ffcf6b">Rockso</text></g>
+      <g class="chip c4"><rect x="250" y="258" width="70" height="22" rx="7" fill="#ffcf6b" fill-opacity=".14" stroke="#ffcf6b" stroke-opacity=".45"/><text x="285" y="273" fill="#ffcf6b">Scooby</text></g>
+      <g class="chip c5"><rect x="326" y="258" width="72" height="22" rx="7" fill="#ffcf6b" fill-opacity=".14" stroke="#ffcf6b" stroke-opacity=".45"/><text x="362" y="273" fill="#ffcf6b">Daffy</text></g>
+    </g>
+    <g class="sans" font-size="13.5" fill="#f2f0fa">
+      <text x="22" y="302" class="v v1">Win, Chillet Lux will. Hits harder, it does. (83%)</text>
+      <text x="22" y="302" class="v v2">Chillet Lux wins it, precious, yesss! (83%)</text>
+      <text x="22" y="302" class="v v3">Dr. Rockso says CHILLET LUX! Rock and roll! (83%)</text>
+      <text x="22" y="302" class="v v4">Ruh-roh, Rikipi Ru! Rillet Rux rins! (83%)</text>
+      <text x="22" y="302" class="v v5">Chillet Lux winth! It hitth harder, thucker! (83%)</text>
+    </g>
+    <g transform="translate(22 316)">
+      <rect width="376" height="34" rx="11" fill="url(#btn)"/>
+      <text x="188" y="22" class="sans copy" font-size="13" font-weight="700" fill="#2a1d00" text-anchor="middle">Copy for chat</text>
+      <text x="188" y="22" class="sans copied" font-size="13" font-weight="700" fill="#2a1d00" text-anchor="middle">Copied ✓</text>
+    </g>
+  </g>
+</g>
+</svg>

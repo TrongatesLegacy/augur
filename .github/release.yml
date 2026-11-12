@@ -1,0 +1,6 @@
+# "Generate release notes" becomes the What's new entries: dependency updates (Dependabot labels each one
+# "dependencies") aren't something a user would read there.
+changelog:
+  exclude:
+    labels:
+      - dependencies

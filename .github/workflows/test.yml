@@ -1,0 +1,79 @@
+# Runs the checks on every pull request and every change to main (and the dependency audit every Monday).
+#   Quality:                  rustfmt, Clippy (every warning an error), a syntax check of the pages (ui/) and
+#                             cargo audit for known security holes in the crates the app uses.
+#   Tests (macOS, Windows):   the engine, the command line, the login encryption and the pages rendered in headless
+#                             Chrome. All from the seed in the repo: no network, no local data.
+#   Engine tests (Linux):     the engine on its own (the desktop app isn't built for Linux).
+# Run them yourself with: cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Quality
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Formatting
+        if: github.event_name != 'schedule'
+        run: cargo fmt --all --check
+      - name: Clippy
+        if: github.event_name != 'schedule'
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: The pages parse
+        if: github.event_name != 'schedule'
+        run: |
+          # ES modules, checked as such (no build step and no npm packages: just Node's parser)
+          for f in $(find ui -name '*.js'); do
+            node --input-type=module --check < "$f" || { echo "::error file=$f::$f doesn't parse"; exit 1; }
+          done
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Known security holes in dependencies
+        run: cargo audit
+
+  app:
+    if: github.event_name != 'schedule'
+    name: Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Tests
+        shell: bash
+        run: cargo test --workspace --locked
+
+  engine:
+    if: github.event_name != 'schedule'
+    name: Engine tests (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Tests
+        run: cargo test -p augur-engine --locked

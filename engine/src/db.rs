@@ -1,0 +1,590 @@
+//! The SQLite store: calls (picks made live, with the fighters as seen before the bell), finished duels with their
+//! fight tapes, and every species' types, base stats and listed moves. Same schema as the research tools.
+
+use crate::model::{Fighter, Move};
+use crate::site::{Duel, Hit, Recent, Species};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+
+pub use crate::error::Result;
+/// rusqlite's own result, for row closures and collecting rows.
+type Rq<T> = rusqlite::Result<T>;
+
+const SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS duels (
+    id INTEGER PRIMARY KEY,            -- palduels.com duel number
+    fought_at TEXT,                    -- ISO time from the duel page
+    home_owner TEXT, away_owner TEXT,
+    home_pal TEXT, away_pal TEXT,
+    winner TEXT CHECK (winner IN ('home', 'away')),
+    ko TEXT,                           -- K.O. time, e.g. 0:27
+    winner_hp_left INTEGER,            -- % of HP the winner had left
+    home_casts INTEGER, away_casts INTEGER
+);
+CREATE TABLE IF NOT EXISTS hits (      -- the fight tape, one row per hit
+    duel_id INTEGER NOT NULL REFERENCES duels (id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    side TEXT NOT NULL CHECK (side IN ('home', 'away')),
+    t INTEGER,                         -- seconds into the fight
+    move TEXT,                         -- '' for unnamed hits (likely damage over time)
+    pct INTEGER,                       -- % of the target's HP
+    PRIMARY KEY (duel_id, seq)
+);
+CREATE TABLE IF NOT EXISTS species (   -- each species' page: types, the ladder's power rating, base stats
+    pal TEXT PRIMARY KEY,
+    slug TEXT,
+    types TEXT,                        -- JSON list
+    power INTEGER,
+    base_hp INTEGER, base_atk INTEGER, base_def INTEGER
+);
+CREATE TABLE IF NOT EXISTS species_moves ( -- each species' moves as the site lists them
+    pal TEXT NOT NULL,
+    name TEXT NOT NULL,
+    element TEXT,
+    power INTEGER,
+    unlock_lv INTEGER,
+    PRIMARY KEY (pal, name)
+);
+CREATE TABLE IF NOT EXISTS predictions (   -- Augur's calls
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    seen_at INTEGER,                   -- site clock (ms) when the pick was made
+    home_owner TEXT, away_owner TEXT,
+    home_pal TEXT, away_pal TEXT,
+    pick TEXT CHECK (pick IN ('home', 'away')),
+    prob REAL,                         -- chance given to the pick
+    p_stats REAL, p_species REAL, p_h2h REAL,  -- each factor's home win chance
+    estimated INTEGER DEFAULT 0,       -- 1 if some stats were hidden until the bell
+    home_species_w INTEGER, home_species_l INTEGER,
+    away_species_w INTEGER, away_species_l INTEGER,
+    pal_h2h_home INTEGER, pal_h2h_away INTEGER,
+    model TEXT,                        -- JSON of the model settings used
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'settled', 'skipped')),
+    duel_id INTEGER REFERENCES duels (id)
+);
+CREATE TABLE IF NOT EXISTS fighters (  -- each side of a call as seen before the bell
+    prediction_id INTEGER NOT NULL REFERENCES predictions (id) ON DELETE CASCADE,
+    side TEXT NOT NULL CHECK (side IN ('home', 'away')),
+    pal TEXT,
+    types TEXT,                        -- JSON list
+    hp INTEGER, atk INTEGER, def INTEGER,
+    hp_iv INTEGER, atk_iv INTEGER, def_iv INTEGER,
+    passives TEXT,                     -- JSON list
+    hidden_boost REAL DEFAULT 1,
+    speed REAL DEFAULT 1,
+    PRIMARY KEY (prediction_id, side)
+);
+CREATE TABLE IF NOT EXISTS meta (      -- small key/value state: backfill progress and the like
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+CREATE INDEX IF NOT EXISTS predictions_status ON predictions (status);
+CREATE INDEX IF NOT EXISTS duels_home_pal ON duels (home_pal);
+CREATE INDEX IF NOT EXISTS duels_away_pal ON duels (away_pal);
+"#;
+
+pub fn open(path: &Path) -> Result<Connection> {
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let conn = Connection::open(path)?;
+    conn.busy_timeout(std::time::Duration::from_secs(15))?;
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    conn.execute_batch(SCHEMA)?;
+    Ok(conn)
+}
+
+pub fn open_memory() -> Result<Connection> {
+    let conn = Connection::open_in_memory()?;
+    conn.execute_batch(SCHEMA)?;
+    Ok(conn)
+}
+
+// --- meta ---
+
+pub fn meta_get(conn: &Connection, key: &str) -> Result<Option<String>> {
+    Ok(conn.query_row("SELECT value FROM meta WHERE key = ?", [key], |r| r.get(0)).optional()?)
+}
+
+pub fn meta_set(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute("INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [key, value])?;
+    Ok(())
+}
+
+// --- species ---
+
+pub fn save_moves(conn: &Connection, pal: &str, moves: &[Move]) -> Result<()> {
+    let mut st = conn.prepare_cached(
+        "INSERT INTO species_moves (pal, name, element, power, unlock_lv) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT (pal, name) DO UPDATE SET element = excluded.element, power = excluded.power, unlock_lv = excluded.unlock_lv",
+    )?;
+    for m in moves {
+        st.execute(params![pal, m.name, m.el, m.power as i64, m.lv])?;
+    }
+    Ok(())
+}
+
+pub fn moves_of(conn: &Connection, pal: &str) -> Result<Vec<Move>> {
+    let mut st = conn.prepare_cached("SELECT name, element, power, unlock_lv FROM species_moves WHERE pal = ? ORDER BY unlock_lv, name")?;
+    let rows = st.query_map([pal], |r| {
+        Ok(Move {
+            name: r.get(0)?,
+            el: r.get::<_, Option<String>>(1)?.unwrap_or_else(|| "neutral".into()),
+            power: r.get::<_, i64>(2)? as f64,
+            lv: r.get(3)?,
+        })
+    })?;
+    Ok(rows.collect::<Rq<_>>()?)
+}
+
+pub fn save_species(conn: &Connection, sp: &Species) -> Result<()> {
+    conn.execute(
+        "INSERT INTO species (pal, slug, types, power, base_hp, base_atk, base_def) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT (pal) DO UPDATE SET slug = excluded.slug, types = excluded.types, power = excluded.power,
+         base_hp = excluded.base_hp, base_atk = excluded.base_atk, base_def = excluded.base_def",
+        params![sp.pal, sp.slug, serde_json::to_string(&sp.types).unwrap(), sp.power, sp.base_hp, sp.base_atk, sp.base_def],
+    )?;
+    save_moves(conn, &sp.pal, &sp.moves)
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SpeciesRow {
+    pub pal: String,
+    pub slug: String,
+    pub types: Vec<String>,
+    pub power: Option<u32>,
+    pub base_hp: Option<u32>,
+    pub base_atk: Option<u32>,
+    pub base_def: Option<u32>,
+}
+
+pub fn species_row(conn: &Connection, pal: &str) -> Result<Option<SpeciesRow>> {
+    Ok(conn
+        .query_row("SELECT pal, slug, types, power, base_hp, base_atk, base_def FROM species WHERE pal = ?", [pal], |r| {
+            Ok(SpeciesRow {
+                pal: r.get(0)?,
+                slug: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                types: serde_json::from_str(&r.get::<_, Option<String>>(2)?.unwrap_or_default()).unwrap_or_default(),
+                power: r.get(3)?,
+                base_hp: r.get(4)?,
+                base_atk: r.get(5)?,
+                base_def: r.get(6)?,
+            })
+        })
+        .optional()?)
+}
+
+pub fn species_count(conn: &Connection) -> Result<u32> {
+    Ok(conn.query_row("SELECT COUNT(*) FROM species", [], |r| r.get(0))?)
+}
+
+// --- duels and tapes ---
+
+pub fn save_duel(conn: &Connection, id: u64, d: &Duel) -> Result<()> {
+    conn.execute(
+        "INSERT INTO duels (id, fought_at, home_owner, away_owner, home_pal, away_pal, winner, ko, winner_hp_left, home_casts, away_casts)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) ON CONFLICT (id) DO UPDATE SET
+         fought_at = excluded.fought_at, home_owner = excluded.home_owner, away_owner = excluded.away_owner,
+         home_pal = excluded.home_pal, away_pal = excluded.away_pal, winner = excluded.winner, ko = excluded.ko,
+         winner_hp_left = excluded.winner_hp_left, home_casts = excluded.home_casts, away_casts = excluded.away_casts",
+        params![
+            id as i64,
+            d.fought_at,
+            d.home_owner,
+            d.away_owner,
+            d.home_pal,
+            d.away_pal,
+            d.winner,
+            d.ko,
+            d.winner_hp_left,
+            d.home_casts,
+            d.away_casts
+        ],
+    )?;
+    conn.execute("DELETE FROM hits WHERE duel_id = ?", [id as i64])?;
+    let mut st = conn.prepare_cached("INSERT INTO hits (duel_id, seq, side, t, move, pct) VALUES (?1, ?2, ?3, ?4, ?5, ?6)")?;
+    for (i, h) in d.hits.iter().enumerate() {
+        st.execute(params![id as i64, i as i64, h.side, h.t, h.mv, h.pct as i64])?;
+    }
+    Ok(())
+}
+
+pub fn get_duel(conn: &Connection, id: u64) -> Result<Option<Duel>> {
+    let d = conn
+        .query_row(
+            "SELECT fought_at, home_owner, away_owner, home_pal, away_pal, winner, ko, winner_hp_left, home_casts, away_casts FROM duels WHERE id = ?",
+            [id as i64],
+            |r| {
+                Ok(Duel {
+                    fought_at: r.get(0)?,
+                    home_owner: r.get(1)?,
+                    away_owner: r.get(2)?,
+                    home_pal: r.get(3)?,
+                    away_pal: r.get(4)?,
+                    winner: r.get(5)?,
+                    ko: r.get(6)?,
+                    winner_hp_left: r.get(7)?,
+                    home_casts: r.get::<_, Option<u32>>(8)?.unwrap_or(0),
+                    away_casts: r.get::<_, Option<u32>>(9)?.unwrap_or(0),
+                    ..Default::default()
+                })
+            },
+        )
+        .optional()?;
+    let Some(mut d) = d else { return Ok(None) };
+    let mut st = conn.prepare_cached("SELECT side, t, move, pct FROM hits WHERE duel_id = ? ORDER BY seq")?;
+    d.hits = st
+        .query_map([id as i64], |r| {
+            Ok(Hit {
+                side: r.get(0)?,
+                t: r.get::<_, Option<u32>>(1)?.unwrap_or(0),
+                mv: r.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                pct: r.get::<_, i64>(3)? as f64,
+            })
+        })?
+        .collect::<Rq<_>>()?;
+    Ok(Some(d))
+}
+
+pub fn duel_ids(conn: &Connection) -> Result<std::collections::HashSet<u64>> {
+    let mut st = conn.prepare("SELECT id FROM duels")?;
+    let ids = st.query_map([], |r| r.get::<_, i64>(0))?;
+    Ok(ids.map(|r| r.map(|i| i as u64)).collect::<Rq<_>>()?)
+}
+
+// --- calls ---
+
+/// A side of a call: the model's view plus the talent rolls the site showed.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CallFighter {
+    #[serde(flatten)]
+    pub fighter: Fighter,
+    #[serde(default)]
+    pub ivs: std::collections::HashMap<String, Option<f64>>,
+}
+
+/// A call as made, before the result is known.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NewCall {
+    pub seen_at: u64,
+    pub home_owner: String,
+    pub away_owner: String,
+    pub home_pal: String,
+    pub away_pal: String,
+    pub pick: String,
+    pub prob: f64,
+    pub p_stats: f64,
+    pub p_species: f64,
+    pub p_h2h: f64,
+    pub estimated: bool,
+    pub species_rec: [[f64; 2]; 2],
+    pub pal_h2h: [f64; 2],
+    pub model: crate::model::Settings,
+    pub home: CallFighter,
+    pub away: CallFighter,
+}
+
+/// Record a call. Re-running the same open fight (e.g. stats revealed at the bell) updates it in place.
+pub fn add_call(conn: &Connection, c: &NewCall) -> Result<i64> {
+    let existing: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM predictions WHERE status = 'open' AND home_owner = ?1 AND away_owner = ?2 AND home_pal = ?3 AND away_pal = ?4",
+            params![c.home_owner, c.away_owner, c.home_pal, c.away_pal],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let model = serde_json::to_string(&c.model).unwrap();
+    let vals = params![
+        c.seen_at as i64,
+        c.home_owner,
+        c.away_owner,
+        c.home_pal,
+        c.away_pal,
+        c.pick,
+        c.prob,
+        c.p_stats,
+        c.p_species,
+        c.p_h2h,
+        c.estimated as i64,
+        c.species_rec[0][0] as i64,
+        c.species_rec[0][1] as i64,
+        c.species_rec[1][0] as i64,
+        c.species_rec[1][1] as i64,
+        c.pal_h2h[0] as i64,
+        c.pal_h2h[1] as i64,
+        model
+    ];
+    let cols = "seen_at, home_owner, away_owner, home_pal, away_pal, pick, prob, p_stats, p_species, p_h2h, estimated, \
+                home_species_w, home_species_l, away_species_w, away_species_l, pal_h2h_home, pal_h2h_away, model";
+    let id = match existing {
+        Some(id) => {
+            let sets = cols.split(", ").skip(1).enumerate().map(|(i, c)| format!("{c} = ?{}", i + 2)).collect::<Vec<_>>().join(", ");
+            conn.execute(&format!("UPDATE predictions SET {sets} WHERE id = ?19"), {
+                let mut v: Vec<&dyn rusqlite::ToSql> = vals.to_vec();
+                v.push(&id);
+                rusqlite::params_from_iter(v)
+            })?;
+            conn.execute("DELETE FROM fighters WHERE prediction_id = ?", [id])?;
+            id
+        }
+        None => {
+            conn.execute(&format!("INSERT INTO predictions ({cols}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)"), vals)?;
+            conn.last_insert_rowid()
+        }
+    };
+    for (side, f) in [("home", &c.home), ("away", &c.away)] {
+        let iv = |k: &str| f.ivs.get(k).copied().flatten().map(|v| v as i64);
+        conn.execute(
+            "INSERT INTO fighters (prediction_id, side, pal, types, hp, atk, def, hp_iv, atk_iv, def_iv, passives, hidden_boost, speed)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                id,
+                side,
+                f.fighter.pal,
+                serde_json::to_string(&f.fighter.types).unwrap(),
+                f.fighter.hp as i64,
+                f.fighter.atk as i64,
+                f.fighter.def as i64,
+                iv("HP"),
+                iv("ATK"),
+                iv("DEF"),
+                serde_json::to_string(&f.fighter.passives).unwrap(),
+                f.fighter.hidden_boost,
+                f.fighter.speed
+            ],
+        )?;
+        save_moves(conn, &f.fighter.pal, &f.fighter.skills)?;
+    }
+    Ok(id)
+}
+
+/// Match open calls to finished duels in the state's recent list and store their tapes. A call is only "skipped"
+/// once two other fights have finished after it was made, because the next duel is queued (and predicted) before
+/// the current one is recorded.
+pub fn settle(conn: &Connection, recent: &[Recent], fetch_duel: impl Fn(u64) -> Option<Duel>) -> Result<Vec<i64>> {
+    let open: Vec<(i64, String, String, i64)> = conn
+        .prepare("SELECT id, home_owner, away_owner, COALESCE(seen_at, 0) FROM predictions WHERE status = 'open'")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .collect::<Rq<_>>()?;
+    let mut settled = vec![];
+    for (id, home, away, seen) in open {
+        let hit = recent.iter().find(|r| r.home == home && r.away == away && r.at as i64 >= seen - 3_600_000);
+        if let Some(r) = hit {
+            if get_duel(conn, r.id)?.is_none_or(|d| d.winner.is_none()) {
+                let d = fetch_duel(r.id).unwrap_or_else(|| Duel {
+                    winner: Some(r.win.clone()),
+                    home_owner: Some(r.home.clone()),
+                    away_owner: Some(r.away.clone()),
+                    ..Default::default()
+                });
+                save_duel(conn, r.id, &d)?;
+            }
+            conn.execute("UPDATE predictions SET status = 'settled', duel_id = ?1 WHERE id = ?2", params![r.id as i64, id])?;
+            settled.push(id);
+        } else if recent.iter().filter(|r| r.at as i64 > seen).count() >= 2 {
+            conn.execute("UPDATE predictions SET status = 'skipped' WHERE id = ?", [id])?;
+        }
+    }
+    Ok(settled)
+}
+
+/// A finished call with its result.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CallRecord {
+    pub id: i64,
+    pub seen_at: i64,
+    pub home_owner: String,
+    pub away_owner: String,
+    pub home_pal: String,
+    pub away_pal: String,
+    pub pick: String,
+    pub prob: f64,
+    pub p_stats: Option<f64>,
+    pub p_species: Option<f64>,
+    pub p_h2h: Option<f64>,
+    pub species_rec: Option<[[f64; 2]; 2]>,
+    pub pal_h2h: [f64; 2],
+    pub duel_id: Option<u64>,
+    pub winner: Option<String>,
+    pub fought_at: Option<String>,
+    pub ko: Option<String>,
+    pub winner_hp_left: Option<u32>,
+    pub fighters: Option<(CallFighter, CallFighter)>,
+}
+
+impl CallRecord {
+    pub fn right(&self) -> bool {
+        self.winner.as_deref() == Some(self.pick.as_str())
+    }
+}
+
+fn fighters_of(conn: &Connection, id: i64) -> Result<Option<(CallFighter, CallFighter)>> {
+    let mut st = conn.prepare_cached(
+        "SELECT side, pal, types, hp, atk, def, hp_iv, atk_iv, def_iv, passives, hidden_boost, speed FROM fighters WHERE prediction_id = ?",
+    )?;
+    let rows: Vec<(String, CallFighter)> = st
+        .query_map([id], |r| {
+            let pal: String = r.get(1)?;
+            let mut ivs = std::collections::HashMap::new();
+            for (k, i) in [("HP", 6), ("ATK", 7), ("DEF", 8)] {
+                ivs.insert(k.to_string(), r.get::<_, Option<i64>>(i)?.map(|v| v as f64));
+            }
+            Ok((
+                r.get(0)?,
+                CallFighter {
+                    fighter: Fighter {
+                        pal: pal.clone(),
+                        types: serde_json::from_str(&r.get::<_, Option<String>>(2)?.unwrap_or_default()).unwrap_or_default(),
+                        hp: r.get::<_, i64>(3)? as f64,
+                        atk: r.get::<_, i64>(4)? as f64,
+                        def: r.get::<_, i64>(5)? as f64,
+                        skills: vec![],
+                        passives: serde_json::from_str(&r.get::<_, Option<String>>(9)?.unwrap_or_default()).unwrap_or_default(),
+                        hidden_boost: r.get::<_, Option<f64>>(10)?.unwrap_or(1.0),
+                        speed: r.get::<_, Option<f64>>(11)?.unwrap_or(1.0),
+                    },
+                    ivs,
+                },
+            ))
+        })?
+        .collect::<Rq<_>>()?;
+    let mut home = None;
+    let mut away = None;
+    for (side, mut f) in rows {
+        f.fighter.skills = moves_of(conn, &f.fighter.pal)?;
+        if side == "home" {
+            home = Some(f)
+        } else {
+            away = Some(f)
+        }
+    }
+    Ok(home.zip(away))
+}
+
+/// Finished calls, oldest first.
+pub fn settled(conn: &Connection) -> Result<Vec<CallRecord>> {
+    let mut st = conn.prepare(
+        "SELECT p.id, COALESCE(p.seen_at, 0), p.home_owner, p.away_owner, p.home_pal, p.away_pal, p.pick, p.prob, p.p_stats, p.p_species,
+                p.p_h2h, p.home_species_w, p.home_species_l, p.away_species_w, p.away_species_l, p.pal_h2h_home, p.pal_h2h_away,
+                p.duel_id, d.winner, d.fought_at, d.ko, d.winner_hp_left
+         FROM predictions p LEFT JOIN duels d ON d.id = p.duel_id WHERE p.status = 'settled' AND d.winner IS NOT NULL ORDER BY p.id",
+    )?;
+    let calls: Vec<CallRecord> = st
+        .query_map([], |r| {
+            let rec: [Option<i64>; 4] = [r.get(11)?, r.get(12)?, r.get(13)?, r.get(14)?];
+            Ok(CallRecord {
+                id: r.get(0)?,
+                seen_at: r.get(1)?,
+                home_owner: r.get(2)?,
+                away_owner: r.get(3)?,
+                home_pal: r.get(4)?,
+                away_pal: r.get(5)?,
+                pick: r.get(6)?,
+                prob: r.get(7)?,
+                p_stats: r.get(8)?,
+                p_species: r.get(9)?,
+                p_h2h: r.get(10)?,
+                species_rec: match rec {
+                    [Some(a), Some(b), Some(c), Some(d)] => Some([[a as f64, b as f64], [c as f64, d as f64]]),
+                    _ => None,
+                },
+                pal_h2h: [r.get::<_, Option<i64>>(15)?.unwrap_or(0) as f64, r.get::<_, Option<i64>>(16)?.unwrap_or(0) as f64],
+                duel_id: r.get::<_, Option<i64>>(17)?.map(|v| v as u64),
+                winner: r.get(18)?,
+                fought_at: r.get(19)?,
+                ko: r.get(20)?,
+                winner_hp_left: r.get(21)?,
+                fighters: None,
+            })
+        })?
+        .collect::<Rq<_>>()?;
+    calls
+        .into_iter()
+        .map(|mut c| {
+            c.fighters = fighters_of(conn, c.id)?;
+            Ok(c)
+        })
+        .collect()
+}
+
+/// The open call for this fight, if Augur has made one.
+pub fn open_call(conn: &Connection, home_owner: &str, away_owner: &str) -> Result<Option<i64>> {
+    Ok(conn
+        .query_row(
+            "SELECT id FROM predictions WHERE status = 'open' AND home_owner = ?1 AND away_owner = ?2 ORDER BY id DESC LIMIT 1",
+            [home_owner, away_owner],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Settings;
+
+    fn fighter(pal: &str) -> CallFighter {
+        CallFighter {
+            fighter: Fighter {
+                pal: pal.into(),
+                types: vec!["fire".into()],
+                hp: 5000.0,
+                atk: 600.0,
+                def: 700.0,
+                skills: vec![],
+                passives: vec![],
+                hidden_boost: 1.0,
+                speed: 1.0,
+            },
+            ivs: Default::default(),
+        }
+    }
+
+    fn call(home: &str, away: &str) -> NewCall {
+        NewCall {
+            seen_at: 1_000,
+            home_owner: home.into(),
+            away_owner: away.into(),
+            home_pal: "A".into(),
+            away_pal: "B".into(),
+            pick: "home".into(),
+            prob: 0.7,
+            p_stats: 0.7,
+            p_species: 0.5,
+            p_h2h: 0.5,
+            estimated: false,
+            species_rec: [[1.0, 1.0], [1.0, 1.0]],
+            pal_h2h: [0.0, 0.0],
+            model: Settings::default(),
+            home: fighter("A"),
+            away: fighter("B"),
+        }
+    }
+
+    #[test]
+    fn calls_settle_from_recent_results() {
+        let conn = open_memory().unwrap();
+        let id = add_call(&conn, &call("x", "y")).unwrap();
+        assert_eq!(add_call(&conn, &call("x", "y")).unwrap(), id, "re-running the same open fight updates it");
+        let recent = vec![Recent { id: 7, home: "x".into(), away: "y".into(), win: "home".into(), at: 2_000 }];
+        settle(&conn, &recent, |_| None).unwrap();
+        let done = settled(&conn).unwrap();
+        assert_eq!(done.len(), 1);
+        assert!(done[0].right());
+        assert!(done[0].fighters.is_some());
+    }
+
+    #[test]
+    fn unfought_calls_are_skipped_after_two_later_fights() {
+        let conn = open_memory().unwrap();
+        add_call(&conn, &call("x", "y")).unwrap();
+        let later = |id, at| Recent { id, home: "p".into(), away: "q".into(), win: "home".into(), at };
+        settle(&conn, &[later(1, 2_000)], |_| None).unwrap();
+        let status: String = conn.query_row("SELECT status FROM predictions", [], |r| r.get(0)).unwrap();
+        assert_eq!(status, "open", "one later fight isn't enough: the result may not be recorded yet");
+        settle(&conn, &[later(1, 2_000), later(2, 3_000)], |_| None).unwrap();
+        let status: String = conn.query_row("SELECT status FROM predictions", [], |r| r.get(0)).unwrap();
+        assert_eq!(status, "skipped");
+    }
+}

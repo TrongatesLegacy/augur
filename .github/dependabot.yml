@@ -1,0 +1,25 @@
+# Pull requests for dependency updates: the Rust crates (Tauri first of all: an old one stops getting security
+# fixes) and the GitHub Actions the workflows use. Monthly, grouped into one pull request each. Major versions
+# usually need code changes, so they're left out here and done by hand (cargo audit still flags security holes).
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    groups:
+      crates:
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: '*'
+        update-types: [version-update:semver-major]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2
+    # All in one pull request: each edits the workflow files, and once one has merged the next can't merge itself.
+    groups:
+      github-actions:
+        patterns: ['*']

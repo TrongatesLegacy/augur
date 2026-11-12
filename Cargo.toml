@@ -1,0 +1,24 @@
+[workspace]
+members = ["engine", "app"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "UNLICENSED"
+publish = false
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
+
+# The same lints everywhere. CI runs Clippy with every warning as an error (cargo clippy -- -D warnings).
+[workspace.lints.rust]
+unsafe_code = "deny" # the two Windows system calls that need it are allowed where they are, with a comment
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"

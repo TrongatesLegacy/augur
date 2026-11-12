@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Augur</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="app">
+  <div class="shell">
+    <nav class="side" aria-label="Sections">
+      <svg class="logo" viewBox="0 0 120 120" aria-label="Augur"><path d="M10 64 C 34 22, 86 22, 110 64 C 86 40, 34 40, 10 64 Z" fill="#4fe3ff"/><path d="M10 56 C 34 98, 86 98, 110 56 C 86 80, 34 80, 10 56 Z" fill="#ff5ca8"/><circle cx="60" cy="60" r="18" fill="#ffcf6b"/></svg>
+      <button class="nav" data-tab="live"><div><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M5 12a7 7 0 0 1 14 0M2 12a10 10 0 0 1 20 0"/></svg>Live</div></button>
+      <button class="nav" data-tab="history"><div><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l5-5 4 3 8-8"/><path d="M14 7h6v6"/></svg>History</div></button>
+      <button class="nav" data-tab="pals"><div><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="9" r="5"/><path d="M8 20l4-3 4 3"/></svg>Pals</div></button>
+      <button class="nav" data-tab="players"><div><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><circle cx="17" cy="10" r="2.5"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5M15 16c3 0 6 1.5 6 4"/></svg>Players</div></button>
+      <button class="nav" data-tab="model"><div><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>Model</div></button>
+      <button class="nav gear" data-tab="settings"><div><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/></svg>Settings</div></button>
+    </nav>
+    <main id="main"></main>
+  </div>
+  <script type="module" src="main.js"></script>
+</body>
+</html>

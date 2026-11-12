@@ -1,0 +1,69 @@
+// Settings: how often to check, the tray and notifications, the chat voices, the optional sign-in.
+import { invoke } from '../lib/bridge.js';
+import { esc } from '../lib/format.js';
+import { SHORT, VOICES } from '../lib/pal.js';
+
+export async function render(app) {
+  const { state, main, header, flash } = app;
+  state.settings = await invoke('get_settings');
+  const acct = await invoke('account');
+  const s = state.settings;
+  const tog = (key, label, sub) =>
+    `<div class="srow"><div>${label}${sub ? `<small>${sub}</small>` : ''}</div><button class="tog ${s[key] ? 'on' : ''}" data-k="${key}" aria-pressed="${!!s[key]}" aria-label="${esc(label)}"></button></div>`;
+  main.innerHTML =
+    header('Settings') +
+    `<div class="sg">
+    <div style="display:grid;gap:14px">
+      <div class="panel"><div class="ph"><h3>Stream</h3></div>
+        <div class="srow"><div>Duels<small>the live duels on palduels.com</small></div><span class="muted">palduels.com</span></div>
+        <div class="srow"><div>Check for new fights<small>while a duel is up (the site's page checks every 2s)</small></div><select data-n="poll_secs">${[3, 5, 10, 15].map((n) => `<option value="${n}" ${s.poll_secs === n ? 'selected' : ''}>Every ${n} seconds</option>`).join('')}</select></div>
+        ${tog('backfill', 'Fetch past duels in the background', 'Gently, one page at a time; pauses while a duel is up')}</div>
+      <div class="panel"><div class="ph"><h3>Tray &amp; notifications</h3></div>
+        ${tog('tray_pick', 'Show the pick in the tray', 'macOS: name and chance · Windows: confidence ring')}
+        ${tog('notify_new_pick', 'Notify on each new pick')}
+        ${tog('notify_result', 'Notify with each result', '"Chillet Lux won ✓"')}
+        ${tog('launch_at_login', 'Launch at login')}</div>
+    </div>
+    <div style="display:grid;gap:14px">
+      <div class="panel"><div class="ph"><h3>Chat lines</h3></div>
+        <div class="srow"><div>Voices<small>shown in the tray and Live tab</small></div><div class="vchips">${VOICES.map((v) => `<button class="${s.voices.includes(v) ? 'on' : ''}" data-voice="${esc(v)}">${esc(SHORT[v])}</button>`).join('')}</div></div>
+        <div class="srow"><div>Default voice</div><select data-n="default_voice">${VOICES.map((v) => `<option ${s.default_voice === v ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></div>
+        ${tog('include_chance', 'Include the chance', 'adds "(83%)" to the line')}</div>
+      <div class="panel"><div class="ph"><h3>Account</h3><span>optional</span></div>
+        <div class="srow"><div>PalDuels sign-in<small>${acct.signed_in ? `Signed in${acct.name ? ' as ' + esc(acct.name) : ''}. ` : ''}Only reads your picks and balance. Augur never picks, chats or spends for you. Saved encrypted (Keychain on macOS, DPAPI on Windows).</small></div>${acct.signed_in ? '<button class="btn ghost" id="so">Sign out</button>' : '<button class="btn ghost" id="si">Sign in</button>'}</div>
+        <div class="srow"><div>Your Kick name<small>for your pal box and rivals; public, no sign-in needed</small></div><input type="text" data-n="kick_name" value="${esc(s.kick_name)}" placeholder="TrongatesLegacy"></div>
+        <div class="srow"><div>Reroll cost (credits)<small>not on the site yet; enables exact reroll advice</small></div><input type="number" data-n="reroll_cost" value="${s.reroll_cost ?? ''}" placeholder="Not set" style="width:110px"></div></div>
+    </div></div>`;
+  const save = () => invoke('save_settings', { settings: s }).catch((e) => flash(e));
+  main.querySelectorAll('.tog').forEach((b) => {
+    b.onclick = () => {
+      s[b.dataset.k] = !s[b.dataset.k];
+      b.classList.toggle('on', s[b.dataset.k]);
+      b.setAttribute('aria-pressed', s[b.dataset.k]);
+      save();
+    };
+  });
+  main.querySelectorAll('[data-voice]').forEach((b) => {
+    b.onclick = () => {
+      const v = b.dataset.voice;
+      s.voices = s.voices.includes(v) ? s.voices.filter((x) => x !== v) : VOICES.filter((x) => x === v || s.voices.includes(x));
+      if (!s.voices.length) s.voices = [v];
+      b.classList.toggle('on', s.voices.includes(v));
+      save();
+    };
+  });
+  main.querySelectorAll('[data-n]').forEach((input) => {
+    input.onchange = () => {
+      const k = input.dataset.n;
+      if (k === 'poll_secs') s[k] = +input.value;
+      else if (k === 'reroll_cost') s[k] = input.value ? +input.value : null;
+      else s[k] = input.value.trim();
+      save();
+    };
+  });
+  document.getElementById('si')?.addEventListener('click', () => invoke('sign_in'));
+  document.getElementById('so')?.addEventListener('click', async () => {
+    await invoke('sign_out');
+    render(app);
+  });
+}

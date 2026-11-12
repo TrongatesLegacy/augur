@@ -1,0 +1,36 @@
+[package]
+name = "augur"
+description = "Augur: calls PalDuels fights before the bell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "augur"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+augur-engine = { path = "../engine" }
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+dirs = "6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-autostart = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-positioner = { version = "2", features = ["tray-icon"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+aes-gcm = "0.10"
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Console", "Win32_System_Memory"] }
+
+[lints]
+workspace = true

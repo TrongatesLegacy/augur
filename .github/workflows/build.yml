@@ -1,0 +1,275 @@
+# Release flow (the same as Stream Multiview and Pear Drops):
+#   1. Changes land on main through pull requests (they never touch the version).
+#   2. When you want an update, publish a GitHub release with a new tag like v0.1.1
+#      (click "Generate release notes" to list the merged pull requests).
+#   3. This workflow then:
+#        - sets the version from the tag and adds the notes to CHANGELOG.md,
+#          commits that to main and moves the tag onto that commit,
+#        - builds the Mac (.dmg, universal: Apple silicon and Intel, plus the app as a .zip) and Windows (.exe)
+#          installers from it,
+#        - attaches them to the release.
+# Pull requests build the installers as a test (see the run's "Artifacts"), unless they only change things that
+# can't affect them (docs, tests, fixtures).
+name: Build installers
+
+on:
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.gitignore'
+      - 'fixtures/**'
+      - 'engine/tests/**'
+      - '.claude/**'
+      - '.github/workflows/test.yml'
+      - '.github/assets/**'
+      - '.github/*.md'
+  release:
+    types: [published]
+  workflow_dispatch:
+
+# Read-only unless a job says otherwise (only the release's own jobs write).
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      # If main is protected (a "Protect main" ruleset), GitHub's own Actions token can't push past it on a personal
+      # repository, so the release pushes its version commit with a deploy key: secret RELEASE_DEPLOY_KEY, a key with
+      # write access that the ruleset lists under Bypass. Without the secret it pushes with the workflow's token,
+      # which works while main isn't protected. See README > Making a release.
+      - name: Check the release key
+        env:
+          KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
+        run: |
+          fail() { echo "::error title=Release key::$1"; exit 1; }
+          if [ -z "$KEY" ]; then
+            echo "::notice title=Release key::No RELEASE_DEPLOY_KEY secret: pushing the version commit with the workflow's token (fine while main isn't protected)."
+            exit 0
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$KEY" | tr -d '\r' > ~/.ssh/release_key   # Windows line endings break OpenSSH
+          chmod 600 ~/.ssh/release_key
+          if ! ssh-keygen -y -P '' -f ~/.ssh/release_key > ~/.ssh/release_key.pub 2> ~/.ssh/err; then
+            fail "RELEASE_DEPLOY_KEY isn't a usable private key ($(tr '\n' ' ' < ~/.ssh/err)). Paste the whole release_key file (the one without .pub), made without a passphrase."
+          fi
+          FP=$(ssh-keygen -lf ~/.ssh/release_key.pub | awk '{print $2}')
+          echo "::notice title=Release key::Fingerprint $FP. It should match the deploy key in Settings > Deploy keys."
+          ssh-keyscan -t ed25519,rsa github.com >> ~/.ssh/known_hosts 2>/dev/null
+          out=$(ssh -i ~/.ssh/release_key -o IdentitiesOnly=yes -o BatchMode=yes -T git@github.com 2>&1 || true)
+          echo "$out" | grep -q "successfully authenticated" \
+            || fail "GitHub doesn't accept the release key (fingerprint $FP): $out. Add its public key under Settings > Deploy keys, with Allow write access."
+          echo "GIT_SSH_COMMAND=ssh -i $HOME/.ssh/release_key -o IdentitiesOnly=yes -o BatchMode=yes" >> "$GITHUB_ENV"
+          echo "PUSH_WITH_KEY=1" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Push with the release key
+        if: env.PUSH_WITH_KEY == '1'
+        run: git remote set-url --push origin "git@github.com:${{ github.repository }}.git"
+
+      # (the release's values go in through env, never pasted into the script: a tag name could hold shell code)
+      - name: Check the release was made from the latest main
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          TAG_SHA=$(git rev-list -n 1 "$TAG")
+          MAIN_SHA=$(git rev-parse HEAD)
+          if [ "$TAG_SHA" != "$MAIN_SHA" ]; then
+            echo "::error::The release tag points at $TAG_SHA but main is at $MAIN_SHA. Create the release from the latest main."
+            exit 1
+          fi
+
+      - name: Set the version and update CHANGELOG.md
+        env:
+          NOTES: ${{ github.event.release.body }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          printf '%s' "$NOTES" > "$RUNNER_TEMP/notes.md"
+          python3 scripts/prepare_release.py "$TAG" "$RUNNER_TEMP/notes.md"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Update Cargo.lock for the new version and run the engine tests
+        run: |
+          cargo update --workspace
+          cargo test -p augur-engine --locked
+
+      - name: Commit to main and move the tag
+        id: commit
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          AUTHOR: ${{ github.event.release.author.login }}
+          AUTHOR_ID: ${{ github.event.release.author.id }}
+        run: |
+          if git diff --quiet; then
+            echo "Nothing to change."
+          else
+            git config user.name "$AUTHOR"
+            git config user.email "$AUTHOR_ID+$AUTHOR@users.noreply.github.com"
+            git commit -am "Release $TAG"
+            git push origin HEAD:main || { echo "::error title=Couldn't save the version to main::The push was refused. If main is protected, add the release deploy key (RELEASE_DEPLOY_KEY) and put it on the ruleset's bypass list."; exit 1; }
+            git tag -f "$TAG"
+            git push -f origin "refs/tags/$TAG"
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    if: always() && (needs.prepare.result == 'success' || needs.prepare.result == 'skipped')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: universal-apple-darwin
+            files: |
+              target/universal-apple-darwin/release/bundle/dmg/*.dmg
+              target/universal-apple-darwin/release/bundle/macos/*-mac.zip
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            files: target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.sha || github.sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || 'x86_64-pc-windows-msvc' }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # the Tauri command line, kept between runs
+      - uses: actions/cache@v4
+        id: tauri-cli
+        with:
+          path: |
+            ~/.cargo/bin/cargo-tauri
+            ~/.cargo/bin/cargo-tauri.exe
+          key: tauri-cli-2-${{ runner.os }}
+
+      - name: Install the Tauri command line
+        if: steps.tauri-cli.outputs.cache-hit != 'true'
+        run: cargo install tauri-cli --version "^2" --locked
+
+      # Mac: sign with the project's own certificate (secrets MAC_CERT_P12 + MAC_CERT_PASSWORD) so every version is
+      # recognised as the same app and macOS keeps letting it read its saved sign-in from the Keychain.
+      - name: Set up the Mac signing certificate
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        env:
+          P12: ${{ secrets.MAC_CERT_P12 }}
+          P12_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+        run: |
+          if [ -z "$P12" ]; then
+            echo "::warning title=No Mac signing certificate::The MAC_CERT_P12 secret isn't set, so the Mac app is signed ad hoc and its saved sign-in won't survive updates."
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          trap 'echo "::error title=Mac certificate setup failed::line $LINENO: $BASH_COMMAND"' ERR
+          KC="$RUNNER_TEMP/signing.keychain-db"; KC_PW=$(openssl rand -hex 16)
+          printf '%s' "$P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KC_PW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KC_PW" "$KC"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KC" -f pkcs12 -P "$P12_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KC_PW" "$KC" > /dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          NAME="Augur Code Signing"
+          HASH=$(security find-certificate -c "$NAME" -Z "$KC" | awk '/SHA-1/{print $NF; exit}')
+          [ -n "$HASH" ] || { echo "::error title=Mac certificate setup failed::the certificate isn't in the secret"; exit 1; }
+          # it's self-signed, so tell this build machine to trust it for signing code (if that's refused, signing may still work)
+          security find-certificate -c "$NAME" -p "$KC" > "$RUNNER_TEMP/cert.pem"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$RUNNER_TEMP/cert.pem" \
+            || echo "::warning title=Mac certificate::couldn't mark the certificate as trusted on the build machine"
+          security find-identity -p codesigning "$KC"
+          echo "APPLE_SIGNING_IDENTITY=$HASH" >> "$GITHUB_ENV"
+
+      - name: Build installer
+        shell: bash
+        working-directory: app
+        run: |
+          set -o pipefail
+          cargo tauri build --target ${{ matrix.target }} 2>&1 | tee "$RUNNER_TEMP/build.log"
+
+      # the app itself as a zip, for a later in-app updater (ditto keeps its signature and symlinks intact)
+      - name: Zip the Mac app
+        if: matrix.os == 'macos-latest'
+        working-directory: target/universal-apple-darwin/release/bundle/macos
+        run: |
+          VERSION=$(python3 -c "import json;print(json.load(open('$GITHUB_WORKSPACE/app/tauri.conf.json'))['version'])")
+          ditto -c -k --keepParent Augur.app "Augur-$VERSION-mac.zip"
+          codesign -dv --verbose=2 Augur.app 2>&1 | grep -E "Authority|Signature|Identifier" || true
+
+      # Puts the end of the build log on the run's summary page if the build fails.
+      - name: Show build errors
+        if: failure()
+        shell: bash
+        run: |
+          [ -f "$RUNNER_TEMP/build.log" ] || exit 0
+          tail -n 40 "$RUNNER_TEMP/build.log" | sed -e 's/%/%25/g' -e 's/\r//g' | awk '{printf "%s%%0A", $0}' > tail.txt
+          echo "::error title=Build log::$(cat tail.txt)"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: installer-${{ matrix.os }}
+          path: ${{ matrix.files }}
+          if-no-files-found: error
+          # long enough to try a pull request's installers; releases keep theirs for good
+          retention-days: 7
+
+  # Collects both installers (on pull requests too, as a check), then attaches them to the release.
+  release:
+    needs: [prepare, build]
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.sha || github.sha }}
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: installers
+          merge-multiple: true
+
+      - name: Check both installers are there
+        run: |
+          ls -l installers
+          ls installers/*.exe > /dev/null && ls installers/*.dmg > /dev/null && ls installers/*-mac.zip > /dev/null \
+            || { echo "::error::An installer is missing (need a Windows .exe, a Mac .dmg and the Mac .zip)."; exit 1; }
+
+      - name: Attach the installers to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+          BODY_EMPTY: ${{ github.event.release.body == '' }}
+        run: |
+          gh release upload "$TAG" installers/* --clobber --repo "$GITHUB_REPOSITORY"
+          # a release published without notes gets them from CHANGELOG.md
+          if [ "$BODY_EMPTY" = "true" ]; then
+            python3 scripts/release_notes.py "$TAG" > notes.md
+            gh release edit "$TAG" --notes-file notes.md --repo "$GITHUB_REPOSITORY"
+          fi

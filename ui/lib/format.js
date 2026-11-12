@@ -12,6 +12,9 @@ export function ago(ms) {
   return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`;
 }
 // credits won or lost: +2,105 / −500
+// a count short enough for a narrow label: 950, 9.5k, 14k, 1.2M
+export const short = (n) =>
+  n == null ? '—' : n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}k` : n >= 1e3 ? `${+(n / 1e3).toFixed(1)}k` : fmt(n);
 export const signed = (n) => (n == null ? '—' : `${n > 0 ? '+' : n < 0 ? '−' : ''}${fmt(Math.abs(n))}`);
 export const initials = (name) =>
   String(name || '?')

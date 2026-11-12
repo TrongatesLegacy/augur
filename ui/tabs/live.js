@@ -1,6 +1,6 @@
 // Live: the duel that's up, the call and why, the head-to-heads, what's next and the chat line.
 import { copyText } from '../lib/clipboard.js';
-import { esc, fmt, pct, signed } from '../lib/format.js';
+import { esc, fmt, pct, short, signed } from '../lib/format.js';
 import { SHORT, dial, face, orb, pickVoice, tapeRows, voiceLine, whyLine } from '../lib/pal.js';
 import { betCommand, stakeLine } from '../lib/stake.js';
 import { columns, empty, icon, ring, signedBar } from '../lib/viz.js';
@@ -47,7 +47,7 @@ export function render(app) {
     const stream = ls
       ? `<div class="panel col"><div class="ph"><h3>${between ? 'Today' : 'Last stream'}</h3><span>${esc(day(ls[0]))}</span></div>
           <div class="yrow">${ring(ls[1] / ls[2], { size: 84, sub: 'right' })}
-            <div class="ycol"><div class="qn big"><b>${ls[1]}<i>/${ls[2]}</i></b></div><span class="small">best run ${ls[3]}${o.all_time[1] ? ` · all time ${o.all_time[0]}/${o.all_time[1]}` : ''}</span></div></div>
+            <div class="ycol"><div class="qn big"><b style="font-size:${Math.min(46, 330 / (fmt(ls[1]).length + 0.6 * (fmt(ls[2]).length + 1))).toFixed(1)}px">${fmt(ls[1])}<i>/${fmt(ls[2])}</i></b></div><span class="small">best run ${fmt(ls[3])}${o.all_time[1] ? ` · all time ${fmt(o.all_time[0])}/${fmt(o.all_time[1])}` : ''}</span></div></div>
           ${o.last_bets ? `<div class="lsb">${signedBar('You', o.last_bets[0], Math.max(Math.abs(o.last_bets[0]), Math.abs(o.last_bets[1]), 1))}${signedBar('Following Augur', o.last_bets[1], Math.max(Math.abs(o.last_bets[0]), Math.abs(o.last_bets[1]), 1))}</div>` : ''}</div>`
       : `<div class="panel col"><div class="ph"><h3>Last stream</h3></div>${empty('chart', 'No streams yet', 'Augur keeps score from the first call.')}</div>`;
     const recent = `<div class="panel col list lcalls"><div class="ph"><h3>Latest calls</h3>${o?.recent?.length ? `<span>${o.recent.filter((r) => r[2]).length} of ${o.recent.length} right</span>` : ''}</div>${
@@ -69,7 +69,7 @@ export function render(app) {
       <small>Every call stands on stats, types, moves and this history, never on chat.</small></div>${known}</div>`;
     const days = o?.days?.length
       ? `<div class="panel col lstreams"><div class="ph"><h3>Recent streams</h3><span>calls right, one bar per stream${all != null ? ` · dashed: all time ${pct(all)}` : ''}</span></div>${columns(
-          o.days.map(([d, r, n]) => ({ v: r / n, label: d.slice(5).replace('-', '/'), top: `${r}/${n}`, title: `${d}: ${r}/${n} right`, tone: r / n >= 0.5 ? '' : 'bad' })),
+          o.days.map(([d, r, n]) => ({ v: r / n, label: d.slice(5).replace('-', '/'), top: `${short(r)}/${short(n)}`, title: `${d}: ${fmt(r)}/${fmt(n)} right`, tone: r / n >= 0.5 ? '' : 'bad' })),
           all,
         )}</div>`
       : `<div class="panel col lstreams"><div class="ph"><h3>Recent streams</h3></div>${empty('chart', 'No streams yet', 'One bar per stream, once Augur has called some fights.')}</div>`;
@@ -96,7 +96,7 @@ export function render(app) {
       ${side(p.away, 'a', p.pick === 'away')}</div>
     <div class="g3">
       <div class="panel"><div class="ph"><h3>Tale of the tape</h3><span>Lv 70</span></div>${tapeRows(p)}
-        <div class="small">Passives: ${esc(p.home.fighter.passives.join(', ') || 'none')} vs ${esc(p.away.fighter.passives.join(', ') || 'none')} · ${p.home.usable_moves} vs ${p.away.usable_moves} moves</div></div>
+        <div class="small">Passives: ${esc(p.home.fighter.passives.join(', ') || 'none')} vs ${esc(p.away.fighter.passives.join(', ') || 'none')} · ${fmt(p.home.usable_moves)} vs ${fmt(p.away.usable_moves)} moves</div></div>
       <div class="panel"><div class="ph"><h3>Projected HP race</h3><span>model estimate</span></div>
         <svg width="100%" height="100" viewBox="0 0 340 100" role="img" aria-label="${esc(fav.pal)} projected to win with about ${pct(left)} HP left">
           <g stroke="rgba(255,255,255,.06)"><line x1="0" y1="6" x2="340" y2="6"/><line x1="0" y1="48" x2="340" y2="48"/><line x1="0" y1="90" x2="340" y2="90"/></g>
@@ -115,7 +115,7 @@ export function render(app) {
           .slice(0, 2)
           .map((m) => `<div class="row"><span class="small">${esc(m.when)} · ${esc(m.sides[0].pal)} vs ${esc(m.sides[1].pal)}</span><span class="small">${esc(m.sides[0].won ? m.sides[0].owner : m.sides[1].owner)}</span></div>`)
           .join('')}
-        <div class="row"><span>${esc(p.home.pal)} vs ${esc(p.away.pal)}</span><b class="gold">${p.pal_h2h.home_wins}–${p.pal_h2h.away_wins}</b></div></div>
+        <div class="row"><span>${esc(p.home.pal)} vs ${esc(p.away.pal)}</span><b class="gold">${fmt(p.pal_h2h.home_wins)}–${fmt(p.pal_h2h.away_wins)}</b></div></div>
       ${upNext(live)}
       ${
         state.settings?.chat_lines === false

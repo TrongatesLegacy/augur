@@ -70,7 +70,7 @@ export async function render(app) {
   main.innerHTML =
     header('Model · learns from every result', `<button class="btn ghost ml" id="rt">Learn now</button>`) +
     `<div class="g4">
-      ${kpi(ring(m.live_total ? m.calls_right / m.live_total : null, { size: 64 }), 'Live calls', `${m.calls_right} / ${m.live_total}`, `today's logic would get ${m.live_right}`)}
+      ${kpi(ring(m.live_total ? m.calls_right / m.live_total : null, { size: 64 }), 'Live calls', `${fmt(m.calls_right)} / ${fmt(m.live_total)}`, `today's logic would get ${m.live_right}`)}
       ${kpi(ring(bt?.duels ? bt.accuracy : null, { size: 64, tone: 'home', label: bt?.duels ? `${(bt.accuracy * 100).toFixed(0)}%` : '—' }), 'History test', bt?.duels ? (bt.accuracy * 100).toFixed(1) + '%' : '—', `${bt ? fmt(bt.duels) : 0} past duels, base stats only`)}
       <div class="panel kp kfit"><div><span class="label">Per-hit fit</span><b>${fit ? fit + '×' : '—'}</b><small>real value of a type edge (model ${s.TYPE_BONUS}×)</small></div>${fitScale}</div>
       ${kpi(`<span class="kic">${icon('chart', 26)}</span>`, 'Data', fmt(m.hits), `hits from ${fmt(m.tapes)} fight tapes`)}</div>

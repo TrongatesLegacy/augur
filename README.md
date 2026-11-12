@@ -10,6 +10,55 @@ Augur lives in the menu bar (macOS) or the tray (Windows). The menu bar shows th
 
 Built with [Tauri 2](https://tauri.app): a Rust engine and a small web page for the screens. About 9 MB.
 
+## Install
+
+Download the installer for your computer from the [latest release](https://github.com/TrongatesLegacy/augur/releases/latest), under **Assets**:
+
+| Computer | File |
+|---|---|
+| **Windows** 10 or 11, 64-bit | `Augur_<version>_x64-setup.exe` |
+| **Mac** (Apple silicon or Intel), macOS 11 or newer | `Augur_<version>_universal.dmg` |
+
+Linux: run it from source (below); there's no installer yet.
+
+The app is free, and it isn't signed with a paid Apple or Microsoft certificate, so your computer warns you the first time. That's expected:
+
+**Windows**
+1. Open the `.exe` you downloaded.
+2. If a blue *Windows protected your PC* box appears, click **More info**, then **Run anyway**.
+3. Follow the installer. It installs for you only, so it doesn't need an administrator. Augur opens when it's done and gets a Start menu shortcut.
+
+**Mac**
+1. Open the `.dmg` and drag **Augur** into **Applications**.
+2. Open Augur from Applications. macOS says it can't check it for malware: click **Done**.
+3. Open **System Settings › Privacy & Security**, scroll down to *"Augur" was blocked* and click **Open Anyway** (and again in the box that follows), then enter your password. You only do this once.
+4. If macOS asks to use *Augur Safe Storage* in your keychain (the first time you sign in to PalDuels, or after an update), enter your password and click **Always Allow**. That key encrypts your saved sign-in.
+
+**Then:**
+1. The first time, Augur asks whether this is a new computer for an Augur you already use. **Import a backup** brings your calls, bets and every past duel across from your other computer (Settings › Sync & data › Back up… there). **Start fresh** fetches the duel history in the background.
+2. Augur lives in the menu bar (Mac) or the tray (Windows). Click it for the call on the fight that's up, the bet to type and the chat line. The main window has the rest.
+3. Optional: sign in to PalDuels in **Settings › Account** to track your bets against Augur's calls. Augur only reads your picks and balance; it never picks, chats or spends for you.
+
+Augur updates itself: when there's a new version, it downloads it and offers **Restart to update** (Settings › Updates). Nothing installs until you click it. Copies older than the first version with updates (0.1.1 and before) need the next one installed by hand once.
+
+### Run from source
+
+For Linux, or to work on the app. Needs [Rust](https://rustup.rs) (stable); on Linux also [Tauri's system packages](https://tauri.app/start/prerequisites/#linux).
+
+```sh
+cargo run -p augur                 # the app
+cargo run -q -p augur -- predict   # the duel that's up now, from the command line
+cargo run -q -p augur -- --help    # predict, backfill, import, export, analyse, tune, bets, status
+```
+
+### Building the installers yourself
+
+```sh
+cargo install tauri-cli --version "^2" --locked
+cd app && cargo tauri build        # on a Mac -> target/release/bundle/dmg/Augur_<version>_<arch>.dmg
+                                   # on Windows -> target/release/bundle/nsis/Augur_<version>_x64-setup.exe
+```
+
 ## Layout
 
 | Path | What it is |
@@ -22,13 +71,7 @@ Built with [Tauri 2](https://tauri.app): a Rust engine and a small web page for 
 | `assets/` | The logo and tray icon sources. `app/icons/` is generated from `assets/icon.png` (`cargo tauri icon`). |
 | `scripts/` | The release scripts the build workflow runs. |
 
-## Running it
-
-```sh
-cargo run -p augur                 # the app
-cargo run -q -p augur -- predict   # the duel that's up now, from the command line
-cargo run -q -p augur -- --help    # predict, backfill, import, export, analyse, tune, bets, status
-```
+## Your data and the first launch
 
 The app and the command line share one data folder: `~/Library/Application Support/Augur` on macOS, `%APPDATA%\Augur` on Windows (`AUGUR_DATA_DIR` overrides it). It holds `augur.db`, `settings.json`, `sync.json`, the pal art cache and the encrypted sign-in.
 

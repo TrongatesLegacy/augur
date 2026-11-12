@@ -1,6 +1,6 @@
 // Live: the duel that's up, the call and why, the head-to-heads, what's next and the chat line.
 import { copyText } from '../lib/clipboard.js';
-import { esc, fmt, pct, short, signed } from '../lib/format.js';
+import { esc, feedProblem, fmt, pct, short, signed } from '../lib/format.js';
 import { SHORT, dial, face, orb, pickVoice, tapeRows, voiceLine, whyLine } from '../lib/pal.js';
 import { betCommand, stakeLine } from '../lib/stake.js';
 import { columns, empty, icon, ring, signedBar } from '../lib/viz.js';
@@ -30,7 +30,7 @@ export function render(app) {
   const live = state.live;
   const p = live?.prediction;
   const status = live?.error
-    ? `<div class="pill ml"><span class="dot idle"></span>Can't reach PalDuels</div>`
+    ? `<div class="pill ml" title="${esc(live.error)}"><span class="dot idle"></span>${feedProblem(live.error)[0]}</div>`
     : p
       ? `<div class="pill ml"><span class="dot"></span>${live.live ? 'Fight on' : 'Picks open'}</div>`
       : `<div class="pill ml"><span class="dot idle"></span>${esc(live?.title || 'Waiting')}</div>`;
@@ -65,7 +65,7 @@ export function render(app) {
           .map(([n, l, k]) => `<div title="from palduels.com">${icon(k, 18)}<b>${fmt(n)}</b><small>${l}</small></div>`)
           .join('')}</div></div>`
       : '';
-    const hero = `<div class="panel offair"><div><b>${live?.error ? 'Can’t reach PalDuels' : between ? 'Between duels' : 'Off air'}</b><span>${last}</span>
+    const hero = `<div class="panel offair"><div><b>${live?.error ? feedProblem(live.error)[0] : between ? 'Between duels' : 'Off air'}</b><span>${live?.error ? feedProblem(live.error)[1] : last}</span>
       <small>Every call stands on stats, types, moves and this history, never on chat.</small></div>${known}</div>`;
     const days = o?.days?.length
       ? `<div class="panel col lstreams"><div class="ph"><h3>Recent streams</h3><span>calls right, one bar per stream${all != null ? ` · dashed: all time ${pct(all)}` : ''}</span></div>${columns(

@@ -11,12 +11,16 @@ import { columns, empty, icon, ring, signedBar } from '../lib/viz.js';
 // the queue. Off air it's a panel of its own; with a duel up it sits compact under the chat line, two to a row
 function upNext(live, compact) {
   const q = live?.queue || [];
-  if (compact) {
-    const body = q.length
-      ? `<div class="unx">${q.map((x) => `<div class="unr" title="${esc(x.home)} vs ${esc(x.away)}"><span class="unp">#${x.pos}</span><span class="unn">${esc(x.home)} <i>vs</i> ${esc(x.away)}</span></div>`).join('')}</div>`
-      : '<div class="small">Nothing queued: fights show here as chat lines them up.</div>';
-    return `<div class="panel un"><div class="ph"><h3>Up next</h3><span>pals show at the bell</span></div>${body}</div>`;
-  }
+  // during a duel: a strip in the top bar, the next few as chips (pals show at the bell)
+  if (compact)
+    return `<div class="unstrip ml" title="Pals show at the bell"><span class="label">Up next</span>${
+      q.length
+        ? q
+            .slice(0, 3)
+            .map((x) => `<span class="unc" title="${esc(x.home)} vs ${esc(x.away)}"><i>#${x.pos}</i><span>${esc(x.home)}</span><em>vs</em><span>${esc(x.away)}</span></span>`)
+            .join('') + (q.length > 3 ? `<span class="small">+${q.length - 3}</span>` : '')
+        : '<span class="small">nothing queued</span>'
+    }</div>`;
   const body = q.length
     ? `<div class="fillin">${q.map((x) => `<div class="row"><span>${esc(x.home)} <span class="small">vs</span> ${esc(x.away)}</span><span class="small">#${x.pos}</span></div>`).join('')}</div>`
     : empty('queue', 'Nothing queued', 'Fights show here as chat lines them up.');
@@ -134,7 +138,7 @@ export function render(app) {
   const status = live?.error
     ? `<div class="pill ml" title="${esc(live.error)}"><span class="dot idle"></span>${feedProblem(live.error)[0]}</div>`
     : p
-      ? `<div class="pill ml"><span class="dot"></span>${live.live ? 'Fight on' : 'Picks open'}</div>`
+      ? `${upNext(live, true)}<div class="pill"><span class="dot"></span>${live.live ? 'Fight on' : 'Picks open'}</div>`
       : `<div class="pill ml"><span class="dot idle"></span>${esc(live?.title || 'Waiting')}</div>`;
   if (!p) {
     const r = live?.last_result;
@@ -185,17 +189,16 @@ export function render(app) {
   const chat =
     state.settings?.chat_lines === false
       ? ''
-      : `<div class="panel lchat"><div class="ph"><h3>Say it in chat</h3><span>${voices.length} voices</span></div>
-        <div class="vo" id="vb">${voices.map((v) => `<button class="${v === voice ? 'on' : ''}" data-v="${esc(v)}">${esc(SHORT[v] || v)}</button>`).join('')}</div>
+      : `<div class="panel lchat"><div class="ph"><h3>Chat line</h3><div class="vo" id="vb" aria-label="Voices">${voices.map((v) => `<button class="${v === voice ? 'on' : ''}" data-v="${esc(v)}">${esc(SHORT[v] || v)}</button>`).join('')}</div></div>
         <div class="lq"><div class="q" id="vq">${esc(voiceLine(p, voice, state.settings?.include_chance !== false))}</div><button class="btn sm" id="cp">Copy</button></div></div>`;
   main.innerHTML =
     header(`Live · ${esc(p.title || 'PalDuels')}`, status) +
     (d
-      ? headline(d, { ...bet(p, live.stake, command), chance: p.prob }) +
+      ? headline(d, { ...bet(p, live.stake, command), chance: p.prob }).replace('class="stage cstage', 'class="stage cstage lhead') +
         `<div class="cgrid lgrid grow">
           <div class="stackc">${hpRace(p)}${headToHead(p)}</div>
-          <div class="stackc">${waterfall(d)}</div>
-          <div class="stackc">${tape(d)}${chat}${upNext(live, true)}</div>
+          <div class="stackc">${waterfall(d, '')}${chat}</div>
+          <div class="stackc">${tape(d)}</div>
         </div>`
       : `<div class="panel col grow">${empty('eye', 'Working out the call', 'The breakdown shows as soon as Augur has made it.')}</div>`);
   // a panel with more below fades out at its foot, until it's scrolled to the end

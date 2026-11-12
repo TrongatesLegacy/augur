@@ -304,6 +304,10 @@ const MAIN_DRIVER: &str = r#"
 (async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   for (let i = 0; i < 60 && !window.augur; i++) await sleep(100);
+  // the report's window loses some height to Chrome's toolbar; the app is laid out at the screenshots' full height
+  // (the app zooms so it always has at least 720 to work with), so the checks see what the window shows
+  const vh = new URLSearchParams(location.search).get('vh');
+  if (vh) document.querySelector('.shell')?.style.setProperty('height', `${vh}px`);
   const out = {};
   const only = (location.hash.match(/tab=(\w+)/) || [])[1];
   // text that spills out of its box: content wider than the element, unless it scrolls or trims with "…"
@@ -365,6 +369,13 @@ const MAIN_DRIVER: &str = r#"
       // "welcome" is the fresh install's overlay, over Live
       await window.augur.show(['bets', 'call'].includes(tab) ? 'history' : ['staking', 'sync', 'changelog', 'updates', 'ownmodel'].includes(tab) ? 'settings' : ['welcome', 'offair', 'liveedge'].includes(tab) ? 'live' : ['titles', 'titlesone'].includes(tab) ? 'you' : tab);
       await sleep(300);
+      // the page and every box in it that scrolls (its panel's title, and how much it holds against what shows)
+      const scrolling = () =>
+        [...document.querySelectorAll('#main, #main *')]
+          .filter((el) => /auto|scroll/.test(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight + 2)
+          .map((el) => `${el.closest('.panel')?.querySelector('h3')?.textContent || el.className}: ${el.clientHeight} of ${el.scrollHeight}px`);
+      out.scrollers ||= {};
+      out.scrollers[tab] = scrolling();
       if (tab === 'bets') out.betRows = document.querySelectorAll('#main tr[data-call]').length;
       // Updates' panels don't run into each other, and their text stays inside them (the changelog scrolls in its own)
       if (tab === 'updates' || tab === 'changelog') {
@@ -379,8 +390,7 @@ const MAIN_DRIVER: &str = r#"
       }
       if (tab === 'live' || tab === 'liveedge') {
         // the head to head and the HP race keep everything inside their panels (a list scrolls inside its own box),
-        // and the race's end labels apart. The report's window is shorter than the screenshots' (Chrome's toolbar
-        // takes its share), so this holds in a short window too
+        // and the race's end labels apart
         const inside = (panel) => !!panel && [...panel.querySelectorAll('*')].every((el) => {
           if (el.parentElement.closest('.fillin')) return true;
           const [r, b] = [el.getBoundingClientRect(), panel.getBoundingClientRect()];
@@ -401,6 +411,7 @@ const MAIN_DRIVER: &str = r#"
         await sleep(400);
         out.chart = { lines: document.querySelectorAll('.hpc path.line').length, proj: document.querySelectorAll('.hpc path.proj').length, hits: document.querySelectorAll('.hpc circle').length, ko: !!document.querySelector('.hpc .ko') };
         out.fits = document.getElementById('main').scrollHeight <= document.getElementById('main').clientHeight + 1;
+        out.scrollers[tab] = scrolling();
       }
       const visible = () => [...document.querySelectorAll('.tgrp')].filter((g) => !g.hidden).map((g) => g.querySelector('h4').textContent);
       if (tab === 'titlesone') {
@@ -408,7 +419,19 @@ const MAIN_DRIVER: &str = r#"
         await sleep(100);
         out.titlesShown = visible();
       }
-      if (tab === 'titles') out.titlesAll = visible().length;
+      if (tab === 'titles') {
+        out.titlesAll = document.querySelectorAll('.tmap:not([hidden]) .mrow').length;
+        // every category's cards, a tab at a time (All is the map), then back to All for the screenshot
+        const cats = [];
+        for (const b of document.querySelectorAll('.tcat[data-tg]:not([data-tg="all"])')) {
+          b.click();
+          await sleep(30);
+          cats.push(document.querySelector('.tall').closest('.panel').innerText);
+        }
+        out.titlesCats = cats.join('\n');
+        document.querySelector('.tcat[data-tg="all"]').click();
+        await sleep(30);
+      }
       out[tab] = document.getElementById('main').innerText;
       out.spills[tab] = spills();
       if (tab === 'live' || tab === 'liveedge') {
@@ -503,7 +526,7 @@ fn render_at(port: u16, name: &str, shot: Option<(&Path, &str)>, (w, h): (u32, u
     let mut c = Command::new(&chrome);
     base(&mut c);
     // the report is read at the same window size as the screenshots, so layout checks see what they show
-    let out = c.arg(format!("--window-size={w},{h}")).arg("--dump-dom").arg(&url).output().expect("run Chrome");
+    let out = c.arg(format!("--window-size={w},{h}")).arg("--dump-dom").arg(format!("{url}?vh={h}")).output().expect("run Chrome");
     let dom = String::from_utf8_lossy(&out.stdout);
     let report = dom.split("<pre id=\"report\" style=\"display:none\">").nth(1).and_then(|s| s.split("</pre>").next()).unwrap_or("");
     let report = html_unescape(report);
@@ -643,16 +666,18 @@ fn every_tab_renders_headless() {
         text("live").contains("how augur called it")
             && text("live").contains("counts most for wumpo")
             && text("live").contains("together")
-            && text("live").contains("move power")
-            && text("live").contains("the model it’s using"),
+            && text("live").contains("move power"),
         "how Augur is calling it: {}",
         text("live")
     );
     assert!(!text("live").contains("won anyway") && !text("live").contains("counted most"), "nothing's been won yet: {}", text("live"));
+    // the model's settings are in a duel's breakdown and on Model; Live keeps its room for the fight
     assert!(
-        ["tale of the tape", "rolls", "projected hp race", "head to head", "say it in chat", "up next"]
-            .iter()
-            .all(|x| text("live").contains(x)),
+        !text("live").contains("the model it’s using") && text("call").contains("model used"),
+        "Live leaves the settings to the breakdown"
+    );
+    assert!(
+        ["tale of the tape", "rolls", "projected hp race", "head to head", "chat line", "up next"].iter().all(|x| text("live").contains(x)),
         "Live's panels: {}",
         text("live")
     );
@@ -723,6 +748,12 @@ fn every_tab_renders_headless() {
     );
     assert!(r["callBack"].as_str().unwrap().to_lowercase().contains("calibration"), "Back returns to the calls");
     assert_eq!(r["callBackRange"], json!("today"), "in the range it was in");
+    // everything fits at 1280x720 without a box scrolling inside it, even in the report's shorter window: only the
+    // lists that grow without end (History's calls and your bets) scroll
+    for (tab, boxes) in r["scrollers"].as_object().unwrap() {
+        let allowed = ["history", "bets"].contains(&tab.as_str());
+        assert!(allowed || boxes.as_array().unwrap().is_empty(), "{tab}: boxes scroll inside it: {boxes}");
+    }
     assert!(r["betRows"].as_u64().unwrap() > 0, "Your bets rows with a call open its breakdown too");
     for tab in ["updates", "changelog"] {
         assert_eq!(r[format!("{tab}Apart")], true, "{tab}: the Updates panels overlap or spill");
@@ -747,21 +778,21 @@ fn every_tab_renders_headless() {
             && text("titles").contains("closest to unlock")
             && text("titles").contains("every title")
             && text("titles").contains("in the pit")
-            && text("titles").contains("send your pal in and win fights.")
             && text("titles").contains("tournaments"),
         "Titles: {}",
         text("titles")
     );
-    // a ladder's steps, a crown's holder, the element ring and a locked title's progress
+    // each category's tab: its blurb, a ladder's steps, a crown's holder, the element ring and a locked title's progress
+    let cats = r["titlesCats"].as_str().unwrap_or("").to_lowercase();
     assert!(
-        text("titles").contains("pit regular")
-            && text("titles").contains("held by player-44")
-            && text("titles").contains("nobody holds it yet")
-            && text("titles").contains("dragon")
-            && text("titles").contains("312/400")
-            && text("titles").contains("sparring bag"),
-        "Titles: {}",
-        text("titles")
+        cats.contains("send your pal in and win fights.")
+            && cats.contains("pit regular")
+            && cats.contains("held by player-44")
+            && cats.contains("nobody holds it yet")
+            && cats.contains("dragon")
+            && cats.contains("312/400")
+            && cats.contains("sparring bag"),
+        "Titles, category by category: {cats}"
     );
     assert!(!text("titles").contains("your balance"), "Titles is its own view: {}", text("titles"));
     assert!(

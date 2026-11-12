@@ -25,7 +25,7 @@ function card(t, ctx) {
     const mine = t.holders.some((h) => key(h) === key(ctx.me));
     return `<div class="tc tcrown ${mine ? 'got' : ''}" title="${esc(t.about)}"><span class="tci">♛</span>
       <div class="tcb"><b>${esc(t.name)}</b><small>${esc(t.about)}</small>
-        <span class="thold">${t.holders.length ? (mine ? 'You hold it' : `${face(t.holders[0], 'av', 18)}<span>Held by <b>${esc(t.holders.join(', '))}</b></span>`) : '<span>Nobody holds it yet</span>'}</span></div>
+        <span class="thold">${t.holders.length ? (mine ? 'You hold it' : `${face(t.holders[0], 'av', 16)}<span>Held by <b>${esc(t.holders.join(', '))}</b></span>`) : '<span>Nobody holds it yet</span>'}</span></div>
       <span class="tcs">Crown</span></div>`;
   }
   const state = t.earned ? 'got' : t.progress ? 'prog' : 'dim';
@@ -79,6 +79,33 @@ function group(g, i, ctx) {
     <div class="tcards">${titles.map((t) => card(t, ctx)).join('')}</div></section>`;
 }
 
+// how far along a title is, 0 to 1: a ladder or the ring by its steps
+function done(t) {
+  if (t.earned) return 1;
+  if (t.steps.length) return t.steps.filter((s) => s.earned).length / t.steps.length;
+  return share(t.progress);
+}
+
+const MAP_ICON = { ladder: '⇧', ring: '◎', crown: '♛' };
+
+// All: every category as one row of tokens, each title's progress a ring round its icon. A row opens its category
+function titleMap(groups, ctx) {
+  return `<div class="tmap">${groups
+    .map((g, i) => {
+      const [n, m] = g.earned || [0, 0];
+      return `<button class="mrow" data-go="${i}" title="Open ${esc(g.name)}"><span class="mh"><b>${esc(g.name)}</b><small class="${m && n === m ? 'ok' : ''}">${fmt(n)}/${fmt(m)}</small></span>
+        <span class="mtoks">${g.titles
+          .map((t) => {
+            const f = done(t);
+            const rare = ctx.badges.get(key(t.name))?.rare;
+            const what = t.earned ? 'earned' : t.steps.length ? `${t.steps.filter((x) => x.earned).length} of ${t.steps.length}` : t.progress ? `${fmt(t.progress[0])} of ${fmt(t.progress[1])}` : 'locked';
+            return `<span class="mt ${t.earned ? 'got' : f ? 'part' : ''} ${rare ? 'rare' : ''}" style="--p:${f.toFixed(3)}" title="${esc(t.name)} · ${what}"><i>${esc(t.icon || MAP_ICON[t.kind] || '★')}</i></span>`;
+          })
+          .join('')}</span><span class="mgo">›</span></button>`;
+    })
+    .join('')}</div>`;
+}
+
 export function titlesView(y) {
   const pg = y.page;
   const groups = pg.groups || [];
@@ -102,21 +129,25 @@ export function titlesView(y) {
         .map((q) => `<div class="hbar" title="${esc(q.about)}"><span><i class="tqi">${esc(q.icon)}</i>${esc(q.name)}</span><b>${count([q.have, q.need])}</b><div class="b"><i style="width:${(100 * share([q.have, q.need])).toFixed(1)}%"></i></div></div>`)
         .join('')}</div></div>`
     : '';
-  const mine = `<div class="panel col grow"><div class="ph"><h3>Earned</h3><span>rarest first</span></div>
-    <div class="tearned fillin">${
+  const mine = `<div class="panel col grow"><div class="ph"><h3>Earned</h3><span>rarest first · how many hold it</span></div>
+    <div class="tearned">${
       earned.length
         ? earned
+            .slice(0, EARNED_HERE)
             .map((b) => {
               const held = heldBy(b);
-              return `<div class="ter ${b.rare ? 'rare' : ''}" title="${esc(b.about)}"><span class="tci">${esc(b.icon)}</span><div><b>${esc(b.name)}${b.times ? ` <em>×${fmt(b.times)}</em>` : ''}</b><small>${held ? `held by ${fmt(held)}` : esc(b.about)}</small></div>${b.rare ? '<span class="trare">Rare</span>' : ''}</div>`;
+              return `<div class="ter ${b.rare ? 'rare' : ''}" title="${esc(b.about)}${held ? ` · held by ${fmt(held)}` : ''}"><span class="tci">${esc(b.icon)}</span><b>${esc(b.name)}${b.times ? ` <em>×${fmt(b.times)}</em>` : ''}</b>${held ? `<small>${fmt(held)}</small>` : ''}</div>`;
             })
-            .join('')
+            .join('') + (earned.length > EARNED_HERE ? `<div class="ter more">+${fmt(earned.length - EARNED_HERE)} more: every one is lit in All</div>` : '')
         : empty('star', 'None yet', 'Win duels and picks to earn them.')
     }</div></div>`;
   const all = `<div class="panel col"><div class="ph"><h3 class="tall-h">Every title</h3><span class="tall-n" data-all="${groups.length ? `${fmt(groups.length)} categories` : ''}">${groups.length ? `${fmt(groups.length)} categories` : ''}</span></div>
-    <div class="tall fillin">${groups.length ? groups.map((g, i) => group(g, i, ctx)).join('') : empty('star', 'Not read yet', 'Augur reads every title with your profile, next time it reads your picks.')}</div></div>`;
+    <div class="tall">${groups.length ? titleMap(groups, ctx) + groups.map((g, i) => group(g, i, ctx)).join('') : empty('star', 'Not read yet', 'Augur reads every title with your profile, next time it reads your picks.')}</div></div>`;
   return `${hero}<div class="tgrid grow"><div class="stackc">${closest}${mine}</div>${all}</div>`;
 }
+
+// the Earned list holds this many (two columns); All lights up every one
+const EARNED_HERE = 16;
 
 // the category buttons are tabs: one category at a time, or all of them (remembered while the app is open)
 let chosen = 'all';
@@ -129,17 +160,19 @@ export function wire(main) {
       b.classList.toggle('on', b.dataset.tg === chosen);
       b.setAttribute('aria-selected', b.dataset.tg === chosen);
     });
-    main.querySelectorAll('.tgrp').forEach((g) => (g.hidden = chosen !== 'all' && g.id !== `tg${chosen}`));
+    main.querySelectorAll('.tgrp').forEach((g) => (g.hidden = g.id !== `tg${chosen}`));
+    const map = main.querySelector('.tmap');
+    if (map) map.hidden = chosen !== 'all';
     const list = main.querySelector('.tall');
-    if (list) list.scrollTop = 0;
     const head = main.querySelector('.tall-h');
     const g = chosen === 'all' ? null : main.querySelector(`#tg${chosen}`);
     if (head) head.textContent = g ? g.querySelector('h4').textContent : 'Every title';
     // one category: its name is the panel's title, so its own heading row keeps just the blurb and the count
     list?.classList.toggle('one', !!g);
     const note = main.querySelector('.tall-n');
-    if (note) note.textContent = g ? `${g.querySelector('.tgc').textContent} earned` : note.dataset.all;
+    if (note) note.textContent = g ? [g.querySelector('.tgh small')?.textContent, `${g.querySelector('.tgc').textContent} earned`].filter(Boolean).join(' · ') : note.dataset.all;
   };
   tabs.forEach((b) => (b.onclick = () => show(b.dataset.tg)));
+  main.querySelectorAll('.mrow[data-go]').forEach((r) => (r.onclick = () => show(r.dataset.go)));
   show(chosen);
 }

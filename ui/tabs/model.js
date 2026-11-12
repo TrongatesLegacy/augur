@@ -68,7 +68,7 @@ export async function render(app) {
         l
           ? `<div class="lrn"><div><b class="cond">${fmt(l.past_duels)}</b><small>past duels</small></div><div><b class="cond">${fmt(l.live_calls)}</b><small>real calls</small></div><div><b class="cond ${gain > 0 ? 'ok' : ''}">${(c.past_right_after * 100).toFixed(1)}%</b><small>right on the ${fmt(c.past_n)} newest${gain > 0 ? `, up ${(gain * 100).toFixed(1)}` : ''}</small></div></div>
              ${erasBlock(m.eras)}
-             <div class="small" style="color:var(--t2);margin-top:8px">Re-fits every setting after each result (and every 25 duels the backfill brings in), and keeps a change only if it predicts the newest duels better than before.</div>`
+             <div class="small lrnhow">Re-fits after each result; keeps a change only if it predicts the newest duels better.</div>`
           : `<div class="small" style="color:var(--t2)">Augur re-fits its settings on your duels and calls a minute after it starts, then whenever new results come in.</div>`
       }</div>`;
   const bt = m.backtest;

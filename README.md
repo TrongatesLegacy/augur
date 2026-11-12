@@ -6,7 +6,7 @@
 
 Calls the [PalDuels](https://palduels.com/live) fights (chat-run Palworld duels on a Kick stream) before the bell, and keeps score.
 
-Augur lives in the menu bar (macOS) or the tray (Windows). The menu bar shows the favourite and its chance; on Windows the tray icon is a gold ring filled to the chance around a dot in the favourite's colour. Click it for the call: the pick, why, the stats, and the chat line in five voices with a copy button. The main window has the rest: Live, History, Pals, Players (pal boxes and reroll advice), Model and Settings.
+Augur lives in the menu bar (macOS) or the tray (Windows). The menu bar shows the favourite and its chance; on Windows the tray icon is a gold ring filled to the chance around a dot in the favourite's colour. Click it for the call: the pick, why, the stats, the bet to type (`!h`, `!h 2300` or `!h all`) and the chat line in five voices, each with a copy button. The main window has the rest: Live, History (Augur's calls, and your bets next to them), Pals, Players (pal boxes and reroll advice), Model and Settings.
 
 Built with [Tauri 2](https://tauri.app): a Rust engine and a small web page for the screens. About 9 MB.
 
@@ -14,11 +14,11 @@ Built with [Tauri 2](https://tauri.app): a Rust engine and a small web page for 
 
 | Path | What it is |
 |---|---|
-| `engine/` | Everything that isn't the desktop app (`augur-engine`): fetching and parsing palduels.com (`site`), the model (`model`), the SQLite store (`db`), a whole prediction (`predict`), the background backfill (`backfill`), the chat voices (`voices`), the calls file (`calls`), what the history says (`history`) and the test seed (`seed`). |
+| `engine/` | Everything that isn't the desktop app (`augur-engine`): fetching and parsing palduels.com (`site`), the model (`model`), the SQLite store (`db`), a whole prediction (`predict`), the background backfill (`backfill`), the chat voices (`voices`), the calls file (`calls`), what the history says (`history`), the stake to suggest (`stake`), your bets and how following Augur compares (`bets`) and the test seed (`seed`). |
 | `app/` | The desktop app and command line (`augur`): tray, windows, sync loop, encrypted sign-in (`secure.rs`), settings, what each page is sent (`views.rs`), headless UI tests (`ui_tests.rs`). |
 | `ui/` | The pages, as ES modules with no build step: `index.html` + `main.js` (main window), `tray.html` + `tray.js` (popover), `lib/` (shared pieces), `tabs/` (one file per tab), `style.css`. |
 | `fixtures/calls.jsonl` | 19 made-up calls (real species, invented fighters, owners and results) in the calls-file format, with the model's expected numbers. Test data only: your own calls stay in your data folder. |
-| `engine/tests/pages/` | Saved palduels.com pages the tests parse. |
+| `engine/tests/pages/` | Saved palduels.com pages the tests parse, with placeholder players. The picks pages are made-up bets in the signed-in picks list's markup. |
 | `assets/` | The logo and tray icon sources. `app/icons/` is generated from `assets/icon.png` (`cargo tauri icon`). |
 | `scripts/` | The release scripts the build workflow runs. |
 
@@ -27,7 +27,7 @@ Built with [Tauri 2](https://tauri.app): a Rust engine and a small web page for 
 ```sh
 cargo run -p augur                 # the app
 cargo run -q -p augur -- predict   # the duel that's up now, from the command line
-cargo run -q -p augur -- --help    # predict, backfill, import, export, analyse, tune, status
+cargo run -q -p augur -- --help    # predict, backfill, import, export, analyse, tune, bets, status
 ```
 
 The app and the command line share one data folder: `~/Library/Application Support/Augur` on macOS, `%APPDATA%\Augur` on Windows (`AUGUR_DATA_DIR` overrides it). It holds `augur.db`, `settings.json`, the pal art cache and the encrypted sign-in.
@@ -44,7 +44,8 @@ On first launch the store is empty: live calls work straight away, and in the ba
 | `hits` | Hit on a duel's tape: side, time, move, damage as % of the target's HP. |
 | `species` | Species: types, the ladder's power rating, base HP, Attack and Defence. |
 | `species_moves` | Species' listed move: element, power, unlock level. |
-| `meta` | Small state: backfill progress, the signed-in account's name. |
+| `bets` | Your bet, from your picks list (signed in): its place in your history, the duel (recent ones), the side backed, stake and result. |
+| `meta` | Small state: backfill progress, the signed-in account's name, your last balance, when the picks list was read. |
 
 ## How the model works
 
@@ -53,6 +54,18 @@ On first launch the store is empty: live calls work straight away, and in the ba
 3. **Records:** the species' win/loss records and past fights between the two species shift that chance on the log-odds scale, each pulled toward 50% so small samples barely move it.
 
 Hidden stats (an owner with several of the pal) are estimated from base stats at an average IV until the bell. The crowd's picks are never used.
+
+## Bets
+
+Augur never bets for you: it suggests a stake and the chat command, and you type it. Settings > Staking picks how:
+
+- **Kelly** (the default, a quarter of it): bet a share of your balance that grows with the edge, and sit out calls with none. The payout is the median of your own recent wins (the site shows no odds or crowd split before a fight), so at a typical 0.45 a credit a call needs about 69% to be worth a bet.
+- **Fixed amount** on every call.
+- **Default or max:** the max (`!h all`) from a chance you choose (70% to start), the default bet (a bare `!h`) below it.
+
+The limits (100 to 5,000, 500 for a bare command) are settings because the site doesn't publish them. "Type the max as all" keeps `!h all` right if the stream changes the max.
+
+Signed in, Augur reads your picks list (only shown to you, 5 bets a page): all of it once, a page at a time and paused while a duel is up, then just what's new every few minutes. History > Your bets lines your bets up with Augur's calls: **Followed** (you backed Augur's pick, at any stake), **Deviated** (the other side, or a bet when Augur said sit out), **Missed** (no bet on a call Augur would have bet on: kept out of the comparison and totalled on their own) and **No call**. "Augur's way" uses the stake Augur suggested at the time: on the side you backed it's your real payout scaled to that stake; a win on the other side is an estimate at your usual payout.
 
 ## Tests
 

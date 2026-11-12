@@ -1,13 +1,15 @@
 //! The desktop app: the tray (pick in the menu bar on macOS, a confidence ring on Windows), the popover, the main
-//! window, the live sync loop, the background backfill and the commands the pages call.
+//! window, the live sync loop, the background backfill, the bets import and the commands the pages call.
 
 use crate::secure;
 use crate::settings::{self, AppSettings};
-use crate::views::{self, civil_date, HistoryView, LastResult, LiveView, ModelView, PlayerView};
+use crate::views::{self, civil_date, BetsView, HistoryView, LastResult, LiveView, ModelView, PlayerView};
 use augur_engine::backfill::{self, Progress};
+use augur_engine::bets;
 use augur_engine::history::{self, Backtest};
 use augur_engine::predict;
 use augur_engine::site::{self, State};
+use augur_engine::stake::{self, Stake};
 use augur_engine::{db, model, rusqlite};
 use base64::Engine;
 use serde::Serialize;
@@ -29,6 +31,10 @@ pub struct Shared {
     pub settings: Mutex<AppSettings>,
     pub live: Mutex<LiveView>,
     pub backfill: Mutex<Progress>,
+    /// the picks list import
+    pub bets: Mutex<Progress>,
+    /// read the picks list now (a result came in, or the developer asked)
+    pub bets_now: AtomicBool,
     pub backtest: Mutex<Option<(model::Settings, Backtest)>>,
     pub rosters: Mutex<HashMap<String, (Instant, Vec<site::BoxPal>)>>,
     pub busy: AtomicBool,
@@ -44,6 +50,11 @@ impl Shared {
 
 fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+/// The stake for a call: the staking settings, the payout the developer's wins have had and their last balance.
+fn stake_for(conn: &rusqlite::Connection, settings: &AppSettings, pick: &str, prob: f64) -> Stake {
+    stake::suggest(pick, prob, &settings.staking, &bets::odds(conn).unwrap_or_default(), bets::balance(conn))
 }
 
 /// A 32px tray icon: a gold ring filled to the chance around a dot in the favourite's colour (cyan home, pink away).
@@ -85,10 +96,16 @@ fn update_tray(app: &AppHandle, shared: &Shared) {
     let Some(tray) = shared.tray.lock().unwrap().clone() else { return };
     let live = shared.live.lock().unwrap().clone();
     let show = shared.settings.lock().unwrap().tray_pick;
+    let bet = live.stake.as_ref().filter(|s| !s.command.is_empty()).map(|s| format!(" · {}", s.command)).unwrap_or_default();
     let (title, tip) = match &live.prediction {
         Some(p) => (
             format!("{} {:.0}%", p.favourite().pal, p.prob * 100.0),
-            format!("Augur · {} {:.0}% · {}", p.favourite().pal, p.prob * 100.0, if live.picks_open { "picks open" } else { "fight on" }),
+            format!(
+                "Augur · {} {:.0}%{bet} · {}",
+                p.favourite().pal,
+                p.prob * 100.0,
+                if live.picks_open { "picks open" } else { "fight on" }
+            ),
         ),
         None => (String::new(), format!("Augur · {}", if live.title.is_empty() { "no duel up" } else { &live.title })),
     };
@@ -119,6 +136,7 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
                 if let Ok(conn) = shared.db() {
                     if let Ok(settled) = db::settle(&conn, &state.recent, |id| site::duel(id).ok()) {
                         if !settled.is_empty() {
+                            shared.bets_now.store(true, Ordering::Relaxed);
                             if let Some(c) = db::settled(&conn).ok().and_then(|all| all.into_iter().rev().find(|c| settled.contains(&c.id)))
                             {
                                 let winner_pal = if c.winner.as_deref() == Some("home") { c.home_pal.clone() } else { c.away_pal.clone() };
@@ -164,13 +182,19 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
                             &state,
                             &predict::Options { lookups: true, db_path: settings::db_path(&shared.dir), settings: settings.model.clone() },
                         );
-                        if let Some(p) = &p {
-                            let _ = db::add_call(&conn, &p.to_call());
+                        let stake = p.as_ref().map(|p| stake_for(&conn, &settings, &p.pick, p.prob));
+                        if let (Some(p), Some(st)) = (&p, &stake) {
+                            if let Ok(id) = db::add_call(&conn, &p.to_call()) {
+                                let _ = db::set_call_stake(&conn, id, st.amount, &st.command);
+                            }
                             if settings.notify_new_pick && !last_key.starts_with(&format!("{}|{}|", p.home.owner, p.away.owner)) {
-                                notify(&app, &format!("{} {:.0}%", p.favourite().pal, p.prob * 100.0), &p.lines[0]);
+                                let bet = if st.command.is_empty() { String::new() } else { format!(" · {}", st.command) };
+                                notify(&app, &format!("{} {:.0}%{bet}", p.favourite().pal, p.prob * 100.0), &p.lines[0]);
                             }
                         }
-                        shared.live.lock().unwrap().prediction = p;
+                        let mut live = shared.live.lock().unwrap();
+                        live.prediction = p;
+                        live.stake = stake;
                         last_key = key;
                     }
                     let today = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
@@ -227,6 +251,42 @@ fn backfill_loop(app: AppHandle, shared: Arc<Shared>) {
     }
 }
 
+/// Reads the developer's picks list (signed in) every 5 minutes and soon after each result: the first time all of it,
+/// a page at a time, pausing while a duel is up; afterwards only what's new.
+fn bets_loop(app: AppHandle, shared: Arc<Shared>) {
+    std::thread::sleep(Duration::from_secs(30));
+    let mut pacer = backfill::Pacer::new(Duration::from_millis(1000));
+    while !shared.stop.load(Ordering::Relaxed) {
+        shared.bets_now.store(false, Ordering::Relaxed);
+        let on = shared.settings.lock().unwrap().import_bets;
+        let conn = shared.db().ok();
+        let user = conn.as_ref().and_then(|c| db::meta_get(c, "account").ok().flatten()).filter(|u| !u.is_empty());
+        if let (true, Some(conn), Some(user), Some(cookie)) = (on, conn, user, secure::load(&shared.dir)) {
+            pacer.cookie = Some(cookie);
+            let busy = || shared.busy.load(Ordering::Relaxed);
+            let progress = |p: &Progress| {
+                *shared.bets.lock().unwrap() = p.clone();
+                let _ = app.emit("bets", p);
+            };
+            let ctl = backfill::Control { stop: &shared.stop, busy: &busy, progress: &progress };
+            let mut page = |n: u32, p: &mut Progress| pacer.get(&format!("{}/u/{user}?bp={n}", site::BASE), |b| b.to_string(), &ctl, p);
+            let outcome = bets::import(&conn, &mut page, &ctl, now_ms());
+            let mut p = shared.bets.lock().unwrap();
+            p.phase = "done".into();
+            p.last_error = outcome.err().map(|e| e.to_string());
+            let _ = app.emit("bets", &*p);
+        }
+        let end = Instant::now() + Duration::from_secs(300);
+        while Instant::now() < end && !shared.stop.load(Ordering::Relaxed) && !shared.bets_now.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_secs(1));
+        }
+        // a result shows in the picks list a little after the duel ends
+        if shared.bets_now.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_secs(20));
+        }
+    }
+}
+
 fn toggle_popover(app: &AppHandle) {
     let Some(w) = app.get_webview_window("tray") else { return };
     if w.is_visible().unwrap_or(false) {
@@ -265,6 +325,18 @@ fn live(shared: tauri::State<'_, Arc<Shared>>) -> LiveView {
 async fn history(shared: tauri::State<'_, Arc<Shared>>, range: String) -> Cmd<HistoryView> {
     let s = shared.settings.lock().unwrap().model.clone();
     views::history_view(&shared.db()?, &s, &range, now_ms() / 1000).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn bets_view(shared: tauri::State<'_, Arc<Shared>>, range: String) -> Cmd<BetsView> {
+    let staking = shared.settings.lock().unwrap().staking.clone();
+    let import = shared.bets.lock().unwrap().clone();
+    views::bets_view(&shared.db()?, &staking, &range, now_ms() / 1000, import).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn import_bets(shared: tauri::State<'_, Arc<Shared>>) {
+    shared.bets_now.store(true, Ordering::Relaxed);
 }
 
 #[tauri::command]
@@ -313,6 +385,18 @@ fn save_settings(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>, settings
     settings.save(&shared.dir)?;
     let autostart = app.autolaunch();
     let _ = if settings.launch_at_login { autostart.enable() } else { autostart.disable() };
+    // the staking settings may have changed: re-work the stake for the call that's up
+    if let Ok(conn) = shared.db() {
+        let mut live = shared.live.lock().unwrap();
+        if let Some(p) = live.prediction.clone() {
+            let st = stake_for(&conn, &settings, &p.pick, p.prob);
+            if let Ok(Some(id)) = db::open_call(&conn, &p.home.owner, &p.away.owner) {
+                let _ = db::set_call_stake(&conn, id, st.amount, &st.command);
+            }
+            live.stake = Some(st);
+        }
+        let _ = app.emit("live", &*live);
+    }
     *shared.settings.lock().unwrap() = settings;
     update_tray(&app, &shared);
     Ok(())
@@ -394,6 +478,7 @@ fn sign_in(app: AppHandle) -> Cmd<()> {
                     if let Ok(conn) = shared.db() {
                         let _ = db::meta_set(&conn, "account", &name);
                     }
+                    shared.bets_now.store(true, Ordering::Relaxed);
                     let _ = handle.emit("account", &name);
                     let _ = w.close();
                 }
@@ -421,6 +506,8 @@ pub fn run() {
         dir,
         live: Mutex::new(LiveView::default()),
         backfill: Mutex::new(Progress::default()),
+        bets: Mutex::new(Progress::default()),
+        bets_now: AtomicBool::new(false),
         backtest: Mutex::new(None),
         rosters: Mutex::new(HashMap::new()),
         busy: AtomicBool::new(false),
@@ -435,6 +522,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             live,
             history,
+            bets_view,
+            import_bets,
             species_list,
             species,
             player,
@@ -507,6 +596,8 @@ pub fn run() {
             std::thread::spawn(move || sync_loop(h1, s1));
             let (h2, s2) = (app.handle().clone(), shared.clone());
             std::thread::spawn(move || backfill_loop(h2, s2));
+            let (h3, s3) = (app.handle().clone(), shared.clone());
+            std::thread::spawn(move || bets_loop(h3, s3));
             Ok(())
         })
         .run(tauri::generate_context!())

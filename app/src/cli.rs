@@ -1,7 +1,7 @@
 //! `augur <command>`: the engine from the command line, sharing the app's data folder. The Claude skills use this.
 
 use crate::settings::{self, AppSettings};
-use augur_engine::{backfill, calls, db, history, model, predict, rusqlite, site};
+use augur_engine::{backfill, bets, calls, db, history, model, predict, rusqlite, site, stake};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -45,6 +45,8 @@ pub enum Command {
     /// Re-test model settings on the real calls: SETTING=v1,v2 ... (TYPE_BONUS, TYPE_RESIST, POWER_EXP,
     /// STATS_STEEPNESS, SPECIES_WEIGHT, PAL_H2H_WEIGHT). Changes nothing.
     Tune { grid: Vec<String> },
+    /// Your bets next to Augur's calls (from the picks list the app reads when you're signed in).
+    Bets,
     /// Where the data lives and how much of it there is.
     Status,
 }
@@ -68,13 +70,18 @@ pub fn run(cli: Cli) -> CliResult {
             ) {
                 None => println!("No duel up right now ({}).", if state.title.is_empty() { "idle" } else { &state.title }),
                 Some(p) => {
+                    let st = stake::suggest(&p.pick, p.prob, &app.staking, &bets::odds(&conn)?, bets::balance(&conn));
                     if saved.is_none() {
-                        db::add_call(&conn, &p.to_call())?;
+                        let id = db::add_call(&conn, &p.to_call())?;
+                        db::set_call_stake(&conn, id, st.amount, &st.command)?;
                     }
                     if json {
-                        println!("{}", serde_json::to_string_pretty(&p).unwrap());
+                        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "prediction": p, "stake": st })).unwrap());
                     } else {
                         println!("{}", predict::report(&p));
+                        let bet =
+                            if st.command.is_empty() { "no bet".to_string() } else { format!("{} ({} credits)", st.command, st.amount) };
+                        println!("\n  STAKE: {bet}. {}", st.why);
                     }
                 }
             }
@@ -113,6 +120,26 @@ pub fn run(cli: Cli) -> CliResult {
         }
         Command::Analyse => analyse(&conn, &app.model),
         Command::Tune { grid } => tune(&conn, &app.model, &grid),
+        Command::Bets => {
+            let synced = db::meta_get(&conn, "bets_synced_at")?.and_then(|v| v.parse().ok()).unwrap_or(0);
+            let odds = bets::odds(&conn)?;
+            let c = bets::compare(&db::settled(&conn)?, &db::bets(&conn)?, &app.staking, &odds, bets::balance(&conn), synced);
+            if synced == 0 {
+                println!("No bets read yet: the app reads your picks list once you sign in (Settings > Account).");
+            }
+            println!(
+                "On the calls you bet on: you {:+}, following Augur {:+} ({} followed, {} deviated)",
+                c.yours, c.augur, c.followed, c.deviated
+            );
+            println!("Missed calls (not counted as deviations): {}, worth {:+} with Augur's stakes", c.missed, c.missed_augur);
+            println!("Bets on fights Augur didn't call: {}, {:+}", c.no_call, c.no_call_yours);
+            println!(
+                "Wins pay {:.2} a credit ({})",
+                odds.rate,
+                if odds.wins > 0 { format!("median of {} wins", odds.wins) } else { "assumed".into() }
+            );
+            Ok(())
+        }
         Command::Status => {
             let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0);
             println!("Data folder: {}", dir.display());
@@ -128,6 +155,7 @@ pub fn run(cli: Cli) -> CliResult {
                 count("SELECT COUNT(*) FROM hits")
             );
             println!("Species: {}", count("SELECT COUNT(*) FROM species"));
+            println!("Your bets: {}", count("SELECT COUNT(*) FROM bets"));
             Ok(())
         }
     }

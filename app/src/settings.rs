@@ -1,6 +1,7 @@
 //! The app's settings, kept as JSON next to the database, and where everything lives.
 
 use augur_engine::model::Settings as ModelSettings;
+use augur_engine::stake::StakeSettings;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -36,6 +37,9 @@ pub struct AppSettings {
     pub reroll_cost: Option<u64>,
     /// fetch past duels and tapes in the background (never while a duel is up)
     pub backfill: bool,
+    /// read your picks list (signed in) to track your bets against Augur's calls
+    pub import_bets: bool,
+    pub staking: StakeSettings,
     pub model: ModelSettings,
 }
 
@@ -54,6 +58,8 @@ impl Default for AppSettings {
             reroll_command: String::new(),
             reroll_cost: None,
             backfill: true,
+            import_bets: true,
+            staking: StakeSettings::default(),
             model: ModelSettings::default(),
         }
     }

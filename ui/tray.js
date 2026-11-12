@@ -1,8 +1,9 @@
-// The tray popover: only what's useful at a glance, and the copy button.
+// The tray popover: only what's useful at a glance, and the copy buttons (the bet and the chat line).
 import { invoke, listen } from './lib/bridge.js';
 import { copyText } from './lib/clipboard.js';
 import { esc, pct } from './lib/format.js';
 import { SHORT, dial, pickVoice, tapeRows, voiceLine, whyLine } from './lib/pal.js';
+import { betCommand, stakeLine } from './lib/stake.js';
 
 const el = document.getElementById('pop');
 const state = { view: null, settings: null, voice: null };
@@ -22,9 +23,12 @@ function render() {
     const dog = p.pick === 'home' ? p.away : p.home;
     const { voices, voice } = pickVoice(state.voice, settings);
     state.voice = voice;
+    const command = betCommand(p, view.stake);
+    const bet = view.stake ? stakeLine(view.stake) : `<div class="bet"><div><b>${esc(command)}</b></div></div>`;
     el.innerHTML = `<div class="hd"><span><i></i>${view.live ? 'FIGHT ON' : 'PICKS OPEN'}</span><span class="c">${p.home.estimated || p.away.estimated ? 'STATS AT THE BELL' : esc(p.tale.verdict)}</span></div>
       <div class="call"><div><div class="who">${esc(fav.pal)}</div><div class="vs">over <b>${esc(dog.pal)}</b></div><div class="small">${esc(p.home.owner)} vs ${esc(p.away.owner)}</div><div class="why">${esc(whyLine(p))}</div></div>${dial(p.prob, 84)}</div>
       <div class="stats">${tapeRows(p)}</div>
+      <div class="betrow">${bet}${command ? '<button class="btn ghost" id="cb">Copy bet</button>' : ''}</div>
       <div class="say"><div class="vo" id="vb">${voices.map((v) => `<button class="${v === voice ? 'on' : ''}" data-v="${esc(v)}">${esc(SHORT[v] || v)}</button>`).join('')}</div>
       <div class="q" id="vq">${esc(voiceLine(p, voice, settings?.include_chance !== false))}</div><button class="btn copy" id="cp">Copy for chat</button></div>${foot}`;
     el.querySelectorAll('#vb button').forEach((b) => {
@@ -34,6 +38,7 @@ function render() {
       };
     });
     document.getElementById('cp').onclick = (e) => copyText(document.getElementById('vq').textContent, e.target);
+    document.getElementById('cb')?.addEventListener('click', (e) => copyText(command, e.target));
   }
   document.getElementById('open').onclick = () => invoke('open_window', { tab: 'live' });
 }

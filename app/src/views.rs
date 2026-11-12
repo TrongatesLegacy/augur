@@ -2,9 +2,11 @@
 //! (the data the headless UI tests render) and anything else share one version.
 
 use augur_engine::backfill::Progress;
+use augur_engine::bets::{self, Comparison};
 use augur_engine::history::{self, Backtest};
 use augur_engine::predict::Prediction;
 use augur_engine::site::{BoxPal, QueueItem};
+use augur_engine::stake::{Stake, StakeSettings};
 use augur_engine::{db, model, rusqlite};
 use rusqlite::Connection;
 use serde::Serialize;
@@ -29,6 +31,8 @@ pub struct LiveView {
     pub live: bool,
     pub picks_open: bool,
     pub prediction: Option<Prediction>,
+    /// what to bet on the pick, and the chat command for it
+    pub stake: Option<Stake>,
     pub queue: Vec<QueueItem>,
     pub last_result: Option<LastResult>,
     pub synced_at: u64,
@@ -58,16 +62,24 @@ pub struct HistoryView {
     pub rescored_total: usize,
 }
 
-/// range: "today", "week" or "all"; now_secs: the current Unix time.
-pub fn history_view(conn: &Connection, s: &model::Settings, range: &str, now_secs: u64) -> R<HistoryView> {
-    let all = db::settled(conn)?;
-    let since = match range {
+/// The first day in a range ("today", "week" or "all": None) as YYYY-MM-DD.
+fn since(range: &str, now_secs: u64) -> Option<String> {
+    match range {
         "today" => Some(civil_date(now_secs)),
         "week" => Some(civil_date(now_secs.saturating_sub(7 * 86_400))),
         _ => None,
-    };
-    let calls: Vec<db::CallRecord> =
-        all.into_iter().filter(|c| since.as_deref().is_none_or(|s| c.fought_at.as_deref().unwrap_or("") >= s)).collect();
+    }
+}
+
+/// Settled calls fought in the range.
+fn calls_in(conn: &Connection, range: &str, now_secs: u64) -> R<Vec<db::CallRecord>> {
+    let since = since(range, now_secs);
+    Ok(db::settled(conn)?.into_iter().filter(|c| since.as_deref().is_none_or(|s| c.fought_at.as_deref().unwrap_or("") >= s)).collect())
+}
+
+/// range: "today", "week" or "all"; now_secs: the current Unix time.
+pub fn history_view(conn: &Connection, s: &model::Settings, range: &str, now_secs: u64) -> R<HistoryView> {
+    let calls = calls_in(conn, range, now_secs)?;
     let (_, rescored_right, rescored_total) = history::evaluate(&calls, s);
     let tally = history::tally(&calls, None);
     let mut calls = calls;
@@ -76,6 +88,37 @@ pub fn history_view(conn: &Connection, s: &model::Settings, range: &str, now_sec
         c.fighters = None; // the list doesn't need them
     }
     Ok(HistoryView { tally, calls, rescored_right, rescored_total })
+}
+
+#[derive(Serialize)]
+pub struct BetsView {
+    pub comparison: Comparison,
+    pub balance: Option<u64>,
+    /// when the picks list was last read (ms), None before the first import
+    pub synced_at: Option<u64>,
+    pub stored: usize,
+    pub import: Progress,
+}
+
+/// The developer's bets next to Augur's calls in the range. Bets on fights Augur didn't call count in the range when
+/// their duel's date is known (all of them for "all").
+pub fn bets_view(conn: &Connection, s: &StakeSettings, range: &str, now_secs: u64, import: Progress) -> R<BetsView> {
+    let calls = calls_in(conn, range, now_secs)?;
+    let since = since(range, now_secs);
+    let dates: std::collections::HashMap<u64, Option<String>> = conn
+        .prepare("SELECT b.seq, d.fought_at FROM bets b LEFT JOIN duels d ON d.id = b.duel_id")?
+        .query_map([], |r| Ok((r.get::<_, i64>(0)? as u64, r.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let bets: Vec<_> = db::bets(conn)?
+        .into_iter()
+        .filter(|b| since.as_deref().is_none_or(|s| dates.get(&b.seq).cloned().flatten().is_some_and(|d| d.as_str() >= s)))
+        .collect();
+    let synced_at = db::meta_get(conn, "bets_synced_at")?.and_then(|v| v.parse().ok());
+    let balance = bets::balance(conn);
+    let mut comparison = bets::compare(&calls, &bets, s, &bets::odds(conn)?, balance, synced_at.unwrap_or(0));
+    comparison.fights.truncate(200);
+    let stored = conn.query_row("SELECT COUNT(*) FROM bets", [], |r| r.get::<_, i64>(0))? as usize;
+    Ok(BetsView { comparison, balance, synced_at, stored, import })
 }
 
 #[derive(Serialize)]

@@ -2,6 +2,7 @@
 import { copyText } from '../lib/clipboard.js';
 import { esc, pct } from '../lib/format.js';
 import { SHORT, dial, orb, pickVoice, tapeRows, voiceLine, whyLine } from '../lib/pal.js';
+import { betCommand, stakeLine } from '../lib/stake.js';
 
 function upNext(live, inline) {
   const q = live?.queue || [];
@@ -52,11 +53,11 @@ export function render(app) {
   const owners = p.owners;
   const { voices, voice } = pickVoice(state.voice, state.settings);
   state.voice = voice;
-  const command = p.pick === 'home' ? '!h' : '!a';
+  const command = betCommand(p, live.stake);
   main.innerHTML =
-    header(`Live · ${esc(p.title || 'PalDuels')}`, status + `<button class="btn ghost" id="cmd">Copy ${command}</button>`) +
+    header(`Live · ${esc(p.title || 'PalDuels')}`, status + (command ? `<button class="btn ghost" id="cmd">Copy ${esc(command)}</button>` : '')) +
     `<div class="stage">${side(p.home, 'h', p.pick === 'home')}
-      <div class="center">${dial(p.prob, 112)}<div class="cond" style="font-weight:800;font-size:24px;letter-spacing:.06em;margin-top:4px;text-transform:uppercase">${esc(fav.pal)}</div><div class="small" style="color:var(--t2)">${esc(whyLine(p))}</div>${p.home.estimated || p.away.estimated ? '<div class="small gold">Some stats hidden until the bell: estimated</div>' : ''}</div>
+      <div class="center">${dial(p.prob, 112)}<div class="cond" style="font-weight:800;font-size:24px;letter-spacing:.06em;margin-top:4px;text-transform:uppercase">${esc(fav.pal)}</div><div class="small" style="color:var(--t2)">${esc(whyLine(p))}</div>${p.home.estimated || p.away.estimated ? '<div class="small gold">Some stats hidden until the bell: estimated</div>' : ''}${stakeLine(live.stake)}</div>
       ${side(p.away, 'a', p.pick === 'away')}</div>
     <div class="g3">
       <div class="panel"><div class="ph"><h3>Tale of the tape</h3><span>Lv 70</span></div>${tapeRows(p)}
@@ -92,5 +93,5 @@ export function render(app) {
     };
   });
   document.getElementById('cp').onclick = (e) => copyText(document.getElementById('vq').textContent, e.target);
-  document.getElementById('cmd').onclick = (e) => copyText(command, e.target);
+  document.getElementById('cmd')?.addEventListener('click', (e) => copyText(command, e.target));
 }

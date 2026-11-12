@@ -11,7 +11,7 @@ const TABS = { live, history, pals, players, model, settings };
 
 const app = {
   main: document.getElementById('main'),
-  state: { tab: 'live', range: 'today', pal: null, player: null, voice: null, live: null, settings: null, speciesList: null },
+  state: { tab: 'live', range: 'today', view: 'calls', pal: null, player: null, voice: null, live: null, settings: null, speciesList: null },
   header: (sub, right = '') => `<div class="top"><div class="bm">AUGUR</div><span class="sub">${sub}</span>${right}</div>`,
   show(tab) {
     app.state.tab = tab;
@@ -32,6 +32,10 @@ listen('live', (v) => {
   if (app.state.tab === 'live') live.render(app);
 });
 listen('navigate', (tab) => app.show(tab));
+listen('bets', (p) => {
+  // redraw Your bets when an import finishes or moves on a page
+  if (app.state.tab === 'history' && app.state.view === 'bets' && (p.phase === 'done' || p.done % 25 === 0)) history.render(app);
+});
 listen('account', () => {
   if (app.state.tab === 'settings') settings.render(app);
 });

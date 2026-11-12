@@ -5,6 +5,8 @@ const ENTITIES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ENTITIES[c]);
 export const pct = (p) => `${Math.round(p * 100)}%`;
 export const fmt = (n) => (n == null ? '—' : Number(n).toLocaleString('en-GB', { maximumFractionDigits: 0 }));
+// credits won or lost: +2,105 / −500
+export const signed = (n) => (n == null ? '—' : `${n > 0 ? '+' : n < 0 ? '−' : ''}${fmt(Math.abs(n))}`);
 export const initials = (name) =>
   String(name || '?')
     .split(/\s+/)

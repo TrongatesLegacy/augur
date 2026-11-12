@@ -6,7 +6,8 @@
 use crate::settings::AppSettings;
 use crate::views;
 use augur_engine::seed::{page, root};
-use augur_engine::{model, predict, seed, site};
+use augur_engine::stake::{self, StakeSettings};
+use augur_engine::{bets, model, predict, seed, site};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
@@ -42,17 +43,21 @@ pub fn chrome() -> Option<PathBuf> {
 }
 
 /// What each command returns, from the seed (augur_engine::seed): 19 made-up calls, duel #4702 with its tape, a
-/// saved live state (Leaflit Slimey vs Wumpo, home stats hidden until the bell) and TrongatesLegacy's pal box.
+/// saved live state (Leaflit Slimey vs Wumpo, home stats hidden until the bell), TrongatesLegacy's pal box and a
+/// made-up picks list.
 pub fn fixture_data() -> Value {
     let conn = seed::store();
+    seed::import_bets(&conn);
     let s = model::Settings::default();
     let state = seed::state("state-leaflit-wumpo.json");
     let p = predict::predict(&state, &predict::Options { lookups: false, db_path: PathBuf::from("/nonexistent"), settings: s.clone() })
         .unwrap();
+    let stake = stake::suggest(&p.pick, p.prob, &StakeSettings::default(), &bets::odds(&conn).unwrap(), bets::balance(&conn));
     let live = views::LiveView {
         title: state.title.clone(),
         picks_open: true,
         prediction: Some(p),
+        stake: Some(stake),
         queue: state.queue.iter().filter(|q| q.pos > 0).take(3).cloned().collect(),
         synced_at: 1,
         today: (14, 19),
@@ -62,6 +67,8 @@ pub fn fixture_data() -> Value {
     json!({
         "live": live,
         "history": views::history_view(&conn, &s, "all", 0).unwrap(),
+        "bets_view": views::bets_view(&conn, &StakeSettings::default(), "all", 0, Default::default()).unwrap(),
+        "import_bets": null,
         "species_list": augur_engine::history::species_records(&conn).unwrap(),
         "species": augur_engine::history::species_detail(&conn, "Chillet Lux").unwrap(),
         "player": views::player_view(&conn, &s, "TrongatesLegacy", roster).unwrap(),
@@ -142,8 +149,10 @@ const MAIN_DRIVER: &str = r#"
   if (!window.augur) window.__errors.push('the page never started (a module failed to load)');
   else {
     const only = (location.hash.match(/tab=(\w+)/) || [])[1];
-    for (const tab of only ? [only] : ['live', 'history', 'pals', 'players', 'model', 'settings']) {
-      await window.augur.show(tab);
+    for (const tab of only ? [only] : ['live', 'history', 'bets', 'pals', 'players', 'model', 'settings']) {
+      // "bets" is History's Your bets view
+      window.augur.state.view = tab === 'bets' ? 'bets' : 'calls';
+      await window.augur.show(tab === 'bets' ? 'history' : tab);
       await sleep(300);
       out[tab] = document.getElementById('main').innerText;
     }
@@ -155,6 +164,7 @@ const MAIN_DRIVER: &str = r#"
 
 const TRAY_DRIVER: &str = r#"
 (async () => {
+  document.body.style.width = '340px'; // the popover's width (headless Chrome's window can't be that narrow)
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   for (let i = 0; i < 60 && !window.augur; i++) await sleep(100);
   if (!window.augur) window.__errors.push('the popover never started (a module failed to load)');
@@ -164,6 +174,10 @@ const TRAY_DRIVER: &str = r#"
 
 /// Renders the page in headless Chrome and returns its report.
 fn render(port: u16, name: &str, shot: Option<(&Path, &str)>) -> Value {
+    render_at(port, name, shot, (1280, 720))
+}
+
+fn render_at(port: u16, name: &str, shot: Option<(&Path, &str)>, (w, h): (u32, u32)) -> Value {
     let chrome = chrome().expect("Chrome");
     let dir = std::env::temp_dir().join(format!("augur-ui-{}-{name}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -187,7 +201,7 @@ fn render(port: u16, name: &str, shot: Option<(&Path, &str)>) -> Value {
         let mut c = Command::new(&chrome);
         base(&mut c);
         let _ = c
-            .arg("--window-size=1280,720")
+            .arg(format!("--window-size={w},{h}"))
             .arg(format!("--screenshot={}", folder.join(format!("{tab}.png")).display()))
             .arg(format!("{url}#tab={tab}"))
             .output();
@@ -195,6 +209,28 @@ fn render(port: u16, name: &str, shot: Option<(&Path, &str)>) -> Value {
     let _ = std::fs::remove_dir_all(&dir);
     serde_json::from_str(&report)
         .unwrap_or_else(|e| panic!("no report from the {name} page ({e}); Chrome said: {}", String::from_utf8_lossy(&out.stderr)))
+}
+
+/// Credits as the pages show them: +2,105 / −500.
+fn signed(n: i64) -> String {
+    let digits = n.unsigned_abs().to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    format!(
+        "{}{out}",
+        if n > 0 {
+            "+"
+        } else if n < 0 {
+            "\u{2212}"
+        } else {
+            ""
+        }
+    )
 }
 
 fn html_unescape(s: &str) -> String {
@@ -218,6 +254,16 @@ fn every_tab_renders_headless() {
     assert!(text("live").contains(&p["lines"][0].as_str().unwrap().to_lowercase()), "Live shows the Yoda line");
     assert!(text("live").contains("some stats hidden until the bell"), "Live says the home stats are estimated");
     assert!(text("history").contains("14 / 19"), "History: {}", text("history"));
+    let stake = data["live"]["stake"]["command"].as_str().unwrap();
+    assert!(!stake.is_empty() && text("live").contains(&format!("copy {stake}")), "Live offers the bet {stake}: {}", text("live"));
+    let b = &data["bets_view"]["comparison"];
+    assert!(text("bets").contains("following augur") && text("bets").contains("deviated"), "Your bets: {}", text("bets"));
+    assert!(
+        text("bets").contains(&format!("{} left on the table", signed(b["missed_augur"].as_i64().unwrap()))),
+        "Your bets totals missed fights apart: {}",
+        text("bets")
+    );
+    assert!(text("bets").contains("no call"), "Your bets lists bets on fights Augur didn't call");
     assert!(
         text("pals").contains("chillet lux") && text("pals").contains("rocket slam"),
         "Pals shows the species and its real hits: {}",
@@ -230,7 +276,7 @@ fn every_tab_renders_headless() {
     if let Some(folder) = std::env::var_os("AUGUR_UI_SHOTS").map(PathBuf::from) {
         std::fs::create_dir_all(&folder).unwrap();
         let port = serve("index.html", &data, MAIN_DRIVER);
-        for tab in ["live", "history", "pals", "players", "model", "settings"] {
+        for tab in ["live", "history", "bets", "pals", "players", "model", "settings"] {
             render(port, tab, Some((&folder, tab)));
         }
     }
@@ -246,5 +292,10 @@ fn tray_popover_renders_headless() {
     let tray = r["tray"].as_str().unwrap();
     assert!(tray.contains("WUMPO") || tray.contains("Wumpo"), "tray: {tray}");
     assert!(tray.contains("Copy for chat"));
+    assert!(tray.contains("Copy bet"), "the tray copies the bet command: {tray}");
+    if let Some(folder) = std::env::var_os("AUGUR_UI_SHOTS").map(PathBuf::from) {
+        std::fs::create_dir_all(&folder).unwrap();
+        render_at(serve("tray.html", &fixture_data(), TRAY_DRIVER), "tray", Some((&folder, "tray")), (340, 540));
+    }
     assert!(tray.contains("Today 14/19"));
 }

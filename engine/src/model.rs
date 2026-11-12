@@ -1,6 +1,6 @@
-//! The prediction model. Every setting was fitted against logged fights: see the tune-model skill before
-//! changing one, and note what it was fitted on. The parity test (`tests/parity.rs`)
-//! pins its numbers on every call in `fixtures/calls.jsonl`.
+//! The prediction model. The settings tune themselves (`learn`); `Settings::default()` is where a new install
+//! starts, each with a note of what it was first fitted on (see the tune-model skill). The parity test
+//! (`tests/parity.rs`) pins its numbers on every call in `fixtures/calls.jsonl`.
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -27,11 +27,62 @@ pub struct Settings {
     pub species_weight: f64,
     /// same, for past fights between these two species (shrunk hard: (w+2)/(n+4))
     pub pal_h2h_weight: f64,
+    /// how much a cooldown passive's extra casts count: 1 = in full, 0.5 = square root (the guess until live calls
+    /// with cooldown passives say otherwise)
+    #[serde(default = "half")]
+    pub cooldown_exp: f64,
+}
+
+fn half() -> f64 {
+    0.5
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { type_bonus: 1.5, type_resist: 1.5, power_exp: 0.35, stats_steepness: 3.0, species_weight: 1.2, pal_h2h_weight: 0.5 }
+        Settings {
+            type_bonus: 1.5,
+            type_resist: 1.5,
+            power_exp: 0.35,
+            stats_steepness: 3.0,
+            species_weight: 1.2,
+            pal_h2h_weight: 0.5,
+            cooldown_exp: 0.5,
+        }
+    }
+}
+
+impl Settings {
+    /// Every setting's key, as settings.json and `augur tune` name them.
+    pub const KEYS: [&'static str; 7] =
+        ["TYPE_BONUS", "TYPE_RESIST", "POWER_EXP", "STATS_STEEPNESS", "SPECIES_WEIGHT", "PAL_H2H_WEIGHT", "COOLDOWN_EXP"];
+
+    pub fn get(&self, key: &str) -> Option<f64> {
+        Some(match key {
+            "TYPE_BONUS" => self.type_bonus,
+            "TYPE_RESIST" => self.type_resist,
+            "POWER_EXP" => self.power_exp,
+            "STATS_STEEPNESS" => self.stats_steepness,
+            "SPECIES_WEIGHT" => self.species_weight,
+            "PAL_H2H_WEIGHT" => self.pal_h2h_weight,
+            "COOLDOWN_EXP" => self.cooldown_exp,
+            _ => return None,
+        })
+    }
+
+    /// A copy with one setting changed (an unknown key changes nothing).
+    pub fn with(&self, key: &str, v: f64) -> Settings {
+        let mut c = self.clone();
+        match key {
+            "TYPE_BONUS" => c.type_bonus = v,
+            "TYPE_RESIST" => c.type_resist = v,
+            "POWER_EXP" => c.power_exp = v,
+            "STATS_STEEPNESS" => c.stats_steepness = v,
+            "SPECIES_WEIGHT" => c.species_weight = v,
+            "PAL_H2H_WEIGHT" => c.pal_h2h_weight = v,
+            "COOLDOWN_EXP" => c.cooldown_exp = v,
+            _ => {}
+        }
+        c
     }
 }
 
@@ -120,7 +171,7 @@ pub fn type_mult(s: &Settings, move_el: &str, defender_types: &[String]) -> f64 
 }
 
 /// Cast-rate multiplier from cooldown passives: "COOLDOWN −30%" means ~1/(1-0.3) as many casts. Damped (square
-/// root) until tapes confirm cast rates really scale with cooldown passives.
+/// root) here; `score` re-weights it with the learned `cooldown_exp`.
 pub fn speed(passives: &[String]) -> f64 {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| Regex::new(r"(?i)cooldown\s*([+\-−])(\d+)%").unwrap());
@@ -202,8 +253,10 @@ fn sigmoid(x: f64) -> f64 {
 
 /// The model. species_rec: [[home w, l], [away w, l]]; pal_h2h: [home wins, away wins].
 pub fn score(s: &Settings, home: &Fighter, away: &Fighter, species_rec: [[f64; 2]; 2], pal_h2h: [f64; 2]) -> Score {
-    let st_home = strength(s, &home.skills, &away.types) * home.hidden_boost * home.speed;
-    let st_away = strength(s, &away.skills, &home.types) * away.hidden_boost * away.speed;
+    // a fighter's speed was worked out at the default half strength (a square root): re-weight it to cooldown_exp
+    let pace = |f: &Fighter| f.speed.powf(s.cooldown_exp / 0.5);
+    let st_home = strength(s, &home.skills, &away.types) * home.hidden_boost * pace(home);
+    let st_away = strength(s, &away.skills, &home.types) * away.hidden_boost * pace(away);
     // "turns" to knock out the defender
     let t_home = away.hp / (home.atk / away.def * st_home);
     let t_away = home.hp / (away.atk / home.def * st_away);

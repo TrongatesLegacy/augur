@@ -1,7 +1,7 @@
 //! `augur <command>`: the engine from the command line, sharing the app's data folder. The Claude skills use this.
 
 use crate::settings::{self, AppSettings};
-use augur_engine::{backfill, bets, calls, db, history, model, predict, rusqlite, site, stake};
+use augur_engine::{backfill, bets, calls, db, history, learn, model, predict, rusqlite, site, stake};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -45,6 +45,12 @@ pub enum Command {
     /// Re-test model settings on the real calls: SETTING=v1,v2 ... (TYPE_BONUS, TYPE_RESIST, POWER_EXP,
     /// STATS_STEEPNESS, SPECIES_WEIGHT, PAL_H2H_WEIGHT). Changes nothing.
     Tune { grid: Vec<String> },
+    /// Let the model tune itself now on the stored duels and calls, and print what it learned. --dry-run keeps
+    /// nothing; otherwise the app uses the result (unless you've set the model by hand).
+    Learn {
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Your bets next to Augur's calls (from the picks list the app reads when you're signed in).
     Bets,
     /// Where the data lives and how much of it there is.
@@ -55,6 +61,8 @@ pub fn run(cli: Cli) -> CliResult {
     let dir = settings::data_dir();
     let conn = db::open(&settings::db_path(&dir))?;
     let app = AppSettings::load(&dir);
+    // the same model settings the app predicts with: learned, or your own (Settings › Model)
+    let model = app.model_for(learn::load(&conn).map(|l| l.settings).as_ref());
     match cli.command {
         Command::Predict { quick, json, state: saved } => {
             let state: site::State = match &saved {
@@ -64,10 +72,8 @@ pub fn run(cli: Cli) -> CliResult {
             if saved.is_none() {
                 db::settle(&conn, &state.recent, |id| site::duel(id).ok())?;
             }
-            match predict::predict(
-                &state,
-                &predict::Options { lookups: !quick, db_path: settings::db_path(&dir), settings: app.model.clone() },
-            ) {
+            match predict::predict(&state, &predict::Options { lookups: !quick, db_path: settings::db_path(&dir), settings: model.clone() })
+            {
                 None => println!("No duel up right now ({}).", if state.title.is_empty() { "idle" } else { &state.title }),
                 Some(p) => {
                     let st = stake::suggest(&p.pick, p.prob, &app.staking, &bets::odds(&conn)?);
@@ -85,7 +91,7 @@ pub fn run(cli: Cli) -> CliResult {
                     }
                 }
             }
-            print_tally(&conn, &app.model)
+            print_tally(&conn, &model)
         }
         Command::Backfill { species_only } => {
             let stop = AtomicBool::new(false);
@@ -118,8 +124,33 @@ pub fn run(cli: Cli) -> CliResult {
             println!("{n} calls written to {}", file.display());
             Ok(())
         }
-        Command::Analyse => analyse(&conn, &app.model),
-        Command::Tune { grid } => tune(&conn, &app.model, &grid),
+        Command::Analyse => analyse(&conn, &model),
+        Command::Tune { grid } => tune(&conn, &model, &grid),
+        Command::Learn { dry_run } => {
+            let from = learn::load(&conn).map(|l| l.settings).unwrap_or_default();
+            let l = learn::learn(&conn, &from, crate::app::now_ms())?;
+            let c = &l.check;
+            println!("Learned on {} past duels and {} settled calls.", l.past_duels, l.live_calls);
+            println!(
+                "Held back {} duels: log loss {:.4} -> {:.4}, right {:.1}% -> {:.1}%",
+                c.past_n,
+                c.past_before,
+                c.past_after,
+                c.past_right_before * 100.0,
+                c.past_right_after * 100.0
+            );
+            if c.live_n > 0 {
+                println!("Held back {} calls: log loss {:.4} -> {:.4}", c.live_n, c.live_before, c.live_after);
+            }
+            for k in &l.knobs {
+                let more = if k.status == "waiting" { format!(" ({} of {})", k.have, k.need) } else { String::new() };
+                println!("  {:16} {:>6} (was {}) {}{more}", k.key, k.value, k.was, k.status);
+            }
+            if !dry_run {
+                learn::save(&conn, &l)?;
+            }
+            Ok(())
+        }
         Command::Bets => {
             let synced = db::meta_get(&conn, "bets_synced_at")?.and_then(|v| v.parse().ok()).unwrap_or(0);
             let odds = bets::odds(&conn)?;

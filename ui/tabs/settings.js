@@ -1,16 +1,19 @@
-// Settings, in six pages: General (checking, the tray and notifications), Staking (with what it would suggest),
-// Chat lines, Account, Sync & data (sync across computers, back up, import) and Updates.
+// Settings, in seven pages: General (checking, the tray and notifications), Staking (with what it would suggest),
+// Chat lines, Model (self-tuning, or your own settings), Account, Sync & data (sync across computers, back up,
+// import) and Updates.
 import { invoke } from '../lib/bridge.js';
 import { copyText } from '../lib/clipboard.js';
 import { ago, esc, fmt, pct } from '../lib/format.js';
 import { notesList } from '../lib/notes.js';
 import { SHORT, VOICES } from '../lib/pal.js';
 import { empty, icon } from '../lib/viz.js';
+import { KNOBS } from './model.js';
 
 const PAGES = [
   ['general', 'General'],
   ['staking', 'Staking'],
   ['chat', 'Chat lines'],
+  ['model', 'Model'],
   ['account', 'Account'],
   ['sync', 'Sync & data'],
   ['updates', 'Updates'],
@@ -114,6 +117,18 @@ function chat(s, live) {
       ${row('Default voice', '', `<select data-n="default_voice">${VOICES.map((v) => `<option ${s.default_voice === v ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>`)}
       ${row('Include the chance', 'adds "(83%)" to the line', toggle('data-k="include_chance"', s.include_chance, 'Include the chance'))}</div>
     ${lines ? `<div class="panel list"><div class="ph"><h3>This call, in each voice</h3></div>${VOICES.map((v, i) => `<div class="row"><span><b>${esc(SHORT[v])}</b> <span class="muted">·</span> ${esc(lines[i])}</span></div>`).join('')}</div>` : ''}
+  </div>`;
+}
+
+function modelPage(s) {
+  const own = !s.model_auto;
+  return `<div class="sg">
+    <div class="panel"><div class="ph"><h3>Model</h3><span>${own ? 'your own settings' : 'tunes itself'}</span></div>
+      ${row('Tune itself', 'Augur re-fits its settings as results come in and keeps a change only when it predicts the newest duels better (Model tab). Off: it uses the values below.', toggle('id="mauto"', s.model_auto, 'Tune itself'))}
+      ${own ? Object.entries(KNOBS).map(([k, [label, lo, hi]]) => row(label, `${lo} to ${hi}`, `<input type="number" step="0.05" min="${lo}" max="${hi}" data-m="${k}" value="${s.model[k]}" style="width:90px">`)).join('') : ''}
+      ${own ? row('Start again', 'copy what the model has learned into the values above', '<button class="btn ghost" id="mcopy">Use the learned values</button>') : ''}</div>
+    <div class="panel"><div class="ph"><h3>How it learns</h3></div><div class="small" style="line-height:1.7">
+      Types, move power and records learn from every past duel; the stat settings and cooldown passives wait for real calls, which see each pal's actual stats. The newest quarter of each is held back to check a change, so it can't just memorise the past. Learning carries on while you use your own settings.</div></div>
   </div>`;
 }
 
@@ -230,7 +245,7 @@ export async function render(app) {
   ]);
   if (state.tab !== 'settings' || state.settingsPage !== page) return;
   const tabs = `<div class="seg ml">${PAGES.map(([k, l]) => `<button class="${page === k ? 'on' : ''}" data-page="${k}">${l}</button>`).join('')}</div>`;
-  const body = { general: () => general(s, about, state.live), staking: () => staking(s, preview), chat: () => chat(s, state.live), account: () => account(s, acct), sync: () => syncPage(sync, state.syncFlash), updates: () => updates(s, upd) }[page]();
+  const body = { general: () => general(s, about, state.live), staking: () => staking(s, preview), chat: () => chat(s, state.live), model: () => modelPage(s), account: () => account(s, acct), sync: () => syncPage(sync, state.syncFlash), updates: () => updates(s, upd) }[page]();
   main.innerHTML = header('Settings', tabs) + body;
   state.syncFlash = null;
 
@@ -286,6 +301,21 @@ export async function render(app) {
       const v = input.value.trim();
       if (input.dataset.pct) st[k] = v ? Math.min(99, Math.max(1, +v)) / 100 : k === 'skip_below' ? null : st[k];
       else if (v) st[k] = Math.max(0, Math.round(+v));
+      save(true);
+    };
+  });
+  // Model: switching to your own settings starts from what it learned
+  const learned = async () => (s.model = await invoke('learned_settings'));
+  document.getElementById('mauto')?.addEventListener('click', async () => {
+    s.model_auto = !s.model_auto;
+    if (!s.model_auto) await learned();
+    save(true);
+  });
+  document.getElementById('mcopy')?.addEventListener('click', async () => (await learned(), save(true)));
+  main.querySelectorAll('[data-m]').forEach((input) => {
+    input.onchange = () => {
+      const [, lo, hi] = KNOBS[input.dataset.m];
+      if (input.value !== '') s.model[input.dataset.m] = Math.min(hi, Math.max(lo, +input.value));
       save(true);
     };
   });

@@ -7,7 +7,7 @@ use crate::settings::AppSettings;
 use crate::views;
 use augur_engine::seed::{page, root};
 use augur_engine::stake::{self, StakeSettings};
-use augur_engine::{bets, model, predict, seed, site};
+use augur_engine::{bets, learn, model, predict, seed, site};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
@@ -71,6 +71,37 @@ pub fn fixture_data() -> Value {
     let preview: Vec<_> = [0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9]
         .map(|p| (p, stake::suggest("home", p, &StakeSettings::default(), &bets::odds(&conn).unwrap())))
         .to_vec();
+    let model_view = {
+        // a made-up self-tuning run: one change kept, one held, the stat settings still waiting for calls
+        let mut l = learn::learn(&conn, &s, recent - 3_600_000).unwrap();
+        l.past_duels = 4_702;
+        l.check = learn::Check {
+            past_n: 1_176,
+            past_before: 0.6611,
+            past_after: 0.6585,
+            past_right_before: 0.62,
+            past_right_after: 0.627,
+            live_n: 5,
+            live_before: 0.83,
+            live_after: 0.83,
+        };
+        for k in &mut l.knobs {
+            if k.source == learn::Source::PastDuels {
+                (k.status, k.have) = ("held".into(), 4_702);
+            }
+        }
+        l.knobs[0] = learn::KnobReport {
+            key: "TYPE_BONUS".into(),
+            value: 1.5,
+            was: 1.4,
+            source: learn::Source::PastDuels,
+            status: "changed".into(),
+            have: 4_702,
+            need: 200,
+        };
+        learn::save(&conn, &l).unwrap();
+        views::model_view(&conn, &s, true, None, Default::default(), recent).unwrap()
+    };
     json!({
         "live": live,
         "history": views::history_view(&conn, &s, "all", 0).unwrap(),
@@ -79,7 +110,7 @@ pub fn fixture_data() -> Value {
         "species_list": augur_engine::history::species_records(&conn).unwrap(),
         "species": augur_engine::history::species_detail(&conn, "Chillet Lux").unwrap(),
         "player": views::player_view(&conn, &s, "TrongatesLegacy", roster).unwrap(),
-        "model_view": views::model_view(&conn, &s, None, Default::default(), recent).unwrap(),
+        "model_view": model_view,
         // checking at random times, so Settings shows the range
         "get_settings": AppSettings { poll_secs: 4, poll_max_secs: Some(12), ..Default::default() },
         "stake_preview": preview,
@@ -133,6 +164,8 @@ pub fn fixture_data() -> Value {
         "backfill_progress": augur_engine::backfill::Progress { phase: "duels".into(), done: 1200, total: 4702, ..Default::default() },
         "pal_image": null,
         // a stand-in Kick picture, so the screenshots show faces swapped in
+        "learned_settings": model::Settings::default(),
+        "learn_now": null,
         "player_image": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMCAxMCI+PHJlY3Qgd2lkdGg9IjEwIiBoZWlnaHQ9IjEwIiBmaWxsPSIjNTNmYzE4Ii8+PGNpcmNsZSBjeD0iNSIgY3k9IjQiIHI9IjIiIGZpbGw9IiMwYjEwMjAiLz48cmVjdCB4PSIyIiB5PSI3IiB3aWR0aD0iNiIgaGVpZ2h0PSI0IiByeD0iMyIgZmlsbD0iIzBiMTAyMCIvPjwvc3ZnPg==",
     })
 }
@@ -207,7 +240,10 @@ const MAIN_DRIVER: &str = r#"
   const only = (location.hash.match(/tab=(\w+)/) || [])[1];
   if (!window.augur) window.__errors.push('the page never started (a module failed to load)');
   else {
-    for (const tab of only ? [only] : ['live', 'history', 'bets', 'pals', 'players', 'you', 'model', 'settings', 'staking', 'sync', 'updates', 'offair']) {
+    for (const tab of only ? [only] : ['live', 'history', 'bets', 'pals', 'players', 'you', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'updates', 'offair']) {
+      // "ownmodel" is Settings › Model with self-tuning off and your own values
+      const own = DATA.get_settings;
+      if (tab === 'ownmodel') DATA.get_settings = { ...own, model_auto: false };
       // "updates" is Settings › Updates with a new version downloaded and ready (and its bar over the window)
       if (tab === 'updates') {
         DATA.update_view = DATA.update_ready;
@@ -218,11 +254,12 @@ const MAIN_DRIVER: &str = r#"
       // "offair" is Live with no duel up, after a stream
       if (tab === 'offair') window.augur.state.live = { ...DATA.live, prediction: null, queue: [], off_air: DATA.off_air, title: 'Last duel' };
       else window.augur.state.live = DATA.live;
-      window.augur.state.settingsPage = ['staking', 'sync', 'updates'].includes(tab) ? tab : 'general';
+      window.augur.state.settingsPage = ['staking', 'sync', 'updates'].includes(tab) ? tab : tab === 'ownmodel' ? 'model' : 'general';
       // "welcome" is the fresh install's overlay, over Live
-      await window.augur.show(tab === 'bets' ? 'history' : ['staking', 'sync', 'updates'].includes(tab) ? 'settings' : ['welcome', 'offair'].includes(tab) ? 'live' : tab);
+      await window.augur.show(tab === 'bets' ? 'history' : ['staking', 'sync', 'updates', 'ownmodel'].includes(tab) ? 'settings' : ['welcome', 'offair'].includes(tab) ? 'live' : tab);
       await sleep(300);
       out[tab] = document.getElementById('main').innerText;
+      DATA.get_settings = own;
     }
   }
   out.sidebar = document.querySelector('.side')?.innerText || '';
@@ -380,7 +417,23 @@ fn every_tab_renders_headless() {
         text("pals")
     );
     assert!(text("players").contains("nyafia primo"), "Players: {}", text("players"));
-    assert!(text("model").contains("history test"), "Model: {}", text("model"));
+    assert!(
+        text("model").contains("history test")
+            && text("model").contains("learned from your duels")
+            && text("model").contains("type edge bonus 1.4× → 1.5×"),
+        "Model: {}",
+        text("model")
+    );
+    assert!(
+        text("model").contains("waits for real calls: 19 of 60") || text("model").contains("waits for real calls"),
+        "Model: {}",
+        text("model")
+    );
+    assert!(
+        text("ownmodel").contains("tune itself") && text("ownmodel").contains("use the learned values"),
+        "Settings › Model: {}",
+        text("ownmodel")
+    );
     assert!(
         text("settings").contains("chat lines")
             && text("settings").contains("notify with each result")
@@ -407,9 +460,10 @@ fn every_tab_renders_headless() {
     if let Some(folder) = std::env::var_os("AUGUR_UI_SHOTS").map(PathBuf::from) {
         std::fs::create_dir_all(&folder).unwrap();
         let port = serve("index.html", &data, MAIN_DRIVER);
-        for tab in
-            ["live", "history", "bets", "pals", "players", "you", "model", "settings", "staking", "sync", "welcome", "updates", "offair"]
-        {
+        for tab in [
+            "live", "history", "bets", "pals", "players", "you", "model", "settings", "staking", "ownmodel", "sync", "welcome", "updates",
+            "offair",
+        ] {
             render(port, tab, Some((&folder, tab)));
         }
     }

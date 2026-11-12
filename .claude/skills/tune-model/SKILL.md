@@ -5,7 +5,7 @@ description: Re-test Augur's model settings against the real calls and the backf
 
 # Tune the model
 
-The settings are `Settings::default()` in `engine/src/model.rs`, each with a comment saying what it was fitted on. The app's Model tab can also try a suggested value for one install (saved in its settings.json).
+The app tunes itself (`engine/src/learn.rs`): it re-fits each setting on new results and keeps a change only when the held-back newest quarter of the duels (or calls) agrees. `Settings::default()` in `engine/src/model.rs` is only where it starts, so change a default only to give new installs a better start; to change how the learning works, edit `learn.rs` (each setting's evidence and grid, the margins, the minimum calls). `cargo run -q --release -p augur -- learn --dry-run` runs it now and prints what it would change.
 
 ## Re-test
 
@@ -36,6 +36,6 @@ Something the model can't see (a passive, an unlisted move, an owner's rating) g
 
 - **Type edge:** 1.5x. The 4,702-duel history test prefers 1.25-1.5x; per-hit tapes show about 1.1x; when only one side's *species* types beat the other's, that side won 48% of 1,292 duels. The first 19 live calls prefer 2x by a hair.
 - **Resisted moves** don't hit softer per hit, yet `type_resist` 1.5 still scores best in both tests.
-- **Cooldown passives** are counted at half strength. Check `duels.home_casts` / `away_casts` for pals with them.
+- **Cooldown passives** start at half strength (`COOLDOWN_EXP` 0.5) and learn once 60 calls are in, 15 of them with a cooldown passive.
 - **Move power** matters a little and unevenly (best hits by power band: 40-80: 9%, 81-250: 13%, 251-450: 19%, 451+: 13%).
-- **Owners** matter (7-3 rivalries) but aren't in the model yet.
+- **Owners** were tested and left out: over 4,702 duels (fit on the oldest 3,500, checked on the rest) an owner's record alone got 50.4% right, and added to the species records it changed nothing (58.4% against 58.7%).

@@ -7,7 +7,7 @@ use augur_engine::history::{self, Backtest};
 use augur_engine::predict::Prediction;
 use augur_engine::site::{BoxPal, QueueItem};
 use augur_engine::stake::{Stake, StakeSettings};
-use augur_engine::{db, model, rusqlite};
+use augur_engine::{db, learn, model, rusqlite};
 use rusqlite::Connection;
 use serde::Serialize;
 
@@ -270,7 +270,11 @@ pub struct ModelView {
     pub calls_right: usize,
     pub calibration: Option<(usize, usize, f64, f64)>,
     pub backtest: Option<Backtest>,
-    pub suggestion: Option<(f64, usize, model::Settings)>,
+    /// the model's last self-tuning run, and the changes it has kept (newest first)
+    pub learned: Option<learn::Learned>,
+    pub changes: Vec<learn::Change>,
+    /// false while you've set the model yourself (Settings › Model)
+    pub auto: bool,
     pub duels: i64,
     pub tapes: i64,
     pub hits: i64,
@@ -281,17 +285,20 @@ pub struct ModelView {
 }
 
 /// backtest: a cached run for these settings, if there is one (otherwise it's run, about a second).
-pub fn model_view(conn: &Connection, s: &model::Settings, backtest: Option<Backtest>, backfill: Progress, synced_at: u64) -> R<ModelView> {
+pub fn model_view(
+    conn: &Connection,
+    s: &model::Settings,
+    auto: bool,
+    backtest: Option<Backtest>,
+    backfill: Progress,
+    synced_at: u64,
+) -> R<ModelView> {
     let calls = db::settled(conn)?;
     let (live_loss, live_right, live_total) = history::evaluate(&calls, s);
     let backtest = match backtest {
         Some(b) => b,
         None => history::backtest(conn, s)?,
     };
-    let suggestion = history::tune(&calls, s, &[("TYPE_BONUS", vec![1.0, 1.25, 1.5, 2.0])])
-        .into_iter()
-        .next()
-        .filter(|(loss, _, cand)| cand != s && *loss < live_loss - 0.005);
     let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0);
     Ok(ModelView {
         calibration: history::calibration(conn, &calls, s)?,
@@ -301,7 +308,9 @@ pub fn model_view(conn: &Connection, s: &model::Settings, backtest: Option<Backt
         live_right,
         live_total,
         backtest: Some(backtest),
-        suggestion,
+        learned: learn::load(conn),
+        changes: learn::changes(conn),
+        auto,
         duels: count("SELECT COUNT(*) FROM duels"),
         tapes: count("SELECT COUNT(DISTINCT duel_id) FROM hits"),
         hits: count("SELECT COUNT(*) FROM hits"),

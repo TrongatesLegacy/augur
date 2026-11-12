@@ -23,3 +23,10 @@ export const initials = (name) =>
     .join('')
     .slice(0, 2)
     .toUpperCase();
+
+// A live-feed error in words: [title, what it means]. The site not answering is different from it answering with
+// something Augur can't read (it changed how it reports the duel), which needs a fix rather than patience.
+export const feedProblem = (e) =>
+  /couldn't read/.test(e || '')
+    ? ['Can’t read PalDuels', 'PalDuels answered with something Augur can’t read yet. It keeps trying; an update may be needed.']
+    : ['Can’t reach PalDuels', 'Augur keeps trying every 30 seconds.'];

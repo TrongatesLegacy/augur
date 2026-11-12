@@ -2,7 +2,7 @@
 // and off air it says how the last stream went. It sizes itself to what it shows.
 import { invoke, listen } from './lib/bridge.js';
 import { copyText } from './lib/clipboard.js';
-import { esc, fmt, pct, signed } from './lib/format.js';
+import { esc, feedProblem, fmt, pct, signed } from './lib/format.js';
 import { SHORT, dial, face, pickVoice, tapeRows, voiceLine, whyLine } from './lib/pal.js';
 import { betCommand, stakeLine } from './lib/stake.js';
 
@@ -25,9 +25,9 @@ function nextUp(queue) {
 function quiet(view) {
   const o = view?.off_air;
   const between = (view?.queue || []).length > 0;
-  const head = view?.error ? 'OFFLINE' : between ? 'BETWEEN DUELS' : 'OFF AIR';
+  const head = view?.error ? (/couldn't read/.test(view.error) ? 'LIVE FEED' : 'OFFLINE') : between ? 'BETWEEN DUELS' : 'OFF AIR';
   const hero = view?.error
-    ? '<b>Can’t reach PalDuels</b><small>Augur keeps trying every 30 seconds.</small>'
+    ? `<b>${feedProblem(view.error)[0]}</b><small title="${esc(view.error)}">${feedProblem(view.error)[1]}</small>`
     : between
       ? nextUp(view.queue)
       : '<b>See you next stream</b><small>Augur calls the next fight the moment it’s up.</small>';

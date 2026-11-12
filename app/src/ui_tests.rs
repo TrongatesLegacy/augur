@@ -637,3 +637,26 @@ fn tray_popover_between_duels_shows_the_next_one() {
         render_at(serve("tray.html", &fixture_data(), TRAY_BETWEEN_DRIVER), "tray-between", Some((&folder, "tray-between")), (340, 600));
     }
 }
+
+// The live feed answered with something Augur can't read: the popover says so, rather than "can't reach".
+const TRAY_UNREADABLE_DRIVER: &str = r#"
+DATA.live = { ...DATA.live, prediction: null, queue: [], off_air: DATA.off_air, error: "couldn't read the live state: invalid type: null, expected a string" };
+(async () => {
+  document.body.style.width = '340px';
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  for (let i = 0; i < 60 && !window.augur; i++) await sleep(100);
+  await sleep(200);
+  document.getElementById('report').textContent = JSON.stringify({ tray: document.getElementById('pop').innerText, errors: window.__errors });
+})();
+"#;
+
+#[test]
+fn tray_popover_says_when_the_feed_cant_be_read() {
+    if !have_chrome() {
+        return;
+    }
+    let r = render(serve("tray.html", &fixture_data(), TRAY_UNREADABLE_DRIVER), "tray-unreadable", None);
+    assert_eq!(r["errors"], json!([]), "script errors: {}", r["errors"]);
+    let t = r["tray"].as_str().unwrap().to_lowercase();
+    assert!(t.contains("can’t read palduels") && !t.contains("can’t reach"), "{t}");
+}

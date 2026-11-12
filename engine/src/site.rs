@@ -4,7 +4,8 @@
 pub use crate::error::{Error, Result};
 use crate::model::{Move, StatLine};
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -100,17 +101,30 @@ fn between<'a>(s: &'a str, start: &str, ends: &[&str]) -> Option<&'a str> {
 
 // --- the live state (/api/state.php) ---
 
+/// A null in the live state reads as the field's default (an empty name), rather than failing the whole state.
+fn or_default<'de, D: Deserializer<'de>, T: Default + Deserialize<'de>>(d: D) -> std::result::Result<T, D::Error> {
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
+
+/// A list where an entry Augur can't read (a queue slot still waiting for an opponent) is skipped, not fatal.
+fn lenient<'de, D: Deserializer<'de>, T: DeserializeOwned>(d: D) -> std::result::Result<Vec<T>, D::Error> {
+    let raw: Option<Vec<serde_json::Value>> = Option::deserialize(d)?;
+    Ok(raw.unwrap_or_default().into_iter().filter_map(|v| serde_json::from_value(v).ok()).collect())
+}
+
 /// One side of the duel in the live state.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StateSide {
+    #[serde(default, deserialize_with = "or_default")]
     pub actor: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub actor_key: String,
+    #[serde(default, deserialize_with = "or_default")]
     pub pal: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub img: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub types: Vec<String>,
     #[serde(default)]
     pub hp: Option<f64>,
@@ -128,21 +142,31 @@ pub struct Recent {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct QueueItem {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub pos: u32,
+    /// empty while the slot waits for an opponent ("1 chatter waiting for any opponent")
+    #[serde(default, deserialize_with = "or_default")]
     pub home: String,
+    #[serde(default, deserialize_with = "or_default")]
     pub away: String,
+}
+
+impl QueueItem {
+    /// Both players are known: a real duel to show as next up.
+    pub fn matched(&self) -> bool {
+        !self.home.is_empty() && !self.away.is_empty()
+    }
 }
 
 /// The parts of /api/state.php Augur uses. The crowd split (`call.crowd`) is deliberately not read: picks stand
 /// on stats, types, moves and history alone.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct State {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub live: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub title: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "or_default")]
     pub badge: String,
     pub home: Option<StateSide>,
     pub away: Option<StateSide>,
@@ -152,9 +176,9 @@ pub struct State {
     pub skills: Option<String>,
     #[serde(default)]
     pub bets: Option<serde_json::Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub recent: Vec<Recent>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient")]
     pub queue: Vec<QueueItem>,
     #[serde(default)]
     pub now: Option<u64>,
@@ -902,6 +926,24 @@ mod tests {
 
     fn page(name: &str) -> String {
         std::fs::read_to_string(format!("{}/tests/pages/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+    }
+
+    /// A queue slot still waiting for an opponent has null names; a broken recent entry is skipped. Neither stops the
+    /// state being read (both did once: Augur showed "can't reach PalDuels").
+    #[test]
+    fn live_state_with_gaps() {
+        let mut v: serde_json::Value = serde_json::from_str(&page("state-leaflit-wumpo.json")).unwrap();
+        v["queue"] = serde_json::json!([
+            { "pos": 1, "home": "player-01", "away": "player-02", "note": "waiting for the streamer to start it" },
+            { "pos": 2, "home": null, "away": null, "note": "1 chatter waiting for any opponent" }
+        ]);
+        v["recent"].as_array_mut().unwrap().push(serde_json::json!({ "id": null, "home": null }));
+        v["title"] = serde_json::Value::Null;
+        let s: State = serde_json::from_value(v).unwrap();
+        assert_eq!(s.queue.len(), 2);
+        assert_eq!(s.queue.iter().filter(|q| q.matched()).map(|q| q.home.as_str()).collect::<Vec<_>>(), ["player-01"]);
+        assert!(s.recent.iter().all(|r| r.id > 0), "the broken recent entry is skipped");
+        assert_eq!(s.title, "");
     }
 
     #[test]

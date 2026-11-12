@@ -2,7 +2,14 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.3 (current)
+## 0.1.4 (current)
+- Windows: sign-in loads and closes, and the tray popover opens above the taskbar
+- Tray: one next duel, with faces and long names trimmed cleanly
+- Tray: the next duel framed, centred and evenly spaced
+- Calls keep coming when the queue has a slot waiting for an opponent
+- Log a call the app missed: augur predict --state FILE --save
+
+## 0.1.3
 - Kick profile pictures, your real pet and titles, and tidier pal cards
 - The model tunes itself from every result, with a switch to set it by hand
 - Big numbers fit everywhere

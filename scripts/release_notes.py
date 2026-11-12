@@ -2,6 +2,7 @@
 """Prints the release notes for one version, taken from CHANGELOG.md.
 
     python3 scripts/release_notes.py v0.2.0
+    python3 scripts/release_notes.py v0.2.0 --changes   (only its list of changes: the notes in latest.json)
 """
 import pathlib
 import re
@@ -20,6 +21,9 @@ for line in lines:
     if on:
         body.append(line)
 changes = "\n".join(body).strip() or "- See CHANGELOG.md for details."
+if "--changes" in sys.argv:
+    print(changes)
+    sys.exit()
 print(f"""### What's new in {want}
 {changes}
 

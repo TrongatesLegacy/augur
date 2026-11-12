@@ -99,6 +99,7 @@ pub fn import(conn: &Connection, path: &Path) -> crate::Result<usize> {
             home,
             away,
             picks_open: true,
+            stats_from: String::new(),
         };
         let id = db::add_call(conn, &call)?;
         if let Some(amount) = l.stake {

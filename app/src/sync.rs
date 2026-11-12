@@ -14,7 +14,7 @@ use tauri::{AppHandle, Emitter};
 use tauri_plugin_dialog::DialogExt;
 
 /// Settings each computer keeps for itself.
-pub const LOCAL: &[&str] = &["launch_at_login", "backfill"];
+pub const LOCAL: &[&str] = &["launch_at_login", "start_in_tray", "backfill"];
 
 const OS: &str = if cfg!(target_os = "macos") {
     "macOS"

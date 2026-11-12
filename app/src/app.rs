@@ -462,8 +462,8 @@ fn in_dock(app: &AppHandle, shown: bool) {
     let _ = (app, shown);
 }
 
-/// What's remembered of the main window: its size, place and whether it's maximised (not whether it's showing: Augur
-/// starts in the tray).
+/// What's remembered of the main window: its size, place and whether it's maximised (not whether it's showing: Start in
+/// the tray decides that).
 const WINDOW_STATE: tauri_plugin_window_state::StateFlags = tauri_plugin_window_state::StateFlags::SIZE
     .union(tauri_plugin_window_state::StateFlags::POSITION)
     .union(tauri_plugin_window_state::StateFlags::MAXIMIZED);
@@ -948,10 +948,10 @@ pub fn run() {
                 });
                 fit_zoom(&w);
             }
-            // first launch: show the window so it's clear the app is running (afterwards it starts in the tray)
-            if !shared.dir.join("settings.json").exists() {
+            // first launch: settings saved, and Live shown
+            let first = !shared.dir.join("settings.json").exists();
+            if first {
                 let _ = shared.settings.lock().unwrap().save(&shared.dir);
-                open_main(app.handle(), Some("live"));
             }
             let (h1, s1) = (app.handle().clone(), shared.clone());
             std::thread::spawn(move || sync_loop(h1, s1));
@@ -972,12 +972,20 @@ pub fn run() {
                 );
             }
             *shared.update.lock().unwrap() = started;
-            // restarted by an update with the window open: show it again
-            if let Ok(conn) = shared.db() {
-                if db::meta_get(&conn, "reopen_main").ok().flatten().as_deref() == Some("1") {
-                    let _ = db::meta_set(&conn, "reopen_main", "");
-                    open_main(app.handle(), None);
+            // the window opens at launch unless Start in the tray is on; restarted by an update, it comes back only
+            // if it was open
+            let after_update = shared.db().ok().and_then(|conn| {
+                let open = db::meta_get(&conn, "reopen_main").ok().flatten();
+                let _ = db::meta_set(&conn, "reopen_main", "");
+                match open.as_deref() {
+                    Some("1") => Some(true),
+                    Some("0") => Some(false),
+                    _ => None,
                 }
+            });
+            let start_in_tray = shared.settings.lock().unwrap().start_in_tray;
+            if first || after_update.unwrap_or(!start_in_tray) {
+                open_main(app.handle(), first.then_some("live"));
             }
             let (h5, s5) = (app.handle().clone(), shared.clone());
             std::thread::spawn(move || crate::updates::check_loop(h5, s5));

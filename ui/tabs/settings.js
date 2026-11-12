@@ -50,7 +50,8 @@ function general(s, about, live) {
       ${row('Check for new fights', 'while a duel is up (the site’s page checks every 2s)', `<select id="pollmode">${[3, 5, 10, 15].map((n) => `<option value="${n}" ${!ranged && s.poll_secs === n ? 'selected' : ''}>Every ${n} seconds</option>`).join('')}<option value="range" ${ranged ? 'selected' : ''}>At random, in a range</option></select>`)}
       ${ranged ? row('Between', 'a new random wait before each check', `<div class="st3"><input type="number" data-n="poll_secs" min="2" max="60" value="${s.poll_secs}" aria-label="Fewest seconds"><span class="muted">and</span><input type="number" data-n="poll_max_secs" min="2" max="120" value="${s.poll_max_secs}" aria-label="Most seconds"><span class="muted">seconds</span></div>`) : ''}
       ${tog('backfill', 'Fetch past duels in the background', 'Gently, one page at a time; pauses while a duel is up')}
-      ${tog('launch_at_login', 'Launch at login')}</div>
+      ${tog('launch_at_login', 'Launch at login')}
+      ${tog('start_in_tray', 'Start in the tray', 'only the tray icon at launch; open the window from it')}</div>
     <div class="panel"><div class="ph"><h3>Tray &amp; notifications</h3></div>
       ${tog('tray_pick', 'Show the pick in the tray', 'macOS: name and chance · Windows: confidence ring')}
       ${tog('notify_new_pick', 'Notify on each new pick', 'with the bet to type')}

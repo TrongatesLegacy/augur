@@ -2,7 +2,15 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.6 (current)
+## 0.1.7 (current)
+- Update notes come from the changelog built into the app
+- The window reopens at its last size, and nothing bounces when scrolled
+- A damaged mark syncs straight away, not at the next result
+- The window opens at launch, with a Start in the tray setting
+- Installers build about 3x faster (thin LTO)
+- Every view fits the window: nothing scrolls but History's lists
+
+## 0.1.6
 - The damaged mark syncs, so every computer adds up the money the same
 
 ## 0.1.5

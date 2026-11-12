@@ -268,7 +268,7 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
                 live.title = state.title.clone();
                 live.live = state.live;
                 live.picks_open = state.picks_open();
-                live.queue = state.queue.iter().filter(|q| q.pos > 0 && q.matched()).take(4).cloned().collect();
+                live.queue = state.upcoming().into_iter().take(4).collect();
                 live.synced_at = now_ms();
                 live.error = None;
             }

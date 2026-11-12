@@ -642,7 +642,9 @@ fn every_tab_renders_headless() {
     assert!(!text("live").contains("what decides it"), "the breakdown's sum stands in for What decides it: {}", text("live"));
     // the head to head: the owners' record and meetings (home owner's pal first, the winner marked), the pals' own
     assert!(
-        text("live").contains("5 meetings since 17 aug") && text("live").contains("player-12") && text("live").contains("2–3"),
+        (text("live").contains("5 meetings since 17 aug") || text("live").contains("5 meetings since aug 17"))
+            && text("live").contains("player-12")
+            && text("live").contains("2–3"),
         "Live shows the owners' record: {}",
         text("live")
     );

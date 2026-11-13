@@ -2,7 +2,10 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.11 (current)
+## 0.1.12 (current)
+- You › Pals: see what a reroll would do for each of your pals, and reroll from Augur
+
+## 0.1.11
 - History lists calls in fight order, even ones synced in later
 - No sideways scroll bar under the head to head on Live
 - A call's breakdown shows the money on it: Augur's bet and yours, and whether you followed

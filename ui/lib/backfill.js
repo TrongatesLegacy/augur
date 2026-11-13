@@ -1,7 +1,7 @@
 // What the background fetch is doing, in a few words, for the sidebar and the Model tab.
 import { fmt } from './format.js';
 
-const WHAT = { species: 'species', duels: 'past duels', bets: 'your bets' };
+const WHAT = { catchup: 'the duels missed while Augur was closed', species: 'species', duels: 'past duels', bets: 'your bets' };
 
 const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 

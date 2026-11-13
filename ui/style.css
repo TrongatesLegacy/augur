@@ -221,6 +221,8 @@ td .two small b { color: var(--gold); font-weight: 700; }
 .bf span { font: 700 11px var(--cond); letter-spacing: .02em; margin-top: -23px; height: 18px; }
 .bf small { font: 600 8px var(--sans); letter-spacing: .04em; color: var(--t3); margin-top: 7px; text-transform: uppercase; }
 .bf.warn .f { stroke: var(--bad); }
+.bf.sync .f { stroke: var(--ok); } .bf.sync span { color: var(--ok); }
+.bf.bets .f { stroke: var(--home); }
 .bf[hidden] { display: none; }
 .bf:not([hidden]) + .nav.gear { margin-top: 6px; }
 

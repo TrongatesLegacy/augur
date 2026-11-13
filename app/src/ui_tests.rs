@@ -469,6 +469,24 @@ const MAIN_DRIVER: &str = r#"
     }
   }
   out.sidebar = document.querySelector('.side')?.innerText || '';
+  // the activity spot's rules, for what the stand-in bridge can't send (events): a call arriving from another computer,
+  // the launch's catch-up, and the bets import alongside the background fetch
+  {
+    const { activity, FLASH_MS } = await import('./lib/activity.js');
+    const now = 1_000_000;
+    const sync = { on: true, last_sync: now - 1000 };
+    const flash = { at: now - 2000, from: 'Gaming PC', summary: '2 calls' };
+    const line = (a) => a && [a.kind, a.short, a.label, a.long.split('\n').length].join('|');
+    out.activity = {
+      arrived: line(activity({ sync, flash }, now)),
+      faded: activity({ sync, flash }, now + FLASH_MS),
+      settings: activity({ sync, flash: { ...flash, summary: 'strategy, max from' } }, now)?.short,
+      catchup: line(activity({ fetch: { phase: 'catchup', done: 3, total: 12 }, sync }, now)),
+      nothingNew: activity({ fetch: { phase: 'catchup', done: 0, total: 0 }, sync }, now),
+      both: line(activity({ fetch: { phase: 'duels', done: 1, total: 4 }, bets: { phase: 'bets', done: 1, total: 2 }, sync }, now)),
+      idle: activity({ fetch: { phase: 'done' }, bets: { phase: 'done' }, sync }, now),
+    };
+  }
   out.upbar = document.getElementById('upbar')?.innerText || '';
   // a fresh install's welcome, over everything
   window.augur?.showWelcome({ first_run: true });
@@ -808,6 +826,12 @@ fn every_tab_renders_headless() {
         text("welcome")
     );
     assert!(text("sidebar").contains("25%") && text("sidebar").contains("fetching"), "the sidebar shows the fetch: {}", text("sidebar"));
+    let a = &r["activity"];
+    assert_eq!(a["arrived"], json!("sync|+2|Synced|2"), "calls from another computer, then when it last synced: {a}");
+    assert_eq!((&a["faded"], &a["idle"], &a["nothingNew"]), (&json!(null), &json!(null), &json!(null)), "nothing going on: {a}");
+    assert_eq!(a["settings"], json!("✓"), "settings arriving: {a}");
+    assert_eq!(a["catchup"], json!("fetch|25%|Catch-up|2"), "the launch's catch-up: {a}");
+    assert_eq!(a["both"], json!("fetch|25%|Fetching|3"), "the fetch shows, the bets import is in the hover: {a}");
     let stake = data["live"]["stake"]["command"].as_str().unwrap();
     assert!(
         !stake.is_empty() && text("live").contains(&format!("{stake}\n")) && text("live").contains(" credits\ncopy\n"),

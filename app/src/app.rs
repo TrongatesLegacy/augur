@@ -850,6 +850,15 @@ pub fn run() {
         // the main window opens at the size and place it was last left (the popover and sign-in place themselves)
         .plugin(tauri_plugin_window_state::Builder::default().with_state_flags(WINDOW_STATE).with_denylist(&["tray", "signin"]).build())
         .manage(shared.clone())
+        // WebView2 resets the zoom when a page loads, and the restored size may arrive before the resize handler is
+        // set, so zoom again once the page is in
+        .on_page_load(|page, load| {
+            if load.event() == PageLoadEvent::Finished && page.label() == "main" {
+                if let Some(w) = page.app_handle().get_webview_window("main") {
+                    fit_zoom(&w);
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             live,
             history,

@@ -97,17 +97,31 @@ fn run_once(app: &AppHandle, shared: &Shared) {
     }
 }
 
-/// Syncs every minute while on, and a few seconds after anything changes here.
+/// How often to look for the other computers' files changing (a few directory listings, no reading).
+const LOOK_EVERY: Duration = Duration::from_secs(5);
+
+/// Syncs every minute while on, a few seconds after anything changes here, and as soon as the sync app brings in a
+/// change from another computer (it can take minutes, so a launch's first sync may come too early to see it).
 pub fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
     std::thread::sleep(Duration::from_secs(5));
     while !shared.stop.load(Ordering::Relaxed) {
         shared.sync_now.store(false, Ordering::Relaxed);
-        if shared.sync.lock().unwrap().on {
+        let st = shared.sync.lock().unwrap().clone();
+        let stamp = || st.dir().map(|d| sync::others_stamp(&d, &st.device));
+        let seen = stamp();
+        if st.on {
             run_once(&app, &shared);
         }
         let end = Instant::now() + Duration::from_secs(60);
+        let mut look = Instant::now() + LOOK_EVERY;
         while Instant::now() < end && !shared.stop.load(Ordering::Relaxed) && !shared.sync_now.load(Ordering::Relaxed) {
             std::thread::sleep(Duration::from_millis(500));
+            if st.on && Instant::now() >= look {
+                if stamp() != seen {
+                    break;
+                }
+                look = Instant::now() + LOOK_EVERY;
+            }
         }
         // let a burst of changes settle before writing
         std::thread::sleep(Duration::from_secs(2));

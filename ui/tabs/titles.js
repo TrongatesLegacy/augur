@@ -28,13 +28,14 @@ function card(t, ctx) {
     return `<div class="tc tcrown ${mine ? 'got' : ''}" title="${esc(t.name)}: ${esc(t.about)}"><span class="tci">♛</span>
       <div class="tcb"><b>${esc(t.name)}</b><small>${esc(t.about)}</small>
         <span class="thold">${t.holders.length ? (mine ? 'You hold it' : `${face(t.holders[0], 'av', 16)}<span>Held by <b>${esc(t.holders.join(', '))}</b></span>`) : '<span>Nobody holds it yet</span>'}</span></div>
-      <span class="tcs">Crown</span></div>`;
+      </div>`;
   }
   const state = t.earned ? 'got' : t.progress ? 'prog' : 'dim';
   const held = heldBy(badge);
-  return `<div class="tc ${state} ${badge?.rare ? 'rare' : ''}" title="${esc(t.name)}: ${esc(t.about)}"><span class="tci">${esc(t.icon || '★')}</span>
+  // a locked title says so by looking it (dashed and dimmed), not with a word that takes room from its name
+  return `<div class="tc ${state} ${badge?.rare ? 'rare' : ''}" title="${esc(t.name)}: ${esc(t.about)}${state === 'dim' ? ' (locked)' : ''}"><span class="tci">${esc(t.icon || '★')}</span>
     <div class="tcb"><b>${esc(t.name)}${badge?.times ? ` <em>×${fmt(badge.times)}</em>` : ''}</b><small>${esc(t.about)}</small>${held ? `<small class="tfew">held by ${fmt(held)}</small>` : ''}</div>
-    ${t.earned ? `<span class="tcs ok">${rare || '✓'}</span>` : t.progress ? `<span class="tcs num">${count(t.progress)}</span>` : '<span class="tcs">Locked</span>'}
+    ${t.earned ? `<span class="tcs ok">${rare || '✓'}</span>` : t.progress ? `<span class="tcs num">${count(t.progress)}</span>` : ''}
     ${!t.earned && t.progress ? bar(t.progress) : ''}</div>`;
 }
 
@@ -155,6 +156,8 @@ const EARNED_HERE = 16;
 let chosen = 'all';
 
 export function wire(main) {
+  // an earned title whose name doesn't fit half the list takes the whole row (measured: Windows draws text wider)
+  main.querySelectorAll('.tearned .ter b').forEach((b) => b.scrollWidth > b.clientWidth + 1 && b.closest('.ter').classList.add('wide'));
   const tabs = [...main.querySelectorAll('.tcat[data-tg]')];
   const show = (tg) => {
     chosen = main.querySelector(`.tcat[data-tg="${tg}"]`) ? tg : 'all';

@@ -671,7 +671,6 @@ td small.late { display: block; margin-top: 2px; font-size: 11px; color: var(--t
 .tc.prog .tci { filter: grayscale(.6); opacity: .8; }
 .tc.prog .tcb b { color: var(--t2); }
 .tc.tcrown .tci { color: var(--gold); font-size: 17px; border-color: rgba(255,207,107,.3); background: radial-gradient(circle, rgba(255,207,107,.12), transparent 70%); }
-.tc.tcrown .tcs { color: var(--gold); opacity: .75; }
 .thold { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 11.5px; color: var(--t3); min-width: 0; }
 .thold b { color: var(--t1); font: 600 11.5px var(--sans); letter-spacing: 0; text-transform: none; }
 .thold .orb { box-shadow: 0 0 0 1px rgba(255,207,107,.4); font-size: 8px !important; }
@@ -928,7 +927,8 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 
 /* Earned: two columns of short rows */
 .tearned { grid-template-columns: 1fr 1fr; gap: 5px; padding-right: 0; }
-.tearned { align-content: start; }
+.tearned { align-content: start; grid-auto-flow: row dense; }
+.tearned .ter.wide { grid-column: 1 / -1; }
 .tearned .ter { grid-template-columns: 20px 1fr auto; gap: 7px; padding: 3px 7px; border-radius: 9px; }
 .tearned .ter .tci { width: 20px; height: 20px; font-size: 11px; }
 .tearned .ter b { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -946,8 +946,10 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 .tc { padding: 7px 9px; gap: 2px 8px; grid-template-columns: 26px 1fr auto; }
 .tcb b { font-size: 13.5px; }
 .tcb small { font-size: 11px; line-height: 1.3; }
-/* a card's blurb: two lines (the whole of it is on hover); a crown's holder on one line */
-.tcb small:not(.tfew) { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* a card's blurb: up to three lines (the whole of it is on hover); a crown's holder on one line. Locked titles and
+   crowns have no status column, so their name and blurb get the card's width */
+.tcb small:not(.tfew) { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.tc.dim, .tc.tcrown { grid-template-columns: 26px 1fr; }
 .thold { margin-top: 2px; white-space: nowrap; overflow: hidden; }
 .thold b { overflow: hidden; text-overflow: ellipsis; }
 .tc.lad, .tc.ering { gap: 4px; }
@@ -1039,5 +1041,5 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 [data-wvp][hidden] { display: none; }
 [data-wvp="model"] .cmodel { margin: 0; padding: 0; border: 0; }
 .seg.sm button { white-space: nowrap; }
-/* a long title name ends in "…" rather than squeezing its card (Windows' font runs wider) */
-.tcb b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* a long title name takes a second line rather than being cut (Windows' font runs wider) */
+.tcb b { overflow-wrap: break-word; }

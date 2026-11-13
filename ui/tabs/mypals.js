@@ -4,7 +4,7 @@
 import { invoke } from '../lib/bridge.js';
 import { esc, fmt, pct } from '../lib/format.js';
 import { boxCard, boxCols, boxGrid, ivRow, STATS, ivTone } from '../lib/box.js';
-import { orb, passivePills } from '../lib/pal.js';
+import { art, orb, passivePills } from '../lib/pal.js';
 import { empty } from '../lib/viz.js';
 
 const TAG = { Reroll: 'rr', Maybe: 'maybe', Keep: 'keep', Replace: 'no' };
@@ -95,7 +95,7 @@ function rerollPanel(s) {
   // saved, the card catching up) shows as done
   const working = panel.busy || panel.wait;
   const head = `<div class="ph"><h3>Reroll</h3><button class="btn ghost sm" id="mrr-x">Back</button></div>
-    <div class="mrr-pal">${orb(p.pal, p.slug, 'h', 52)}<div><b>${esc(p.pal)}</b><small>${p.tier ? `<span class="tierb tier-${esc(p.tier.toLowerCase())}">${esc(p.tier)}</span>` : ''}power ${p.power != null ? fmt(p.power) : '—'}${a ? `<span class="tag ${TAG[a.tag]}">${esc(a.tag)}</span>` : ''}${p.rerolls ? ` · rerolled ×${fmt(p.rerolls)}` : ''}</small>${p.passives?.length ? `<div class="pills">${passivePills(p.passives)}</div>` : ''}</div></div>`;
+    <div class="mrr-pal"><div><b>${esc(p.pal)}</b><small>${p.tier ? `<span class="tierb tier-${esc(p.tier.toLowerCase())}">${esc(p.tier)}</span>` : ''}power ${p.power != null ? fmt(p.power) : '—'}${a ? `<span class="tag ${TAG[a.tag]}">${esc(a.tag)}</span>` : ''}${p.rerolls ? ` · rerolled ×${fmt(p.rerolls)}` : ''}</small>${p.passives?.length ? `<div class="pills">${passivePills(p.passives)}</div>` : ''}</div></div>`;
   let body;
   if (working && panel.rolls.length < 2) {
     body = `${panel.rolls[0] ? dice(panel.rolls[0][1]) : ''}<div class="mrr-wait"><span class="spin" aria-hidden="true"></span><b>${esc(panel.state || 'The site is working on it…')}</b><small>${esc(panel.note || '')}</small></div>`;
@@ -132,7 +132,7 @@ function rerollPanel(s) {
   }
   // what the site last said: its flash, or its status once a step is done ("Kept! …")
   const said = panel.said || (!working && panel.rolls.length < 2 ? panel.state : '');
-  return `<div class="panel col mrr sel">${head}${said ? `<div class="mrr-said">${esc(said)}</div>` : ''}<div class="mrr-body">${body}</div></div>`;
+  return `<div class="panel col mrr sel">${art(p.pal, p.slug)}${head}${said ? `<div class="mrr-said">${esc(said)}</div>` : ''}<div class="mrr-body">${body}</div></div>`;
 }
 
 function draw(app) {

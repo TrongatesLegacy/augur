@@ -3,7 +3,7 @@
 // model it used) and the tale of the tape. Both answer "how is Augur calling this fight": Live before the bell,
 // History after it. They take a call's detail (views.rs CallDetail): a pending call has no winner and no fight.
 import { esc, fmt, pct } from './format.js';
-import { dial, face, orb, passivePills, tapeRows } from './pal.js';
+import { art, dial, face, passivePills, tapeRows } from './pal.js';
 import { empty } from './viz.js';
 
 export const SIDES = ['home', 'away'];
@@ -34,20 +34,17 @@ const rankGap = (c) => {
   return h && a ? `#${fmt(h.rank)} vs #${fmt(a.rank)} of ${fmt(h.of)}` : 'pal ranks';
 };
 
-// a side of the headline: orb (crowned if it won), name, owner, types, and whether Augur picked it. Before the bell
-// the side Augur didn't pick is the one dimmed
+// a side of the headline: name, owner, types, and whether Augur picked it (its art is the stage's backdrop)
 function side(d, s) {
   const c = d.call;
   const f = c.fighters?.[s === 'home' ? 0 : 1];
   const lit = pending(c) ? c.pick === s : c.winner === s;
-  const cls = s === 'home' ? 'h' : 'a';
   const owner = s === 'home' ? c.home_owner : c.away_owner;
   const result = pending(c) ? '' : c.winner === s ? '<span class="ctag won">Won</span>' : '<span class="ctag lost">Lost</span>';
   const r = rankOf(c, s);
   const tier = r ? `<span class="ctag tier tier-${esc(r.tier).toLowerCase()}" title="${esc(rankTitle(r))}">${esc(r.tier)}</span>` : '';
   const tags = `${tier}${c.pick === s ? `<span class="ctag pick">Augur's pick</span>` : ''}${result}`;
-  return `<div class="fx ${s === 'away' ? 'r' : ''}">${orb(pal(c, s), d.slugs[s === 'home' ? 0 : 1], cls + (lit ? '' : ' dim'), 68, !pending(c) && lit)}
-    <div><div class="ctags">${tags || '<span class="ctag none"></span>'}</div><div class="nm" style="${lit ? '' : 'color:var(--t2)'}">${esc(pal(c, s))}</div>
+  return `<div class="fx ${s === 'away' ? 'r' : ''}"><div><div class="ctags">${tags || '<span class="ctag none"></span>'}</div><div class="nm" style="${lit ? '' : 'color:var(--t2)'}">${esc(pal(c, s))}</div>
       <div class="ow">${face(owner, 'a av', 18)}${s.toUpperCase()} · ${esc(owner)}</div>
       ${f ? `<div class="els">${f.types.map((t) => `<span class="el">${esc(t)}</span>`).join('')}</div>` : ''}</div></div>`;
 }
@@ -73,7 +70,10 @@ function notes(d) {
 // chance: the dial's, when it isn't the call's own (Live shows the chance as it stands)
 export function headline(d, { verdict = '', line = '', extra = '', chance } = {}) {
   const c = d.call;
-  return `<div class="stage cstage${pending(c) ? ' pending' : ''}">${side(d, 'home')}
+  // each pal's art fades in from its own side; before the bell the side Augur didn't pick is dimmed, after it the loser
+  const lit = (s) => (pending(c) ? c.pick === s : c.winner === s);
+  const backdrop = SIDES.map((s, i) => art(pal(c, s), d.slugs[i], `${s}${lit(s) ? '' : ' off'}`)).join('');
+  return `<div class="stage cstage${pending(c) ? ' pending' : ''}">${backdrop}${side(d, 'home')}
     <div class="cmid"><div class="cverdict">${dial(chance ?? c.prob, 80)}<div>
       <div class="cpick"><span class="label">${pending(c) ? 'Augur calls' : 'Augur called'}</span><b>${esc(pal(c, c.pick))}</b></div>${verdict}</div></div>
       ${line ? `<div class="cwon">${line}</div>` : ''}${extra}${notes(d)}</div>

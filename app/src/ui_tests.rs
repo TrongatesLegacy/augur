@@ -452,7 +452,10 @@ const MAIN_DRIVER: &str = r#"
       .map((el) => `${el.tagName.toLowerCase()}.${[...el.classList].join('.')} (${el.clientWidth}px, needs ${el.scrollWidth}px): ${el.textContent.trim().replace(/\s+/g, ' ').slice(0, 50)}`);
   if (!window.augur) window.__errors.push('the page never started (a module failed to load)');
   else {
-    for (const tab of only ? [only] : ['live', 'liveedge', 'history', 'call', 'bets', 'pals', 'players', 'you', 'titles', 'titlesone', 'mypals', 'mypalsone', 'mypalsroll', 'mypalsbusy', 'mypalskept', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'changelog', 'updates', 'offair']) {
+    for (const tab of only ? [only] : ['live', 'liveedge', 'history', 'call', 'bets', 'pals', 'players', 'playersfew', 'you', 'titles', 'titlesone', 'mypals', 'mypalsone', 'mypalsroll', 'mypalsbusy', 'mypalskept', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'changelog', 'updates', 'offair']) {
+      // "playersfew" is Players with only 4 pals in the box: room enough to stack the cards' rolls
+      DATA.player_all ||= DATA.player;
+      DATA.player = tab === 'playersfew' ? { ...DATA.player_all, roster: DATA.player_all.roster.slice(0, 4) } : DATA.player_all;
       // "ownmodel" is Settings › Model with self-tuning off and your own values
       const own = DATA.get_settings;
       if (tab === 'ownmodel') DATA.get_settings = { ...own, model_auto: false };
@@ -486,7 +489,7 @@ const MAIN_DRIVER: &str = r#"
       } else window.augur.state.live = DATA.live;
       window.augur.state.settingsPage = ['staking', 'sync', 'updates'].includes(tab) ? tab : tab === 'ownmodel' ? 'model' : tab === 'changelog' ? 'updates' : 'general';
       // "welcome" is the fresh install's overlay, over Live
-      await window.augur.show(['bets', 'call'].includes(tab) ? 'history' : ['staking', 'sync', 'changelog', 'updates', 'ownmodel'].includes(tab) ? 'settings' : ['welcome', 'offair', 'liveedge'].includes(tab) ? 'live' : ['titles', 'titlesone'].includes(tab) || tab.startsWith('mypals') ? 'you' : tab);
+      await window.augur.show(['bets', 'call'].includes(tab) ? 'history' : ['staking', 'sync', 'changelog', 'updates', 'ownmodel'].includes(tab) ? 'settings' : ['welcome', 'offair', 'liveedge'].includes(tab) ? 'live' : ['titles', 'titlesone'].includes(tab) || tab.startsWith('mypals') ? 'you' : tab === 'playersfew' ? 'players' : tab);
       await sleep(300);
       // the page and every box in it that scrolls (its panel's title, and how much it holds against what shows)
       const scrolling = () =>
@@ -496,9 +499,10 @@ const MAIN_DRIVER: &str = r#"
       out.scrollers ||= {};
       out.scrollers[tab] = scrolling();
       // a pal box's cards line up: in each row of cards, the talent rolls start at the same height
-      if (tab === 'players' || tab === 'mypals') {
+      if (['players', 'playersfew', 'mypals'].includes(tab)) {
         const rows = {};
         for (const c of document.querySelectorAll('.bxp')) (rows[Math.round(c.getBoundingClientRect().top)] ||= []).push(Math.round(c.querySelector('.bxi').getBoundingClientRect().top - c.getBoundingClientRect().top));
+        out[tab + 'Stacked'] = !!document.querySelector('.bxbox.roomy');
         out[tab + 'BoxRows'] = Object.values(rows).map((tops) => Math.max(...tops) - Math.min(...tops));
         // the art behind a card is decoration: the cards and the box are the same size without it
         const sizes = () => JSON.stringify([...document.querySelectorAll('.bxbox, .bxp')].map((el) => [el.offsetWidth, el.offsetHeight, el.scrollHeight]));
@@ -1067,7 +1071,9 @@ fn every_tab_renders_headless() {
         text("pals")
     );
     assert!(text("players").contains("nyafia primo"), "Players: {}", text("players"));
-    for tab in ["players", "mypals"] {
+    assert_eq!(r["playersfewStacked"], true, "a box with room to spare stacks its cards' rolls");
+    assert_eq!(r["playersStacked"], false, "a full box keeps its cards' rolls side by side");
+    for tab in ["players", "playersfew", "mypals"] {
         let rows = r[format!("{tab}BoxRows")].as_array().unwrap_or_else(|| panic!("{tab}: no pal box cards"));
         assert!(!rows.is_empty() && rows.iter().all(|d| d.as_i64() == Some(0)), "{tab}: the box cards' rows don't line up: {rows:?}");
         let art = &r[format!("{tab}BoxArt")];
@@ -1140,6 +1146,7 @@ fn every_tab_renders_headless() {
             "bets",
             "pals",
             "players",
+            "playersfew",
             "you",
             "titles",
             "titlesone",

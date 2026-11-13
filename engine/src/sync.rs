@@ -205,17 +205,45 @@ impl SyncState {
     }
 }
 
-/// The other computers' files, skipping half-synced and long-silent ones.
+/// The other computers' files, skipping half-synced and long-silent ones. One per computer: a sync app's leftover
+/// copy of a file ("<device>-<name>.json") is older than the real one, so the newest wins.
 pub fn read_others(dir: &Path, own: &str, now: u64) -> Vec<DeviceFile> {
     let Ok(names) = std::fs::read_dir(dir.join("devices")) else { return vec![] };
-    let mut out: Vec<DeviceFile> = names
+    let mut newest: BTreeMap<String, DeviceFile> = BTreeMap::new();
+    for f in names
         .flatten()
         .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
         .filter_map(|e| serde_json::from_str::<DeviceFile>(&std::fs::read_to_string(e.path()).ok()?).ok())
         .filter(|f| f.device != own && now.saturating_sub(f.at) < STALE_MS)
-        .collect();
+    {
+        if newest.get(&f.device).is_none_or(|n| f.at > n.at) {
+            newest.insert(f.device.clone(), f);
+        }
+    }
+    let mut out: Vec<DeviceFile> = newest.into_values().collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
+}
+
+/// A fingerprint of the other computers' files (names, sizes, times). Cheap enough to check every few seconds, so a
+/// sync can follow soon after the sync app brings something in.
+pub fn others_stamp(dir: &Path, own: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for sub in ["devices", "calls"] {
+        let Ok(names) = std::fs::read_dir(dir.join(sub)) else { continue };
+        let mut files: Vec<(String, u64, Option<std::time::SystemTime>)> = names
+            .flatten()
+            .filter(|e| !e.file_name().to_string_lossy().starts_with(own))
+            .filter_map(|e| {
+                let m = e.metadata().ok()?;
+                Some((e.file_name().to_string_lossy().into_owned(), m.len(), m.modified().ok()))
+            })
+            .collect();
+        files.sort();
+        files.hash(&mut h);
+    }
+    h.finish()
 }
 
 /// Takes each setting another computer changed more recently. Returns the values that changed here and the computer
@@ -418,6 +446,40 @@ mod tests {
         let mut pc = computer("PC", &folder);
         let got = pc.sync(&conn, &flatten(&json!({"default_voice": "Yoda"}), &[]), "Windows", "0.1.0", 3_000);
         assert_eq!(got.settings["default_voice"], "Gollum", "the Mac's change beats the PC's untouched default");
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn a_leftover_copy_of_a_computers_file_isnt_another_computer() {
+        let folder = temp("copy");
+        let (mac_db, pc_db) = (crate::seed::store(), db::open_memory().unwrap());
+        let (mut mac, mut pc) = (computer("Mac", &folder), computer("PC", &folder));
+        let none = BTreeMap::new();
+        mac.sync(&mac_db, &none, "macOS", "0.1.0", 1_000);
+        let dir = mac.dir().unwrap();
+        let copy = dir.join("devices/dev-Mac-Old Name.json");
+        std::fs::copy(dir.join("devices/dev-Mac.json"), &copy).unwrap();
+        mac.sync(&mac_db, &none, "macOS", "0.1.0", 2_000);
+        let got = pc.sync(&pc_db, &none, "Windows", "0.1.0", 3_000);
+        assert_eq!(got.others.len(), 1);
+        assert_eq!(got.others[0].at, 2_000, "the newest of the two");
+        assert_eq!(pc.history[0].from, "Mac", "not \"2 computers\"");
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn the_stamp_changes_with_the_other_computers_files_only() {
+        let folder = temp("stamp");
+        let conn = crate::seed::store();
+        let (mut mac, mut pc) = (computer("Mac", &folder), computer("PC", &folder));
+        let none = BTreeMap::new();
+        mac.sync(&conn, &none, "macOS", "0.1.0", 1_000);
+        let dir = mac.dir().unwrap();
+        let before = others_stamp(&dir, &pc.device);
+        pc.sync(&db::open_memory().unwrap(), &none, "Windows", "0.1.0", 2_000);
+        assert_eq!(others_stamp(&dir, &pc.device), before, "its own files don't count");
+        std::fs::write(dir.join("calls/dev-Mac.jsonl"), "").unwrap();
+        assert_ne!(others_stamp(&dir, &pc.device), before, "the Mac's calls file changed");
         let _ = std::fs::remove_dir_all(folder);
     }
 

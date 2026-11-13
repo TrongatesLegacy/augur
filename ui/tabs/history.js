@@ -3,6 +3,7 @@
 // call opens its breakdown (call.js); Back returns to the list as it was.
 import { invoke } from '../lib/bridge.js';
 import { ago, esc, fmt, pct, short, signed } from '../lib/format.js';
+import { BET_LABELS } from '../lib/stake.js';
 import { columns, empty, ring, signedBar, spark, stack } from '../lib/viz.js';
 import * as call from './call.js';
 
@@ -28,8 +29,6 @@ const VIEWS = [
   ['bets', 'Your bets'],
 ];
 
-const LABELS = { followed: 'Followed', deviated: 'Deviated', missed: 'Missed', no_call: 'No call', pending: 'Pending' };
-
 const side = (f, s) => (s == null ? '—' : esc(s === 'home' ? f.home_pal : f.away_pal));
 const money = (n, est) => (n == null ? '<span class="muted">—</span>' : `<span class="${n > 0 ? 'ok' : n < 0 ? 'bad' : 'muted'}">${signed(n)}</span>${est ? ' <span class="est" title="Estimated at your usual payout">est.</span>' : ''}`);
 
@@ -40,7 +39,7 @@ function betRow(f) {
   const augur = f.pick ? cell(side(f, f.pick), `${pct(f.prob)} · ${f.augur_command ? `<b>${esc(f.augur_command)}</b>` : 'no bet'}`) : '<span class="muted">no call</span>';
   const yours = f.backed ? cell(side(f, f.backed), `${fmt(f.stake)} credits`) : '<span class="muted">no bet</span>';
   const open = f.call_id != null ? ` class="go" data-call="${f.call_id}" tabindex="0" title="See how this duel went and how Augur called it"` : '';
-  return `<tr${open}><td>${esc(f.home_pal)} <span class="muted">vs</span> ${esc(f.away_pal)}</td><td>${augur}</td><td>${yours}</td><td><span class="lab ${f.label}">${LABELS[f.label]}</span></td><td class="num">${money(f.result)}</td><td class="num">${f.pick ? money(f.augur_result, f.estimated) : money(null)}</td><td class="goar" aria-hidden="true">${open ? '›' : ''}</td></tr>`;
+  return `<tr${open}><td>${esc(f.home_pal)} <span class="muted">vs</span> ${esc(f.away_pal)}</td><td>${augur}</td><td>${yours}</td><td><span class="lab ${f.label}">${BET_LABELS[f.label]}</span></td><td class="num">${money(f.result)}</td><td class="num">${f.pick ? money(f.augur_result, f.estimated) : money(null)}</td><td class="goar" aria-hidden="true">${open ? '›' : ''}</td></tr>`;
 }
 
 async function renderBets(app, controls) {

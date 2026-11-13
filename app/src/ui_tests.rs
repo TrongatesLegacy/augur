@@ -107,9 +107,11 @@ pub fn fixture_data() -> Value {
         c.late = Some((if c.pick == "home" { "away" } else { "home" }.into(), 0.575));
     }
     // a call's breakdown: the newest call (the first row) with a made-up fight tape, re-called after the bell like
-    // its row, and its home side's stats taken from the owner's box (a store of its own, so the counts above hold)
+    // its row, its home side's stats taken from the owner's box, and your bet on it (a store of its own, so the counts
+    // above hold)
     let call_detail = {
         let conn = seed::store();
+        seed::import_bets(&conn);
         let newest = augur_engine::db::settled(&conn).unwrap().pop().unwrap();
         seed::tape(&conn, newest.duel_id.unwrap());
         conn.execute(
@@ -124,7 +126,7 @@ pub fn fixture_data() -> Value {
             [newest.id],
         )
         .unwrap();
-        let mut d = views::call_detail(&conn, newest.id).unwrap().unwrap();
+        let mut d = views::call_detail(&conn, newest.id, &StakeSettings::default()).unwrap().unwrap();
         d.call.late = history.calls.first().and_then(|c| c.late.clone());
         d
     };
@@ -426,6 +428,8 @@ const MAIN_DRIVER: &str = r#"
         out[tab + 'Panels'] = {
           h2h: inside(document.querySelector('.hh')),
           race: inside(document.querySelector('.hr')),
+          // a box that scrolls down mustn't also scroll sideways (a grey bar under the pals with scroll bars always on)
+          sideways: [...document.querySelectorAll('.hh .fillin, .hh .hhm')].some((el) => el.scrollWidth > el.clientWidth),
           ends: ends.length,
           apart: ends.length === 2 && (ends[0].bottom <= ends[1].top || ends[1].bottom <= ends[0].top),
           meetings: document.querySelectorAll('.hh .hhr').length,
@@ -495,6 +499,28 @@ const MAIN_DRIVER: &str = r#"
     }
   }
   out.sidebar = document.querySelector('.side')?.innerText || '';
+  // the activity spot's rules, for what the stand-in bridge can't send (events): a call arriving from another computer,
+  // the launch's catch-up, and the bets import alongside the background fetch
+  {
+    const { activity, FLASH_MS } = await import('./lib/activity.js');
+    const now = 1_000_000;
+    const sync = { on: true, last_sync: now - 1000 };
+    const flash = { at: now - 2000, from: 'Gaming PC', summary: '2 calls' };
+    const line = (a) => a && [a.kind, a.short, a.label, a.long.split('\n').length].join('|');
+    out.activity = {
+      arrived: line(activity({ sync, flash }, now)),
+      faded: activity({ sync, flash }, now + FLASH_MS),
+      settings: activity({ sync, flash: { ...flash, summary: 'strategy, max from' } }, now)?.short,
+      catchup: line(activity({ fetch: { phase: 'catchup', done: 3, total: 12 }, sync }, now)),
+      nothingNew: activity({ fetch: { phase: 'catchup', done: 0, total: 0 }, sync }, now),
+      both: line(activity({ fetch: { phase: 'duels', done: 1, total: 4 }, bets: { phase: 'bets', done: 1, total: 2 }, sync }, now)),
+      idle: activity({ fetch: { phase: 'done' }, bets: { phase: 'done' }, sync }, now),
+      // the ring holds a number: the minutes until the site is asked again, the share when paused or stopped
+      waiting: line(activity({ fetch: { phase: 'duels', done: 1, total: 4, resume_at: now + 4 * 60_000 } }, now)),
+      paused: line(activity({ fetch: { phase: 'duels', done: 1, total: 4, paused: true } }, now)),
+      stopped: line(activity({ fetch: { phase: 'duels', done: 1, total: 4, gave_up: true } }, now)),
+    };
+  }
   out.upbar = document.getElementById('upbar')?.innerText || '';
   // a fresh install's welcome, over everything
   window.augur?.showWelcome({ first_run: true });
@@ -738,6 +764,7 @@ fn every_tab_renders_headless() {
     for tab in ["livePanels", "liveedgePanels"] {
         let f = &r[tab];
         assert_eq!((&f["h2h"], &f["race"]), (&json!(true), &json!(true)), "{tab}: nothing spills out of the panels: {f}");
+        assert_eq!(f["sideways"], json!(false), "{tab}: the head to head doesn't scroll sideways: {f}");
         assert_eq!((&f["ends"], &f["apart"]), (&json!(2), &json!(true)), "{tab}: the race's end labels never overlap: {f}");
     }
     assert!(text("history").contains("14 / 19"), "History: {}", text("history"));
@@ -747,7 +774,7 @@ fn every_tab_renders_headless() {
     let (home, away) = (d["call"]["home_pal"].as_str().unwrap().to_lowercase(), d["call"]["away_pal"].as_str().unwrap().to_lowercase());
     let ko = d["fight"]["ko"].as_str().unwrap();
     assert!(call.contains(&home) && call.contains(&away) && call.contains("augur called"), "the breakdown names both pals: {call}");
-    assert!(call.contains(&format!("k.o. {ko}")) && call.contains("% hp left"), "the result, K.O. and HP left: {call}");
+    assert!(call.contains(&format!("k.o.\n{ko}\n")) && call.contains("% hp left"), "the K.O. and HP left under the dial: {call}");
     assert!(call.contains("how it went") && call.contains("damage by move") && call.contains("top hits"), "how the duel went: {call}");
     assert!(call.contains("counted most for"), "the breakdown says what swung the call most: {call}");
     assert!(
@@ -765,6 +792,12 @@ fn every_tab_renders_headless() {
     for (tab, tags) in [("call", "b\nwon"), ("live", "b\naugur's pick")] {
         assert!(text(tab).contains(tags), "{tab}: the tier sits with the side's tags: {}", text(tab));
     }
+    let bet = &d["bet"];
+    let (cmd, label) = (bet["augur_command"].as_str().unwrap().to_lowercase(), bet["label"].as_str().unwrap());
+    assert!(bet["backed"].is_string(), "the seed has a bet on its newest call: {bet}");
+    let side = if bet["backed"] == "home" { "!h" } else { "!a" };
+    let yours = format!("your bet\n{label}\n{side} {}\n", bet["stake"].as_u64().unwrap());
+    assert!(call.contains(&format!("augur’s bet\n{cmd}\n")) && call.contains(&yours), "the money on it, Augur's and yours: {call}");
     assert_eq!(r["chart"]["lines"], json!(2), "an HP line per side");
     assert_eq!(r["chart"]["hits"].as_u64().unwrap() as usize, d["fight"]["hits"].as_array().unwrap().len(), "a dot per hit");
     assert_eq!(r["chart"]["ko"], json!(true), "the K.O. is marked");
@@ -840,6 +873,17 @@ fn every_tab_renders_headless() {
         text("welcome")
     );
     assert!(text("sidebar").contains("25%") && text("sidebar").contains("fetching"), "the sidebar shows the fetch: {}", text("sidebar"));
+    let a = &r["activity"];
+    assert_eq!(a["arrived"], json!("sync|+2|Synced|2"), "calls from another computer, then when it last synced: {a}");
+    assert_eq!((&a["faded"], &a["idle"], &a["nothingNew"]), (&json!(null), &json!(null), &json!(null)), "nothing going on: {a}");
+    assert_eq!(a["settings"], json!("✓"), "settings arriving: {a}");
+    assert_eq!(a["catchup"], json!("fetch|25%|Catch-up|2"), "the launch's catch-up: {a}");
+    assert_eq!(a["both"], json!("fetch|25%|Fetching|3"), "the fetch shows, the bets import is in the hover: {a}");
+    assert_eq!(
+        (&a["waiting"], &a["paused"], &a["stopped"]),
+        (&json!("fetch|4m|Site busy|1"), &json!("fetch|25%|Paused|1"), &json!("fetch|25%|Stopped|1")),
+        "the word goes under the ring, not in it: {a}"
+    );
     let stake = data["live"]["stake"]["command"].as_str().unwrap();
     assert!(
         !stake.is_empty() && text("live").contains(&format!("{stake}\n")) && text("live").contains(" credits\ncopy\n"),

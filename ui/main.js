@@ -1,5 +1,5 @@
 // The main window: the sidebar, the shared state the tabs read, and the events from the Rust side.
-import { backfillState } from './lib/backfill.js';
+import { activity, activityHtml, FLASH_MS } from './lib/activity.js';
 import { invoke, listen } from './lib/bridge.js';
 import { esc } from './lib/format.js';
 import * as history from './tabs/history.js';
@@ -83,18 +83,31 @@ function showWelcome(live) {
   el.querySelector('#wi').focus();
 }
 
-// the sidebar's small ring while the background fetch runs (click: the Model tab's details)
+// the sidebar's activity spot: what's being brought in (click: where it's shown in full)
 const bf = document.getElementById('bf');
-function showBackfill(p) {
-  const st = backfillState(p);
-  bf.hidden = !st;
-  if (!st) return;
-  bf.title = st.long;
-  bf.classList.toggle('warn', !!st.warn);
-  bf.innerHTML = `<svg viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="15" class="t"/><circle cx="18" cy="18" r="15" class="f" style="stroke-dasharray:${(st.share * 94.2).toFixed(1)} 94.2"/></svg><span>${esc(st.short)}</span><small>${st.warn ? 'Site busy' : 'Fetching'}</small>`;
+const busy = { fetch: null, bets: null, sync: null, flash: null };
+let flashTimer;
+let tickTimer;
+function showActivity() {
+  const a = activity(busy);
+  bf.hidden = !a;
+  clearTimeout(tickTimer);
+  if (!a) return;
+  // a countdown in the ring: no event comes while the fetch waits out the site, so count down here
+  if (a.tick) tickTimer = setTimeout(showActivity, 15_000);
+  bf.title = a.long;
+  bf.dataset.go = a.go;
+  bf.className = `bf ${a.kind}${a.warn ? ' warn' : ''}`;
+  bf.innerHTML = activityHtml(a);
 }
-bf.onclick = () => app.show('model');
-listen('backfill', showBackfill);
+bf.onclick = () => {
+  const go = bf.dataset.go;
+  if (go === 'sync') (app.state.settingsPage = 'sync'), app.show('settings');
+  else if (go === 'bets') (app.state.view = 'bets'), app.show('history');
+  else app.show('model');
+};
+listen('backfill', (p) => ((busy.fetch = p), showActivity()));
+listen('bets', (p) => ((busy.bets = p), showActivity()));
 listen('live', (v) => {
   app.state.live = v;
   showWelcome(v);
@@ -106,7 +119,16 @@ listen('settings', (s) => {
   app.state.settings = s;
   if (app.state.tab === 'settings') settings.render(app);
 });
-listen('sync', () => {
+listen('sync', (v) => {
+  // a change from another computer that's newer than the last one shown: "Synced" for a few seconds
+  const c = v?.history?.[0];
+  if (c && busy.sync && c.at > (busy.sync.history?.[0]?.at || 0)) {
+    busy.flash = c;
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => ((busy.flash = null), showActivity()), FLASH_MS);
+  }
+  busy.sync = v;
+  showActivity();
   if (app.state.tab === 'settings' && app.state.settingsPage === 'sync') settings.render(app);
 });
 listen('calls', () => {
@@ -163,7 +185,9 @@ listen('account', (name) => {
 
 app.state.settings = await invoke('get_settings');
 app.state.live = await invoke('live');
-showBackfill(await invoke('backfill_progress'));
+busy.fetch = await invoke('backfill_progress');
+busy.sync = await invoke('sync_view').catch(() => null);
+showActivity();
 showWelcome(app.state.live);
 showYou((await invoke('account')).signed_in);
 showUpdate(await invoke('update_view'));

@@ -287,9 +287,13 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
 }
 
 /// Fetches species and past duels in the background, pausing whenever a duel is up. Runs again every 6 hours to pick
-/// up new duels.
+/// up new duels. First, at launch, a quick catch-up on the duels fought while Augur was closed.
 fn backfill_loop(app: AppHandle, shared: Arc<Shared>) {
-    std::thread::sleep(Duration::from_secs(20));
+    std::thread::sleep(Duration::from_secs(CATCH_UP_AFTER));
+    if shared.settings.lock().unwrap().backfill && !shared.setup_wait.load(Ordering::Relaxed) {
+        catch_up(&app, &shared);
+    }
+    std::thread::sleep(Duration::from_secs(20 - CATCH_UP_AFTER));
     // a fresh install: wait for an import (it fills most of this in) or "start fresh", at most 10 minutes
     let asked = Instant::now();
     while shared.setup_wait.load(Ordering::Relaxed) && asked.elapsed() < Duration::from_secs(600) && !shared.stop.load(Ordering::Relaxed) {
@@ -343,6 +347,31 @@ fn learn_loop(app: AppHandle, shared: Arc<Shared>) {
             std::thread::sleep(Duration::from_secs(1));
         }
     }
+}
+
+/// Seconds after launch before the catch-up: the live poll and the sync go first.
+const CATCH_UP_AFTER: u64 = 8;
+/// The catch-up's pace. It runs while duels are up, alongside the live poll, so slower than the full run's.
+const CATCH_UP_PACE: Duration = Duration::from_secs(2);
+
+fn catch_up(app: &AppHandle, shared: &Shared) {
+    let Ok(conn) = shared.db() else { return };
+    let Some(latest) = site::State::fetch().ok().and_then(|s| s.recent.iter().map(|r| r.id).max()) else { return };
+    let busy = || false;
+    let progress = |p: &Progress| {
+        *shared.backfill.lock().unwrap() = p.clone();
+        let _ = app.emit("backfill", p);
+    };
+    let ctl = backfill::Control { stop: &shared.stop, busy: &busy, progress: &progress };
+    match backfill::catch_up(&conn, latest, &mut backfill::Pacer::new(CATCH_UP_PACE), &ctl) {
+        Ok(n) if n > 0 => {
+            *shared.backtest.lock().unwrap() = None;
+            shared.learn_now.store(true, Ordering::Relaxed);
+        }
+        Ok(_) => {}
+        Err(e) => shared.backfill.lock().unwrap().last_error = Some(e.to_string()),
+    }
+    progress(&Progress { phase: "done".into(), ..Default::default() });
 }
 
 /// Reads the developer's picks list (signed in) every 5 minutes and soon after each result: the first time all of it,
@@ -508,7 +537,8 @@ async fn history(shared: tauri::State<'_, Arc<Shared>>, range: String) -> Cmd<Hi
 /// One call's breakdown, opened from History (None if it isn't a settled call).
 #[tauri::command]
 async fn call_detail(shared: tauri::State<'_, Arc<Shared>>, id: i64) -> Cmd<Option<views::CallDetail>> {
-    views::call_detail(&shared.db()?, id).map_err(|e| e.to_string())
+    let staking = shared.settings.lock().unwrap().staking.clone();
+    views::call_detail(&shared.db()?, id, &staking).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

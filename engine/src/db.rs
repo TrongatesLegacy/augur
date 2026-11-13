@@ -622,7 +622,8 @@ fn fighters_of(conn: &Connection, id: i64, sizes: &std::collections::HashMap<Str
     Ok(home.zip(away))
 }
 
-/// Finished calls you could bet on (made while picks were open), oldest first: the tally, your bets and History.
+/// Finished calls you could bet on (made while picks were open), oldest fight first: the tally, your bets and
+/// History. By duel, not by row: a call synced in from another computer can arrive after newer ones made here.
 pub fn settled(conn: &Connection) -> Result<Vec<CallRecord>> {
     Ok(settled_all(conn)?.into_iter().filter(|c| !c.late_only).collect())
 }
@@ -643,7 +644,7 @@ fn settled_where(conn: &Connection, and: &str, args: impl rusqlite::Params) -> R
                 p.p_h2h, p.home_species_w, p.home_species_l, p.away_species_w, p.away_species_l, p.pal_h2h_home, p.pal_h2h_away,
                 p.duel_id, d.winner, d.fought_at, d.ko, d.winner_hp_left, p.stake, p.late_pick, p.late_prob, COALESCE(p.late_only, 0),
                 COALESCE(p.app_version, ''), COALESCE(p.model, ''), COALESCE(p.damaged, 0)
-         FROM predictions p LEFT JOIN duels d ON d.id = p.duel_id WHERE p.status = 'settled' AND d.winner IS NOT NULL {and} ORDER BY p.id"
+         FROM predictions p LEFT JOIN duels d ON d.id = p.duel_id WHERE p.status = 'settled' AND d.winner IS NOT NULL {and} ORDER BY p.duel_id, p.id"
     ))?;
     let calls: Vec<CallRecord> = st
         .query_map(args, |r| {
@@ -934,6 +935,21 @@ mod tests {
         assert_eq!(done.len(), 1);
         assert!(done[0].right());
         assert!(done[0].fighters.is_some());
+    }
+
+    #[test]
+    fn calls_are_in_fight_order_whenever_they_arrive() {
+        let conn = open_memory().unwrap();
+        let settle_one = |home: &str, away: &str, duel: u64| {
+            add_call(&conn, &call(home, away)).unwrap();
+            let recent = vec![Recent { id: duel, home: home.into(), away: away.into(), win: "home".into(), at: 2_000 }];
+            settle(&conn, &recent, |_| None).unwrap();
+        };
+        // the newer fight is called here first; the older one syncs in from another computer afterwards
+        settle_one("x", "y", 9);
+        settle_one("p", "q", 8);
+        let duels: Vec<Option<u64>> = settled(&conn).unwrap().iter().map(|c| c.duel_id).collect();
+        assert_eq!(duels, [Some(8), Some(9)]);
     }
 
     #[test]

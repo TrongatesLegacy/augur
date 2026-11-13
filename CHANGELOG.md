@@ -2,7 +2,10 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.7 (current)
+## 0.1.8 (current)
+- Species records get their own weight on real calls, learned once there are 60
+
+## 0.1.7
 - Update notes come from the changelog built into the app
 - The window reopens at its last size, and nothing bounces when scrolled
 - A damaged mark syncs straight away, not at the next result

@@ -304,8 +304,9 @@ pub fn predict(state: &State, opts: &Options) -> Option<Prediction> {
     let [box_home, box_away] = boxes;
     let mut home = build("home", h, a, hidden_home, box_home);
     let mut away = build("away", a, h, hidden_away, box_away);
+    // a real call: SPECIES_LIVE weighs the records
     let score = model::score(
-        &opts.settings,
+        &opts.settings.for_calls(),
         &home.fighter.fighter,
         &away.fighter.fighter,
         species_rec,

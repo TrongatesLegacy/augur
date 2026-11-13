@@ -16,6 +16,7 @@ const SETTINGS = [
   ['POWER_EXP', 'Move power', (v) => `^${v}`],
   ['STATS_STEEPNESS', 'Steepness', (v) => `${v}`],
   ['SPECIES_WEIGHT', 'Records', (v) => `×${v}`],
+  ['SPECIES_LIVE', 'Records on calls', (v) => `×${v}`],
   ['PAL_H2H_WEIGHT', 'Pal H2H', (v) => `×${v}`],
   ['COOLDOWN_EXP', 'Cooldowns', (v) => `^${v}`],
   ['HIT_WEIGHT', 'Real hit size', (v) => `^${v}`],

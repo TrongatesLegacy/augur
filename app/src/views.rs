@@ -747,7 +747,7 @@ fn fight_view(id: u64, d: site::Duel, fighters: Option<&(db::CallFighter, db::Ca
 
 fn model_call(c: &db::CallRecord, s: &model::Settings) -> Option<ModelCall> {
     let score = match (&c.fighters, c.species_rec) {
-        (Some((h, a)), Some(rec)) => Some(model::score(s, &h.fighter, &a.fighter, rec, c.pal_h2h)),
+        (Some((h, a)), Some(rec)) => Some(model::score(&s.for_calls(), &h.fighter, &a.fighter, rec, c.pal_h2h)),
         _ => None,
     };
     // calls imported from a calls file don't keep the factors: the re-run stands in
@@ -758,7 +758,7 @@ fn model_call(c: &db::CallRecord, s: &model::Settings) -> Option<ModelCall> {
         (None, Some(sc)) => ([sc.p_stats, sc.p_species, sc.p_h2h], true),
         (None, None) => return None,
     };
-    let factors: Vec<Factor> = [("stats", 1.0), ("species", s.species_weight), ("h2h", s.pal_h2h_weight)]
+    let factors: Vec<Factor> = [("stats", 1.0), ("species", s.species_on_calls()), ("h2h", s.pal_h2h_weight)]
         .iter()
         .zip(ps)
         .map(|((key, weight), p)| Factor { key: key.to_string(), p_home: p, weight: *weight, logit: weight * model::logit(p) })

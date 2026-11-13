@@ -15,10 +15,14 @@ export const KNOBS = {
   POWER_EXP: ['Move power weight', 0, 1, (v) => `^${v}`],
   STATS_STEEPNESS: ['Stats → chance', 1, 6, (v) => `${v}`],
   SPECIES_WEIGHT: ['Species records', 0, 2.5, (v) => `${v}`],
+  SPECIES_LIVE: ['Records on real calls', 0, 2, (v) => `${v}`],
   PAL_H2H_WEIGHT: ['Pal head to head', 0, 1.5, (v) => `${v}`],
   COOLDOWN_EXP: ['Cooldown passives', 0, 1, (v) => `^${v}`],
   HIT_WEIGHT: ['Real hit size', 0, 1, (v) => `^${v}`],
 };
+
+// a setting's value: Records on real calls follows Species records until it's learned or set
+export const knobValue = (s, key) => s[key] ?? (key === 'SPECIES_LIVE' ? s.SPECIES_WEIGHT : undefined);
 
 // what the learner last did with a setting, as a line under its name
 function knobNote(k, auto) {
@@ -87,7 +91,7 @@ export async function render(app) {
     <div class="g3 grow">
       <div class="panel col"><div class="ph"><h3>Settings</h3><span>${m.auto ? 'learned from your duels' : 'set by you'}</span></div><div class="sets">
         ${Object.entries(KNOBS)
-          .map(([key, [label, lo, hi, show]]) => slider(label, s[key], lo, hi, show(s[key]), knobNote(l?.knobs.find((k) => k.key === key), m.auto)))
+          .map(([key, [label, lo, hi, show]]) => slider(label, knobValue(s, key), lo, hi, show(knobValue(s, key)), knobNote(l?.knobs.find((k) => k.key === key), m.auto)))
           .join('')}</div></div>
       <div class="stackc">${learning}
         <div class="panel col grow"><div class="ph"><h3>Pals with secret moves</h3><span>share of damage</span></div>${

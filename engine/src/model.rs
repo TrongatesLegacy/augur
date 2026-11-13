@@ -35,6 +35,11 @@ pub struct Settings {
     /// start; held-back past duels preferred about 0.25 on 12 Nov)
     #[serde(default)]
     pub hit_weight: f64,
+    /// SPECIES_WEIGHT on real calls, which see each pal's actual stats (the past duels the species weight is fitted
+    /// on have base stats only, so records matter more there). Unset, it follows SPECIES_WEIGHT; learned on real
+    /// calls once there are enough. On 13 Nov the first 50 calls leaned toward about 0.3 against 1.2, too few to tell
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub species_live: Option<f64>,
 }
 
 fn half() -> f64 {
@@ -52,14 +57,24 @@ impl Default for Settings {
             pal_h2h_weight: 0.5,
             cooldown_exp: 0.5,
             hit_weight: 0.0,
+            species_live: None,
         }
     }
 }
 
 impl Settings {
     /// Every setting's key, as settings.json and `augur tune` name them.
-    pub const KEYS: [&'static str; 8] =
-        ["TYPE_BONUS", "TYPE_RESIST", "POWER_EXP", "STATS_STEEPNESS", "SPECIES_WEIGHT", "PAL_H2H_WEIGHT", "COOLDOWN_EXP", "HIT_WEIGHT"];
+    pub const KEYS: [&'static str; 9] = [
+        "TYPE_BONUS",
+        "TYPE_RESIST",
+        "POWER_EXP",
+        "STATS_STEEPNESS",
+        "SPECIES_WEIGHT",
+        "PAL_H2H_WEIGHT",
+        "COOLDOWN_EXP",
+        "HIT_WEIGHT",
+        "SPECIES_LIVE",
+    ];
 
     pub fn get(&self, key: &str) -> Option<f64> {
         Some(match key {
@@ -71,6 +86,7 @@ impl Settings {
             "PAL_H2H_WEIGHT" => self.pal_h2h_weight,
             "COOLDOWN_EXP" => self.cooldown_exp,
             "HIT_WEIGHT" => self.hit_weight,
+            "SPECIES_LIVE" => self.species_on_calls(),
             _ => return None,
         })
     }
@@ -87,9 +103,20 @@ impl Settings {
             "PAL_H2H_WEIGHT" => c.pal_h2h_weight = v,
             "COOLDOWN_EXP" => c.cooldown_exp = v,
             "HIT_WEIGHT" => c.hit_weight = v,
+            "SPECIES_LIVE" => c.species_live = Some(v),
             _ => {}
         }
         c
+    }
+
+    /// The species weight on a real call: SPECIES_LIVE once it's set, SPECIES_WEIGHT until then.
+    pub fn species_on_calls(&self) -> f64 {
+        self.species_live.unwrap_or(self.species_weight)
+    }
+
+    /// The settings a real call is scored with (its species weight is SPECIES_LIVE's).
+    pub fn for_calls(&self) -> Settings {
+        Settings { species_weight: self.species_on_calls(), ..self.clone() }
     }
 }
 

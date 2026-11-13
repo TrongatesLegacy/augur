@@ -6,7 +6,7 @@
 
 Calls the [PalDuels](https://palduels.com/live) fights (chat-run Palworld duels on a Kick stream) before the bell, and keeps score.
 
-Augur lives in the menu bar (macOS) or the tray (Windows). The menu bar shows the favourite and its chance; on Windows the tray icon is a gold ring filled to the chance around a dot in the favourite's colour. Click it for the call: the pick, why, the stats, the bet to type (`!h`, `!h 2300` or `!h all`) and the chat line in five voices, each with a copy button. The main window has the rest: Live, History (Augur's calls, and your bets next to them; click one for how the duel went and how Augur called it), Pals, Players (pal boxes and reroll advice), Model and Settings.
+Augur lives in the menu bar (macOS) or the tray (Windows). The menu bar shows the favourite and its chance; on Windows the tray icon is a gold ring filled to the chance around a dot in the favourite's colour. Click it for the call: the pick, why, the stats, the bet to type (`!h`, `!h 2300` or `!h all`) and the chat line in five voices, each with a copy button. The main window has the rest: Live, History (Augur's calls, and your bets next to them; click one for how the duel went and how Augur called it), Pals, Players (anyone's pal box: each pal's tier, power and talent rolls), You (signed in: your profile, titles and your own pals, with rerolls), Model and Settings.
 
 Built with [Tauri 2](https://tauri.app): a Rust engine and a small web page for the screens. About 9 MB.
 
@@ -37,7 +37,7 @@ The app is free, and it isn't signed with a paid Apple or Microsoft certificate,
 **Then:**
 1. The first time, Augur asks whether this is a new computer for an Augur you already use. **Import a backup** brings your calls, bets and every past duel across from your other computer (Settings › Sync & data › Back up… there). **Start fresh** fetches the duel history in the background.
 2. Augur lives in the menu bar (Mac) or the tray (Windows). Click it for the call on the fight that's up, the bet to type and the chat line. The main window has the rest. It opens with Augur; to have only the tray icon at launch, turn on **Settings › General › Start in the tray**.
-3. Optional: sign in to PalDuels in **Settings › Account** to track your bets against Augur's calls. Augur only reads your picks and balance; it never picks, chats or spends for you.
+3. Optional: sign in to PalDuels in **Settings › Account** to track your bets against Augur's calls and reroll your pals from **You › Pals**. Augur reads your picks, balance and pal box; it never picks or chats for you, and spends credits only on a reroll you confirm.
 
 Augur updates itself: when there's a new version, it downloads it and offers **Restart to update** (Settings › Updates). Nothing installs until you click it. Copies older than the first version with updates (0.1.1 and before) need the next one installed by hand once.
 
@@ -114,6 +114,12 @@ The main window lays out for 1280×720 and zooms to fit any other size, so it lo
 | `species_moves` | Species' listed move: element, power, unlock level. |
 | `bets` | Your bet, from your picks list (signed in): its place in your history, the duel (recent ones), the side backed, stake and result. |
 | `meta` | Small state: backfill progress, the signed-in account's name, your last balance, when the picks list was read. |
+
+## Rerolling your pals
+
+**You › Pals** shows your own box (signed in) with what one IV reroll would do for each pal. Duels are matched by power (over 1,346 duels the two sides' power correlated 0.85), so a pal meets the same pals whatever its rolls: Augur takes the ones its species has met in its last 80 past duels (or species within 10 power, when there are fewer than 10) at an average roll, and works out the pal's win chance against them with its rolls now and with every new roll (each IV from 5 to 95 in steps of 10). A reroll keeps the better of the new three and the old, so it can only help; the price, read from the site for each pal and doubling with each reroll, decides whether it's worth it: **Reroll** at 2 or more win-chance points per 1,000 credits, **Maybe** at 0.75, else **Keep** (or **Replace**, under 42%).
+
+Pick a pal and the panel shows its rolls, its win chance now and after a reroll, and the spread of every new roll's win chance. **Roll** takes a second click to spend; it sends the site's own form with the price you saw as its limit, so the site won't charge more. Then the old and new rolls sit side by side with their win chances and Augur's pick, and you keep one with the site's own buttons.
 
 ## How the model works
 

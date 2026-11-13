@@ -194,9 +194,101 @@ pub fn fixture_data() -> Value {
         .collect();
         mv
     };
+    // You › Pals: the same box as yours, with made-up ids, prices and advice (the seed knows one species' duels);
+    // Jellroy's reroll panel before a roll (saved), and after one (made up: it's only seen by rolling)
+    let own_box = {
+        let pals: Vec<views::OwnPal> = site::parse_roster(&page("user-trongateslegacy.html"))
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut pal)| {
+                pal.id = Some(format!("pal-{i:02}"));
+                let ivs: f64 = ["HP", "ATK", "DEF"].iter().map(|k| pal.stats.get(*k).map_or(50.0, |s| s.1)).sum::<f64>() / 300.0;
+                let power = f64::from(pal.power.unwrap_or(30)) / 100.0;
+                let now = 0.22 + 0.32 * ivs + 0.3 * power;
+                let after = now + 0.09 * (1.0 - ivs) * (1.0 - ivs);
+                let price = if pal.power.unwrap_or(0) >= 50 {
+                    1000
+                } else if pal.power.unwrap_or(0) >= 35 {
+                    500
+                } else {
+                    250
+                } << pal.rerolls.min(4);
+                let worth = (after - now) * 100.0 / (price as f64 / 1000.0);
+                let tag = if worth >= 2.0 {
+                    "Reroll"
+                } else if worth >= 0.75 {
+                    "Maybe"
+                } else if now < 0.42 {
+                    "Replace"
+                } else {
+                    "Keep"
+                };
+                let advice = augur_engine::reroll::Advice {
+                    now,
+                    after,
+                    better: (1.0 - ivs).powf(1.5),
+                    best: now + 0.15 * (1.0 - ivs),
+                    spread: (0..16)
+                        .map(|b| {
+                            let x = f64::from(b) / 15.0 - 0.45;
+                            (-x * x * 9.0).exp() / 6.4
+                        })
+                        .collect(),
+                    low: now - 0.12,
+                    high: now + 0.15 * (1.0 - ivs),
+                    duels: 40 + i * 3,
+                    own_duels: i != 2,
+                    price: Some(price),
+                    tag: tag.into(),
+                };
+                views::OwnPal { pal, price: Some(price), advice: Some(advice) }
+            })
+            .collect();
+        views::OwnBoxView { name: Some("TrongatesLegacy".into()), signed_in: true, pals, error: None, balance: Some(48_250), priced: true }
+    };
+    let jellroy = own_box.pals.iter().find(|p| p.pal.pal == "Jellroy").cloned().unwrap();
+    let before = site::parse_reroll_panel(&page("reroll-panel.json")).unwrap();
+    let reroll_open = views::RerollSheet {
+        id: jellroy.pal.id.clone().unwrap(),
+        wins: vec![jellroy.advice.as_ref().map(|a| a.now)],
+        pal: jellroy.clone(),
+        panel: before,
+        recommend: None,
+    };
+    let dice = |hp, atk, def| {
+        format!(
+            r#"<ul class="rr-dice"><li class="rr-die"><span class="rr-die-k">HP</span><b class="rr-die-v">{hp}</b></li><li class="rr-die"><span class="rr-die-k">ATK</span><b class="rr-die-v">{atk}</b></li><li class="rr-die"><span class="rr-die-k">DEF</span><b class="rr-die-v">{def}</b></li></ul>"#
+        )
+    };
+    let form = |op: &str, label: &str| {
+        format!(
+            r#"<form method="post" action="/reroll" data-rr-form><input type="hidden" name="op" value="{op}"><input type="hidden" name="pal" value="pal-05"><button type="submit">{label}</button></form>"#
+        )
+    };
+    let after = json!({
+        "ok": true,
+        "said": "Rolled! Keep the new three or the old.",
+        "html": format!(
+            r#"<p class="rr-kick">Your IVs now</p>{}<p class="rr-kick">The new roll</p>{}{}{}<p class="rr-note">Credits are spent either way, and the price doubles.</p>"#,
+            dice(72, 56, 25),
+            dice(64, 81, 77),
+            form("keep", "Keep the new three"),
+            form("stay", "Stay with the old")
+        )
+    });
+    let reroll_after = views::RerollSheet {
+        wins: vec![Some(0.39), Some(0.47)],
+        panel: site::parse_reroll_panel(&after.to_string()).unwrap(),
+        recommend: Some("keep".into()),
+        ..reroll_open.clone()
+    };
     json!({
         "live": live,
         "history": history,
+        "own_box": own_box,
+        "reroll_open": reroll_open,
+        "reroll_after": reroll_after,
+        "reroll_send": reroll_after,
         "call_detail": call_detail,
         "bets_view": views::bets_view(&conn, &StakeSettings::default(), "all", 0, Default::default()).unwrap(),
         "import_bets": null,
@@ -366,7 +458,7 @@ const MAIN_DRIVER: &str = r#"
       .map((el) => `${el.tagName.toLowerCase()}.${[...el.classList].join('.')} (${el.clientWidth}px, needs ${el.scrollWidth}px): ${el.textContent.trim().replace(/\s+/g, ' ').slice(0, 50)}`);
   if (!window.augur) window.__errors.push('the page never started (a module failed to load)');
   else {
-    for (const tab of only ? [only] : ['live', 'liveedge', 'history', 'call', 'bets', 'pals', 'players', 'you', 'titles', 'titlesone', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'changelog', 'updates', 'offair']) {
+    for (const tab of only ? [only] : ['live', 'liveedge', 'history', 'call', 'bets', 'pals', 'players', 'you', 'titles', 'titlesone', 'mypals', 'mypalsone', 'mypalsroll', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'changelog', 'updates', 'offair']) {
       // "ownmodel" is Settings › Model with self-tuning off and your own values
       const own = DATA.get_settings;
       if (tab === 'ownmodel') DATA.get_settings = { ...own, model_auto: false };
@@ -381,7 +473,10 @@ const MAIN_DRIVER: &str = r#"
       window.augur.state.view = tab === 'bets' ? 'bets' : 'calls';
       // "titles" is You › Titles, every title by category
       // "titlesone" is the same with one category's tab picked
-      window.augur.state.youView = ['titles', 'titlesone'].includes(tab) ? 'titles' : 'profile';
+      window.augur.state.youView = ['titles', 'titlesone'].includes(tab) ? 'titles' : tab.startsWith('mypals') ? 'pals' : 'profile';
+      // "mypals" is You › Pals; "mypalsone" with Jellroy picked and Roll clicked (waiting to confirm), "mypalsroll"
+      // with a roll made (the old and the new side by side)
+      if (tab.startsWith('mypals')) DATA.reroll_open = tab === 'mypalsroll' ? DATA.reroll_after : DATA.reroll_sheet_before || (DATA.reroll_sheet_before = DATA.reroll_open);
       // "call" is History with the first call's breakdown opened from its row
       window.augur.state.call = null;
       // "offair" is Live with no duel up, after a stream
@@ -395,7 +490,7 @@ const MAIN_DRIVER: &str = r#"
       } else window.augur.state.live = DATA.live;
       window.augur.state.settingsPage = ['staking', 'sync', 'updates'].includes(tab) ? tab : tab === 'ownmodel' ? 'model' : tab === 'changelog' ? 'updates' : 'general';
       // "welcome" is the fresh install's overlay, over Live
-      await window.augur.show(['bets', 'call'].includes(tab) ? 'history' : ['staking', 'sync', 'changelog', 'updates', 'ownmodel'].includes(tab) ? 'settings' : ['welcome', 'offair', 'liveedge'].includes(tab) ? 'live' : ['titles', 'titlesone'].includes(tab) ? 'you' : tab);
+      await window.augur.show(['bets', 'call'].includes(tab) ? 'history' : ['staking', 'sync', 'changelog', 'updates', 'ownmodel'].includes(tab) ? 'settings' : ['welcome', 'offair', 'liveedge'].includes(tab) ? 'live' : ['titles', 'titlesone'].includes(tab) || tab.startsWith('mypals') ? 'you' : tab);
       await sleep(300);
       // the page and every box in it that scrolls (its panel's title, and how much it holds against what shows)
       const scrolling = () =>
@@ -444,6 +539,13 @@ const MAIN_DRIVER: &str = r#"
         out.scrollers[tab] = scrolling();
       }
       const visible = () => [...document.querySelectorAll('.tgrp')].filter((g) => !g.hidden).map((g) => g.querySelector('h4').textContent);
+      if (tab === 'mypalsone' || tab === 'mypalsroll') {
+        [...document.querySelectorAll('.bxp.own')].find((c) => c.innerText.includes('Jellroy'))?.click();
+        await sleep(300);
+        if (tab === 'mypalsone') document.getElementById('mrr-roll')?.click();
+        await sleep(100);
+        out.scrollers[tab] = scrolling();
+      }
       if (tab === 'titlesone') {
         document.querySelector('.tcat[data-tg="1"]')?.click();
         await sleep(100);
@@ -675,6 +777,9 @@ fn big_numbers_fit() {
             "you",
             "titles",
             "titlesone",
+            "mypals",
+            "mypalsone",
+            "mypalsroll",
             "model",
             "settings",
             "staking",
@@ -860,6 +965,26 @@ fn every_tab_renders_headless() {
         "Titles, category by category: {cats}"
     );
     assert!(!text("titles").contains("your balance"), "Titles is its own view: {}", text("titles"));
+    // You › Pals: your box with what a reroll would do, the reroll waiting for a second click, and a roll made
+    let mine = text("mypals");
+    assert!(
+        mine.contains("your pals")
+            && mine.contains("win chance now → after a reroll")
+            && mine.contains("worth it")
+            && mine.contains("reroll · 250"),
+        "You › Pals: {mine}"
+    );
+    let one = text("mypalsone");
+    assert!(
+        one.contains("jellroy") && one.contains("spend 250 credits") && one.contains("cancel"),
+        "a roll waits for its second click: {one}"
+    );
+    let roll = text("mypalsroll");
+    assert!(
+        roll.contains("keep the new three") && roll.contains("stay with the old") && roll.contains("augur’s pick"),
+        "a roll made: {roll}"
+    );
+    assert!(roll.contains("47.0%") && roll.contains("39.0%"), "each roll's win chance: {roll}");
     assert!(
         text("offair").contains("off air") && text("offair").contains("last stream") && text("offair").contains("latest calls"),
         "Live off air: {}",
@@ -973,6 +1098,9 @@ fn every_tab_renders_headless() {
             "you",
             "titles",
             "titlesone",
+            "mypals",
+            "mypalsone",
+            "mypalsroll",
             "model",
             "settings",
             "staking",

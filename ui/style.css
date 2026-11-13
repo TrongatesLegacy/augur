@@ -528,7 +528,7 @@ body.pop { padding: 7px 9px 12px; box-sizing: border-box; }
 .bxh { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 9px; align-items: center; }
 /* the pal's art faded into the card's bottom corner rather than an icon in the header, so the name has its width. Nothing
    shows until the art is cached (no initials: the name is right there) */
-.bxp > .bxart { position: absolute; inset: auto -6px -6px auto; width: min(62%, 140px) !important; height: auto !important; aspect-ratio: 1; border-radius: 0; opacity: .2; pointer-events: none; -webkit-mask-image: radial-gradient(circle at 70% 70%, #000 35%, transparent 72%); mask-image: radial-gradient(circle at 70% 70%, #000 35%, transparent 72%); }
+.bxp > .bxart { position: absolute; inset: auto 0 0 auto; width: min(62%, 140px) !important; height: auto !important; aspect-ratio: 1; border-radius: 0; opacity: .2; pointer-events: none; -webkit-mask-image: radial-gradient(circle at 70% 70%, #000 35%, transparent 72%); mask-image: radial-gradient(circle at 70% 70%, #000 35%, transparent 72%); }
 .bxart > span { display: none; }
 .bxart img { border-radius: 0; object-fit: cover; }
 .bxp > :not(.bxart) { position: relative; }

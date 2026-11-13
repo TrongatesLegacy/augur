@@ -343,7 +343,8 @@ pub fn fixture_data() -> Value {
         // what Live and the popover show between duels (swapped in by the "offair" page and the off-air tray test)
         "off_air": views::off_air(&conn, &StakeSettings::default()).unwrap(),
         "backfill_progress": augur_engine::backfill::Progress { phase: "duels".into(), done: 1200, total: 4702, ..Default::default() },
-        "pal_image": null,
+        // a made-up stand-in for a pal's art (the real art is never bundled), so the screenshots show it swapped in
+        "pal_image": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMCAxMCI+PGNpcmNsZSBjeD0iNSIgY3k9IjUuNSIgcj0iNCIgZmlsbD0iI2Y0YTNjNCIvPjxjaXJjbGUgY3g9IjMuNiIgY3k9IjUiIHI9Ii43IiBmaWxsPSIjMGIxMDIwIi8+PGNpcmNsZSBjeD0iNi40IiBjeT0iNSIgcj0iLjciIGZpbGw9IiMwYjEwMjAiLz48L3N2Zz4=",
         // a stand-in Kick picture, so the screenshots show faces swapped in
         "learned_settings": model::Settings::default(),
         "learn_now": null,
@@ -499,6 +500,13 @@ const MAIN_DRIVER: &str = r#"
         const rows = {};
         for (const c of document.querySelectorAll('.bxp')) (rows[Math.round(c.getBoundingClientRect().top)] ||= []).push(Math.round(c.querySelector('.bxi').getBoundingClientRect().top - c.getBoundingClientRect().top));
         out[tab + 'BoxRows'] = Object.values(rows).map((tops) => Math.max(...tops) - Math.min(...tops));
+        // the art behind a card is decoration: the cards and the box are the same size without it
+        const sizes = () => JSON.stringify([...document.querySelectorAll('.bxbox, .bxp')].map((el) => [el.offsetWidth, el.offsetHeight, el.scrollHeight]));
+        const arts = [...document.querySelectorAll('.bxart')];
+        const withArt = sizes();
+        arts.forEach((a) => (a.style.display = 'none'));
+        out[tab + 'BoxArt'] = { shown: arts.filter((a) => a.querySelector('img')).length, cards: document.querySelectorAll('.bxp').length, same: sizes() === withArt };
+        arts.forEach((a) => (a.style.display = ''));
       }
       if (tab === 'bets') out.betRows = document.querySelectorAll('#main tr[data-call]').length;
       // Updates' panels don't run into each other, and their text stays inside them (the changelog scrolls in its own)
@@ -1062,6 +1070,9 @@ fn every_tab_renders_headless() {
     for tab in ["players", "mypals"] {
         let rows = r[format!("{tab}BoxRows")].as_array().unwrap_or_else(|| panic!("{tab}: no pal box cards"));
         assert!(!rows.is_empty() && rows.iter().all(|d| d.as_i64() == Some(0)), "{tab}: the box cards' rows don't line up: {rows:?}");
+        let art = &r[format!("{tab}BoxArt")];
+        assert_eq!(art["shown"], art["cards"], "{tab}: every card shows its pal's art: {art}");
+        assert_eq!(art["same"], true, "{tab}: the art changes the size of the box or its cards");
     }
     assert!(
         text("model").contains("history test")

@@ -32,7 +32,7 @@ struct Knob {
     grid: &'static [f64],
 }
 
-const KNOBS: [Knob; 8] = [
+const KNOBS: [Knob; 9] = [
     Knob { key: "TYPE_BONUS", source: Source::PastDuels, grid: &[1.0, 1.1, 1.25, 1.4, 1.5, 1.65, 1.8, 2.0, 2.25, 2.5] },
     Knob { key: "TYPE_RESIST", source: Source::PastDuels, grid: &[1.0, 1.1, 1.25, 1.4, 1.5, 1.65, 1.8, 2.0] },
     Knob { key: "POWER_EXP", source: Source::PastDuels, grid: &[0.0, 0.1, 0.2, 0.3, 0.35, 0.4, 0.5, 0.65, 0.8, 1.0] },
@@ -41,6 +41,7 @@ const KNOBS: [Knob; 8] = [
     Knob { key: "STATS_STEEPNESS", source: Source::LiveCalls, grid: &[1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0] },
     Knob { key: "COOLDOWN_EXP", source: Source::LiveCalls, grid: &[0.0, 0.25, 0.5, 0.75, 1.0] },
     Knob { key: "HIT_WEIGHT", source: Source::PastDuels, grid: &[0.0, 0.25, 0.5, 0.75, 1.0] },
+    Knob { key: "SPECIES_LIVE", source: Source::LiveCalls, grid: &[0.0, 0.25, 0.5, 0.75, 1.0, 1.2, 1.4, 1.6, 2.0] },
 ];
 
 /// One setting after a learning run.
@@ -270,6 +271,54 @@ mod tests {
         assert_eq!((k.status.as_str(), k.was), ("changed", 1.0));
         let stats = l.knobs.iter().find(|k| k.key == "STATS_STEEPNESS").unwrap();
         assert_eq!((stats.status.as_str(), stats.have, stats.need), ("waiting", 0, MIN_CALLS));
+    }
+
+    /// Real calls where the stronger pal wins 4 in 5 though the species records favour the other: the learner
+    /// lowers the records' weight on real calls, and leaves the past duels' species weight alone.
+    #[test]
+    fn learns_how_much_records_count_on_real_calls() {
+        let side =
+            |hp: f64| crate::db::CallFighter { fighter: Fighter { hp, ..fighter(&["neutral"], "neutral") }, ivs: Default::default() };
+        let calls: Vec<CallRecord> = (0..120i64)
+            .map(|i| CallRecord {
+                id: i,
+                seen_at: i,
+                home_owner: "a".into(),
+                away_owner: "b".into(),
+                home_pal: "x".into(),
+                away_pal: "y".into(),
+                pick: "home".into(),
+                prob: 0.6,
+                p_stats: None,
+                p_species: None,
+                p_h2h: None,
+                species_rec: Some([[10.0, 40.0], [40.0, 10.0]]),
+                pal_h2h: [0.0; 2],
+                duel_id: None,
+                winner: Some(if i % 5 == 0 { "away" } else { "home" }.into()),
+                fought_at: None,
+                ko: None,
+                winner_hp_left: None,
+                stake: None,
+                fighters: Some((side(6000.0), side(4000.0))),
+                late: None,
+                late_only: false,
+                version: String::new(),
+                model: String::new(),
+                damaged: false,
+            })
+            .collect();
+        let start = Settings::default();
+        assert_eq!(start.species_on_calls(), start.species_weight, "unset, it follows the species weight");
+        let l = learn_on(&[], &calls, &start, 1);
+        assert!(l.settings.species_on_calls() < start.species_weight, "{:?}", l.settings);
+        assert_eq!(l.settings.species_weight, start.species_weight, "the past duels' weight is theirs");
+        assert!(l.check.live_after < l.check.live_before);
+        let k = l.knobs.iter().find(|k| k.key == "SPECIES_LIVE").unwrap();
+        assert_eq!((k.status.as_str(), k.source), ("changed", Source::LiveCalls));
+        // under 60 calls it waits
+        let few = learn_on(&[], &calls[..40], &start, 1);
+        assert_eq!(few.settings.species_live, None);
     }
 
     /// Coin-flip history: nothing to learn, so nothing moves.

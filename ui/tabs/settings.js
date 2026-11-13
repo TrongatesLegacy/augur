@@ -7,7 +7,7 @@ import { ago, esc, fmt, pct } from '../lib/format.js';
 import { changesSince, notesList, parseChangelog, versionsList } from '../lib/notes.js';
 import { SHORT, VOICES } from '../lib/pal.js';
 import { empty, icon } from '../lib/viz.js';
-import { KNOBS } from './model.js';
+import { KNOBS, knobValue } from './model.js';
 
 const PAGES = [
   ['general', 'General'],
@@ -126,7 +126,7 @@ function modelPage(s) {
   return `<div class="sg">
     <div class="panel"><div class="ph"><h3>Model</h3><span>${own ? 'your own settings' : 'tunes itself'}</span></div>
       ${row('Tune itself', 'Augur re-fits its settings as results come in and keeps a change only when it predicts the newest duels better (Model tab). Off: it uses the values below.', toggle('id="mauto"', s.model_auto, 'Tune itself'))}
-      ${own ? Object.entries(KNOBS).map(([k, [label, lo, hi]]) => row(label, `${lo} to ${hi}`, `<input type="number" step="0.05" min="${lo}" max="${hi}" data-m="${k}" value="${s.model[k]}" style="width:90px">`)).join('') : ''}
+      ${own ? Object.entries(KNOBS).map(([k, [label, lo, hi]]) => row(label, `${lo} to ${hi}`, `<input type="number" step="0.05" min="${lo}" max="${hi}" data-m="${k}" value="${knobValue(s.model, k)}" style="width:90px">`)).join('') : ''}
       ${own ? row('Start again', 'copy what the model has learned into the values above', '<button class="btn ghost" id="mcopy">Use the learned values</button>') : ''}</div>
     <div class="panel"><div class="ph"><h3>How it learns</h3></div><div class="small" style="line-height:1.7">
       Types, move power and records learn from every past duel; the stat settings and cooldown passives wait for real calls, which see each pal's actual stats. The newest quarter of each is held back to check a change, so it can't just memorise the past. Learning carries on while you use your own settings.</div></div>

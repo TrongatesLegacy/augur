@@ -124,6 +124,7 @@ pub struct Rescored {
 }
 
 pub fn rescore(calls: &[CallRecord], s: &Settings) -> Vec<Rescored> {
+    let s = &s.for_calls();
     calls
         .iter()
         .filter_map(|c| {

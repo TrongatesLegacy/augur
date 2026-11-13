@@ -28,6 +28,15 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, Windo
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_positioner::{Position, WindowExt};
 
+/// Your own box (signed in) and the reroll panels read for it, each with when it was read.
+#[derive(Default)]
+pub struct OwnBox {
+    pub pals: Option<(Instant, Vec<site::BoxPal>)>,
+    pub panels: HashMap<String, (Instant, site::RerollPanel)>,
+    /// a reroll has changed the box since it was read: read it again when it's next shown
+    pub stale: bool,
+}
+
 pub struct Shared {
     pub dir: PathBuf,
     pub settings: Mutex<AppSettings>,
@@ -43,6 +52,8 @@ pub struct Shared {
     /// a result just came in (with its fight tape): learn from it now
     pub learn_now: AtomicBool,
     pub rosters: Mutex<HashMap<String, (Instant, Vec<site::BoxPal>)>>,
+    /// You › Pals: your own box and each pal's reroll panel, as last read
+    pub own: Mutex<OwnBox>,
     pub busy: AtomicBool,
     pub stop: AtomicBool,
     /// Settings › Sync: this computer's state, the other computers last seen, and "sync now"
@@ -605,6 +616,93 @@ async fn player(shared: tauri::State<'_, Arc<Shared>>, name: String) -> Cmd<Play
     views::player_view(&shared.db()?, &s, &name, roster).map_err(|e| e.to_string())
 }
 
+// --- You › Pals: your own box and rerolling ---
+
+/// How long your box and a pal's price stand before they're read again (the reroll panel itself is always read fresh).
+const OWN_FRESH: Duration = Duration::from_secs(600);
+/// The pause between reading one pal's price and the next.
+const PRICE_PACE: Duration = Duration::from_millis(900);
+
+/// Your account name and session, when signed in.
+fn signed_in(shared: &Shared) -> Option<(String, String)> {
+    let name = shared.db().ok().and_then(|c| db::meta_get(&c, "account").ok().flatten()).filter(|n| !n.is_empty())?;
+    Some((name, secure::load(&shared.dir)?))
+}
+
+/// Your box with each pal's reroll advice. `prices`: also read the price of any pal whose panel hasn't been read
+/// lately (one at a time, gently), so the advice is at its real price.
+#[tauri::command]
+async fn own_box(shared: tauri::State<'_, Arc<Shared>>, prices: bool) -> Cmd<views::OwnBoxView> {
+    let Some((name, cookie)) = signed_in(&shared) else { return Ok(views::OwnBoxView::default()) };
+    let cached = {
+        let own = shared.own.lock().unwrap();
+        own.pals.clone().filter(|(t, _)| t.elapsed() < OWN_FRESH && !own.stale).map(|(_, p)| p)
+    };
+    let pals = match cached {
+        Some(p) => Ok(p),
+        None => site::own_roster(&name.to_lowercase(), &cookie).map_err(|e| e.to_string()).inspect(|p| {
+            let mut own = shared.own.lock().unwrap();
+            (own.pals, own.stale) = (Some((Instant::now(), p.clone())), false);
+        }),
+    };
+    if prices {
+        for id in pals.iter().flatten().filter_map(|p| p.id.clone()) {
+            let fresh = shared.own.lock().unwrap().panels.get(&id).is_some_and(|(t, _)| t.elapsed() < OWN_FRESH);
+            if !fresh {
+                if let Ok(panel) = site::reroll_panel(&id, &cookie) {
+                    shared.own.lock().unwrap().panels.insert(id, (Instant::now(), panel));
+                }
+                std::thread::sleep(PRICE_PACE);
+            }
+        }
+    }
+    let prices: HashMap<String, u64> =
+        shared.own.lock().unwrap().panels.iter().filter_map(|(id, (_, p))| p.price().map(|price| (id.clone(), price))).collect();
+    Ok(views::own_box_view(&shared.db()?, &shared.model(), Some(name), pals, &prices))
+}
+
+/// The pal in your box with this id, from the box as last read.
+fn own_pal(shared: &Shared, id: &str) -> Result<site::BoxPal, String> {
+    let own = shared.own.lock().unwrap();
+    own.pals
+        .as_ref()
+        .and_then(|(_, p)| p.iter().find(|p| p.id.as_deref() == Some(id)).cloned())
+        .ok_or_else(|| "That pal isn't in your box as last read: refresh it".into())
+}
+
+/// A pal's reroll panel, read fresh (its price can't be stale when you're about to spend it).
+#[tauri::command]
+async fn reroll_open(shared: tauri::State<'_, Arc<Shared>>, id: String) -> Cmd<views::RerollSheet> {
+    let (_, cookie) = signed_in(&shared).ok_or("Sign in to PalDuels first (Settings › Account)")?;
+    let pal = own_pal(&shared, &id)?;
+    let panel = site::reroll_panel(&id, &cookie).map_err(|e| e.to_string())?;
+    shared.own.lock().unwrap().panels.insert(id.clone(), (Instant::now(), panel.clone()));
+    Ok(views::reroll_sheet(&shared.db()?, &shared.model(), &id, &pal, panel))
+}
+
+/// Sends one of the forms the panel Augur last read offered (by its place in the panel). A roll spends credits, so
+/// it's sent only with the price you confirmed, and only when that's the form's own limit: the site then won't charge
+/// more even if its price has moved.
+#[tauri::command]
+async fn reroll_send(shared: tauri::State<'_, Arc<Shared>>, id: String, form: usize, price: Option<u64>) -> Cmd<views::RerollSheet> {
+    let (_, cookie) = signed_in(&shared).ok_or("Sign in to PalDuels first (Settings › Account)")?;
+    let pal = own_pal(&shared, &id)?;
+    let panel = shared.own.lock().unwrap().panels.get(&id).filter(|(t, _)| t.elapsed() < OWN_FRESH).map(|(_, p)| p.clone());
+    let chosen = panel.as_ref().and_then(|p| p.forms.get(form)).cloned().ok_or("The reroll panel has changed: open it again")?;
+    if chosen.op() == "roll" && (price.is_none() || chosen.max() != price) {
+        return Err("The price has changed since you confirmed: check it and confirm again".into());
+    }
+    let result = site::reroll_send(&chosen, &cookie).map_err(|e| e.to_string())?;
+    let mut own = shared.own.lock().unwrap();
+    own.panels.insert(id.clone(), (Instant::now(), result.clone()));
+    // a finished reroll changes the pal's IVs and its next price: read the box again when it's next shown
+    if chosen.op() != "roll" || result.done {
+        own.stale = true;
+    }
+    drop(own);
+    Ok(views::reroll_sheet(&shared.db()?, &shared.model(), &id, &pal, result))
+}
+
 /// What the model has learned (the built-in values before its first run), to start your own settings from.
 #[tauri::command]
 fn learned_settings(shared: tauri::State<'_, Arc<Shared>>) -> model::Settings {
@@ -860,6 +958,7 @@ pub fn run() {
         learned: Mutex::new(learned),
         learn_now: AtomicBool::new(false),
         rosters: Mutex::new(HashMap::new()),
+        own: Mutex::new(OwnBox::default()),
         busy: AtomicBool::new(false),
         stop: AtomicBool::new(false),
         sync: Mutex::new(sync_state),
@@ -890,6 +989,9 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            own_box,
+            reroll_open,
+            reroll_send,
             live,
             history,
             call_detail,

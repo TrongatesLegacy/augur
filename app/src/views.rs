@@ -1,11 +1,14 @@
 //! What each page is sent, built from the store without the desktop app, so the app's commands, `augur ui-fixtures`
 //! (the data the headless UI tests render) and anything else share one version.
 
+use std::collections::HashMap;
+
 use augur_engine::backfill::Progress;
 use augur_engine::bets::{self, Comparison};
 use augur_engine::history::{self, Backtest};
 use augur_engine::predict::{self, Prediction};
-use augur_engine::site::{self, BoxPal, QueueItem};
+use augur_engine::reroll::{self, Advice};
+use augur_engine::site::{self, BoxPal, QueueItem, RerollPanel};
 use augur_engine::stake::{Stake, StakeSettings};
 use augur_engine::{db, learn, model, rusqlite};
 use rusqlite::{Connection, OptionalExtension};
@@ -183,6 +186,83 @@ pub fn bets_view(conn: &Connection, s: &StakeSettings, range: &str, now_secs: u6
     Ok(BetsView { comparison, balance, synced_at, stored, import })
 }
 
+// --- You › Pals: your own box, what a reroll would do for each pal, and the reroll itself ---
+
+/// One of your pals, its next reroll's price (once its panel has been read) and what a reroll would do for it.
+#[derive(Clone, Debug, Serialize)]
+pub struct OwnPal {
+    #[serde(flatten)]
+    pub pal: BoxPal,
+    pub price: Option<u64>,
+    pub advice: Option<Advice>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct OwnBoxView {
+    pub name: Option<String>,
+    pub signed_in: bool,
+    pub pals: Vec<OwnPal>,
+    pub error: Option<String>,
+    pub balance: Option<u64>,
+    /// every pal's price has been read (they're read one at a time after the box shows)
+    pub priced: bool,
+}
+
+/// Your box with each pal's advice at its price (or a typical first price, until it's read).
+pub fn own_box_view(
+    conn: &Connection,
+    s: &model::Settings,
+    name: Option<String>,
+    pals: Result<Vec<BoxPal>, String>,
+    prices: &HashMap<String, u64>,
+) -> OwnBoxView {
+    let (pals, error) = match pals {
+        Ok(p) => (p, None),
+        Err(e) => (vec![], Some(e)),
+    };
+    let priced = pals.iter().all(|p| p.id.as_ref().is_none_or(|id| prices.contains_key(id)));
+    let pals = pals
+        .into_iter()
+        .map(|pal| {
+            let price = pal.id.as_ref().and_then(|id| prices.get(id).copied());
+            let advice = reroll::matchups(conn, &pal).ok().flatten().map(|m| m.advise(s, price));
+            OwnPal { pal, price, advice }
+        })
+        .collect();
+    OwnBoxView { name, signed_in: true, pals, error, balance: bets::balance(conn), priced }
+}
+
+/// One pal's reroll panel as the You tab shows it: the pal, the panel, each roll's win chance, and which of the
+/// site's choices Augur would take after a roll ("keep" the new roll or "stay" with the old).
+#[derive(Clone, Debug, Serialize)]
+pub struct RerollSheet {
+    pub id: String,
+    pub pal: OwnPal,
+    pub panel: RerollPanel,
+    pub wins: Vec<Option<f64>>,
+    pub recommend: Option<String>,
+}
+
+pub fn reroll_sheet(conn: &Connection, s: &model::Settings, id: &str, pal: &BoxPal, panel: RerollPanel) -> RerollSheet {
+    let m = reroll::matchups(conn, pal).ok().flatten();
+    let wins: Vec<Option<f64>> = panel.rolls.iter().map(|(_, ivs)| m.as_ref().map(|m| m.win(s, *ivs))).collect();
+    // after a roll: the roll you have (labelled "now", or the first) against the new one
+    let ops: Vec<&str> = panel.forms.iter().map(|f| f.op()).collect();
+    let recommend = (panel.rolls.len() >= 2 && ops.contains(&"keep") && ops.contains(&"stay")).then(|| {
+        let old = panel
+            .rolls
+            .iter()
+            .position(|(l, _)| ["now", "old", "current", "before"].iter().any(|w| l.to_lowercase().contains(w)))
+            .unwrap_or(0);
+        let new = if old == panel.rolls.len() - 1 { 0 } else { panel.rolls.len() - 1 };
+        let score = |i: usize| wins[i].unwrap_or_else(|| panel.rolls[i].1.iter().sum::<f64>() / 300.0);
+        if score(new) > score(old) { "keep" } else { "stay" }.to_string()
+    });
+    let price = panel.price();
+    let advice = m.map(|m| m.advise(s, price));
+    RerollSheet { id: id.into(), pal: OwnPal { pal: pal.clone(), price, advice }, panel, wins, recommend }
+}
+
 /// The You tab: your signed-in profile as the picks list import last read it, and your bets next to Augur's.
 #[derive(Serialize)]
 pub struct YouView {
@@ -220,8 +300,8 @@ pub fn you_view(conn: &Connection, s: &StakeSettings) -> R<YouView> {
 pub struct BoxPalView {
     #[serde(flatten)]
     pub pal: BoxPal,
+    /// how often it beats a typical pal on stats
     pub rating: f64,
-    pub advice: String,
 }
 
 #[derive(Serialize)]
@@ -245,19 +325,7 @@ pub fn player_view(conn: &Connection, s: &model::Settings, name: &str, roster: R
         .map(|p| {
             let st = |k: &str| p.stats.get(k).copied().unwrap_or((0.0, 0.0));
             let rating = history::box_rating(conn, s, &p.pal, st("HP").0, st("ATK").0, st("DEF").0, &p.passives).unwrap_or(0.5);
-            let worst_iv = ["HP", "ATK", "DEF"].iter().map(|k| st(k).1).fold(100.0, f64::min);
-            // rough until the reroll cost is known: keep strong pals, reroll good species let down by one roll,
-            // replace weak species (no roll can fix them)
-            let advice = if rating >= 0.75 {
-                "Keep"
-            } else if p.power.unwrap_or(0) >= 30 && worst_iv < 40.0 {
-                "Reroll"
-            } else if p.power.unwrap_or(0) < 30 && rating < 0.4 {
-                "Replace"
-            } else {
-                "Maybe"
-            };
-            BoxPalView { pal: p, rating, advice: advice.into() }
+            BoxPalView { pal: p, rating }
         })
         .collect();
     Ok(PlayerView { detail, roster, roster_error, rerolled_pals })

@@ -20,10 +20,19 @@ const SETTINGS = [
   ['PAL_H2H_WEIGHT', 'Pal H2H', (v) => `×${v}`],
   ['COOLDOWN_EXP', 'Cooldowns', (v) => `^${v}`],
   ['HIT_WEIGHT', 'Real hit size', (v) => `^${v}`],
+  ['PAL_RANK_WEIGHT', 'Pal rank', (v) => `×${v}`],
 ];
 
 // a fight still to come: no winner yet
 const pending = (c) => c.winner == null;
+
+// the site's pal rank for a side, when the call read it
+const rankOf = (c, s) => c.fighters?.[s === 'home' ? 0 : 1]?.pal_rank;
+const rankTitle = (r) => `Tier ${r.tier} · ranked ${r.rank} of ${r.of} species · power ${r.power}/100`;
+const rankGap = (c) => {
+  const [h, a] = SIDES.map((s) => rankOf(c, s));
+  return h && a ? `#${fmt(h.rank)} vs #${fmt(a.rank)} of ${fmt(h.of)}` : 'pal ranks';
+};
 
 // a side of the headline: orb (crowned if it won), name, owner, types, and whether Augur picked it. Before the bell
 // the side Augur didn't pick is the one dimmed
@@ -34,7 +43,9 @@ function side(d, s) {
   const cls = s === 'home' ? 'h' : 'a';
   const owner = s === 'home' ? c.home_owner : c.away_owner;
   const result = pending(c) ? '' : c.winner === s ? '<span class="ctag won">Won</span>' : '<span class="ctag lost">Lost</span>';
-  const tags = `${c.pick === s ? `<span class="ctag pick">Augur's pick</span>` : ''}${result}`;
+  const r = rankOf(c, s);
+  const tier = r ? `<span class="ctag tier tier-${esc(r.tier).toLowerCase()}" title="${esc(rankTitle(r))}">${esc(r.tier)}</span>` : '';
+  const tags = `${tier}${c.pick === s ? `<span class="ctag pick">Augur's pick</span>` : ''}${result}`;
   return `<div class="fx ${s === 'away' ? 'r' : ''}">${orb(pal(c, s), d.slugs[s === 'home' ? 0 : 1], cls + (lit ? '' : ' dim'), 68, !pending(c) && lit)}
     <div><div class="ctags">${tags || '<span class="ctag none"></span>'}</div><div class="nm" style="${lit ? '' : 'color:var(--t2)'}">${esc(pal(c, s))}</div>
       <div class="ow">${face(owner, 'a av', 18)}${s.toUpperCase()} · ${esc(owner)}</div>
@@ -103,8 +114,9 @@ export function waterfall(d, footer = modelFooter(d), tabbed = false) {
     stats: sc ? `<span title="The model's turns to knock the other out: ${esc(c.home_pal)} ${fmt(sc.t_home)}, ${esc(c.away_pal)} ${fmt(sc.t_away)}">K.O. in ${fmt(sc.t_home)} vs ${fmt(sc.t_away)}</span>` : 'stats and moves',
     species: rec ? `${fmt(rec[0][0])}–${fmt(rec[0][1])} vs ${fmt(rec[1][0])}–${fmt(rec[1][1])}` : 'species records',
     h2h: `${fmt(c.pal_h2h[0])}–${fmt(c.pal_h2h[1])} when they met`,
+    rank: rankGap(c),
   };
-  const names = { stats: 'Stats', species: 'Records', h2h: 'Pal H2H' };
+  const names = { stats: 'Stats', species: 'Records', h2h: 'Pal H2H', rank: 'Pal rank' };
   const rows = steps
     .map(([a, b, f]) => {
       const [l, r] = [Math.min(at(a), at(b)), Math.max(at(a), at(b))];
@@ -141,6 +153,16 @@ export function modelFooter(d) {
 }
 
 // the tale of the tape: stats, talent rolls, move strength, passives and the type-edge moves
+// the site's pal rank for each side: the rank in figures, the bars by its power score (a lower rank is stronger)
+function rankRow(c) {
+  const [h, a] = SIDES.map((s) => rankOf(c, s));
+  if (!h && !a) return '';
+  const mx = Math.max(h?.power || 0, a?.power || 0) || 1;
+  const lo = (me, them) => (me && them && me.rank > them.rank ? 'lo' : '');
+  const val = (r) => (r ? `<span title="${esc(rankTitle(r))}">#${fmt(r.rank)}</span>` : '—');
+  return `<div class="r5 rank"><span class="n l ${lo(h, a)}">${val(h)}</span><div class="bar bl"><i style="width:${((h?.power || 0) / mx) * 100}%"></i></div><span class="k">PAL RANK</span><div class="bar br"><i style="width:${((a?.power || 0) / mx) * 100}%"></i></div><span class="n ${lo(a, h)}">${val(a)}</span></div>`;
+}
+
 export function tape(d) {
   const c = d.call;
   if (!c.fighters) return `<div class="panel col"><div class="ph"><h3>Tale of the tape</h3></div>${empty('box', 'No fighters saved', 'Calls from before Augur kept the fighters only have the result.')}</div>`;
@@ -172,6 +194,7 @@ export function tape(d) {
     <div class="fillin">${tapeRows({ home: { fighter: h }, away: { fighter: a } })}
     ${row('ROLLS', roll(h), roll(a), (v) => `${Math.round(v)}`)}
     ${row('MOVES', sh, sa, (v) => v.toFixed(1))}
+    ${rankRow(c)}
     ${h.passives.length || a.passives.length ? `<div class="cpass">${[h, a].map((f) => `<div class="pills">${f.passives.length ? passivePills(f.passives) : '<span class="small">no passives</span>'}</div>`).join('')}</div>` : '<div class="small cnopass">Neither has passives</div>'}
     ${edgeLine}${moves}</div></div>`;
 }

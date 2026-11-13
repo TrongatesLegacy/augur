@@ -257,6 +257,7 @@ pub fn past_duels(conn: &Connection) -> R<Vec<PastDuel>> {
             passives: vec![],
             hidden_boost: 1.0,
             speed: 1.0,
+            pal_rank: None,
         })
     };
     let mut rec: HashMap<String, [f64; 2]> = HashMap::new();
@@ -525,13 +526,24 @@ pub fn box_rating(conn: &Connection, s: &Settings, pal: &str, hp: f64, atk: f64,
         passives: passives.to_vec(),
         hidden_boost: 1.0,
         speed: model::speed(passives),
+        pal_rank: None,
     };
     let (mh, ma, md) = (median("hp")?, median("atk")?, median("def")?);
     if mh == 0.0 {
         return Ok(0.5);
     }
-    let typical =
-        Fighter { pal: "typical".into(), types: vec![], hp: mh, atk: ma, def: md, skills, passives: vec![], hidden_boost: 1.0, speed: 1.0 };
+    let typical = Fighter {
+        pal: "typical".into(),
+        types: vec![],
+        hp: mh,
+        atk: ma,
+        def: md,
+        skills,
+        passives: vec![],
+        hidden_boost: 1.0,
+        speed: 1.0,
+        pal_rank: None,
+    };
     Ok(model::score(s, &me, &typical, [[0.0; 2]; 2], [0.0; 2]).p_stats)
 }
 

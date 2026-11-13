@@ -121,15 +121,27 @@ function chat(s, live) {
   </div>`;
 }
 
+// the settings that learn from real calls (the rest learn from past duels): a column of their own
+const ON_CALLS = ['STATS_STEEPNESS', 'SPECIES_LIVE', 'COOLDOWN_EXP', 'PAL_RANK_WEIGHT'];
+
 function modelPage(s) {
   const own = !s.model_auto;
+  const inputs = (keys) =>
+    keys.map((k) => {
+      const [label, lo, hi] = KNOBS[k];
+      return row(label, `${lo} to ${hi}`, `<input type="number" step="0.05" min="${lo}" max="${hi}" data-m="${k}" value="${knobValue(s.model, k)}" style="width:90px">`);
+    }).join('');
+  const keys = Object.keys(KNOBS);
   return `<div class="sg">
     <div class="panel"><div class="ph"><h3>Model</h3><span>${own ? 'your own settings' : 'tunes itself'}</span></div>
       ${row('Tune itself', 'Augur re-fits its settings as results come in and keeps a change only when it predicts the newest duels better (Model tab). Off: it uses the values below.', toggle('id="mauto"', s.model_auto, 'Tune itself'))}
-      ${own ? Object.entries(KNOBS).map(([k, [label, lo, hi]]) => row(label, `${lo} to ${hi}`, `<input type="number" step="0.05" min="${lo}" max="${hi}" data-m="${k}" value="${knobValue(s.model, k)}" style="width:90px">`)).join('') : ''}
-      ${own ? row('Start again', 'copy what the model has learned into the values above', '<button class="btn ghost" id="mcopy">Use the learned values</button>') : ''}</div>
-    <div class="panel"><div class="ph"><h3>How it learns</h3></div><div class="small" style="line-height:1.7">
-      Types, move power and records learn from every past duel; the stat settings and cooldown passives wait for real calls, which see each pal's actual stats. The newest quarter of each is held back to check a change, so it can't just memorise the past. Learning carries on while you use your own settings.</div></div>
+      ${own ? inputs(keys.filter((k) => !ON_CALLS.includes(k))) : ''}</div>
+    <div class="stackc">
+      ${own ? `<div class="panel"><div class="ph"><h3>Learned on real calls</h3></div>${inputs(ON_CALLS)}
+        ${row('Start again', 'copy what the model has learned into these values', '<button class="btn ghost" id="mcopy">Use the learned values</button>')}</div>` : ''}
+      <div class="panel"><div class="ph"><h3>How it learns</h3></div><div class="small" style="line-height:1.7">
+      Types, move power and records learn from every past duel; the stat settings, cooldown passives and the pal rank wait for real calls, which see each pal's actual stats (and the rank it had then). The newest quarter of each is held back to check a change, so it can't just memorise the past. Learning carries on while you use your own settings.</div></div>
+    </div>
   </div>`;
 }
 

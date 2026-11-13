@@ -119,6 +119,13 @@ pub fn fixture_data() -> Value {
             [newest.id],
         )
         .unwrap();
+        // the pal ranks it read (made up)
+        conn.execute(
+            "UPDATE fighters SET tier = CASE side WHEN 'home' THEN 'B' ELSE 'C' END, pal_rank = CASE side WHEN 'home' THEN 88 ELSE 171 END,
+             rank_of = 357, power = CASE side WHEN 'home' THEN 66 ELSE 51 END WHERE prediction_id = ?",
+            [newest.id],
+        )
+        .unwrap();
         let mut d = views::call_detail(&conn, newest.id, &StakeSettings::default()).unwrap().unwrap();
         d.call.late = history.calls.first().and_then(|c| c.late.clone());
         d
@@ -165,7 +172,26 @@ pub fn fixture_data() -> Value {
             era("0.1.5", &["TYPE_BONUS 1.4 → 1.5"], recent as i64 - 3_600_000, 4, 5),
             era("0.1.5", &["version 0.1.4 → 0.1.5"], recent as i64 - 20_000_000, 9, 13),
             era("0.1.4", &[], recent as i64 - 90_000_000, 13, 18),
+            era("0.1.4", &["STATS_STEEPNESS 3 → 5"], recent as i64 - 95_000_000, 1, 1),
         ];
+        // a long run's worth of species with secret moves (made up)
+        mv.unlisted = [
+            ("Bushi Noct", 0.66, "Iai Slash"),
+            ("Prunelia", 0.51, "Poison Shower"),
+            ("Paladius", 0.49, "One Spear Rushes"),
+            ("Beakon Cryst", 0.39, "Snow Storm"),
+            ("Mycora Cryst", 0.31, "Spore Burst"),
+            ("Turtacle", 0.22, "Shell Spin"),
+            ("Lapiron", 0.17, "Iron Roll"),
+            ("Xenolord", 0.12, "Void Claw"),
+        ]
+        .iter()
+        .map(|(pal, share, mv)| augur_engine::history::UnlistedLeader {
+            pal: pal.to_string(),
+            share: *share,
+            moves: vec![(mv.to_string(), share * 90.0)],
+        })
+        .collect();
         mv
     };
     json!({
@@ -600,9 +626,9 @@ fn html_unescape(s: &str) -> String {
 /// times, rolls, ranks and positions keep their values.
 fn bigger(v: &mut Value, key: &str) {
     let k = key.to_ascii_lowercase();
-    let keep = ["id", "seq", "pos", "at", "ms", "n", "z"].contains(&k.as_str())
+    let keep = ["id", "seq", "pos", "at", "ms", "n", "z", "of"].contains(&k.as_str())
         || ["_id", "_at", "_ms"].iter().any(|e| k.ends_with(e))
-        || ["iv", "tier", "secs", "hp_left", "zoom", "width", "height", "version"].iter().any(|e| k.contains(e))
+        || ["iv", "tier", "rank", "secs", "hp_left", "zoom", "width", "height", "version"].iter().any(|e| k.contains(e))
         || k.starts_with("lv")
         || k.starts_with("page");
     match v {
@@ -760,6 +786,12 @@ fn every_tab_renders_headless() {
         "the tape and the settings: {call}"
     );
     assert!(call.contains("after the bell") && call.contains("taken from its owner’s box"), "how the call was made: {call}");
+    // the site's pal rank: each side's tier with its tags, and a row in the tale of the tape
+    assert!(call.contains("#88\npal rank\n#171"), "the pal ranks in the tale of the tape: {call}");
+    assert!(text("live").contains("#154\npal rank\n#98"), "Live reads the pal ranks from the feed: {}", text("live"));
+    for (tab, tags) in [("call", "b\nwon"), ("live", "b\naugur's pick")] {
+        assert!(text(tab).contains(tags), "{tab}: the tier sits with the side's tags: {}", text(tab));
+    }
     let bet = &d["bet"];
     let (cmd, label) = (bet["augur_command"].as_str().unwrap().to_lowercase(), bet["label"].as_str().unwrap());
     assert!(bet["backed"].is_string(), "the seed has a bet on its newest call: {bet}");

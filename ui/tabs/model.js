@@ -19,25 +19,34 @@ export const KNOBS = {
   PAL_H2H_WEIGHT: ['Pal head to head', 0, 1.5, (v) => `${v}`],
   COOLDOWN_EXP: ['Cooldown passives', 0, 1, (v) => `^${v}`],
   HIT_WEIGHT: ['Real hit size', 0, 1, (v) => `^${v}`],
+  PAL_RANK_WEIGHT: ['Pal rank', 0, 0.5, (v) => `×${v}`],
 };
 
 // a setting's value: Records on real calls follows Species records until it's learned or set
 export const knobValue = (s, key) => s[key] ?? (key === 'SPECIES_LIVE' ? s.SPECIES_WEIGHT : undefined);
 
-// what the learner last did with a setting, as a line under its name
+// what the learner last did with a setting, as one line under its name (cut short if need be; the hover has it all)
 function knobNote(k, auto) {
   if (!k) return '';
+  const note = (cls, text, more = text) => `<small class="kn ${auto ? cls : 'muted'}" title="${esc(more)}">${esc(text)}</small>`;
+  const was = k.status === 'changed' ? `was ${KNOBS[k.key][3](k.was)} · ` : '';
   // Records on real calls moves calls / (calls + 60) of the way from Species records to what the calls fit best
-  if (k.key === 'SPECIES_LIVE')
-    return `<small class="kn ${auto && k.status === 'changed' ? 'ok' : auto ? '' : 'muted'}">${k.status === 'changed' ? `learned: was ${KNOBS[k.key][3](k.was)} · ` : ''}${fmt(k.have)} real calls, ${pct(k.have / (k.have + 60))} of the way</small>`;
-  const from = k.source === 'past_duels' ? 'past duels' : 'real calls';
-  const [label, text] =
-    k.status === 'changed'
-      ? ['ok', `learned: was ${KNOBS[k.key][3](k.was)}`]
-      : k.status === 'waiting'
-        ? ['muted', `waits for ${from}: ${fmt(k.have)} of ${fmt(k.need)}`]
-        : ['', `holds on ${from}`];
-  return `<small class="kn ${auto ? label : 'muted'}">${text}</small>`;
+  if (k.key === 'SPECIES_LIVE') {
+    const share = pct(k.have / (k.have + 60));
+    return note(
+      k.status === 'changed' ? 'ok' : '',
+      `${was}${share} toward ${fmt(k.have)} calls’ fit`,
+      `Starts at Species records (learned on past duels, which have base stats only) and moves toward the weight your ${fmt(k.have)} real calls fit best: calls ÷ (calls + 60) of the way, ${share} so far. The more calls, the more it trusts them.`,
+    );
+  }
+  // the pal rank counts only the calls that read it
+  const from = k.source === 'past_duels' ? 'past duels' : k.key === 'PAL_RANK_WEIGHT' ? 'ranked calls' : 'real calls';
+  if (k.status === 'changed') return note('ok', `learned: was ${KNOBS[k.key][3](k.was)}`);
+  if (k.status === 'waiting') {
+    const why = k.key === 'PAL_RANK_WEIGHT' ? 'Learns only from real calls that read the pal rank; it can switch on at 60.' : `Learns from ${from} once there are ${fmt(k.need)}.`;
+    return note('muted', `waits for ${from}: ${fmt(k.have)} of ${fmt(k.need)}`, why);
+  }
+  return note('', `holds on ${from}`, `Re-tested on ${from}: its value still predicts best.`);
 }
 
 // a headline number with its picture on the left
@@ -56,6 +65,17 @@ function backfillLine(b) {
   if (!b.phase) return 'waiting';
   if (b.phase === 'done') return 'up to date';
   return esc(backfillState(b)?.long || `${b.phase} ${fmt(b.done)}/${fmt(b.total)}`);
+}
+
+// The secret moves list shows the rows that fit, biggest share first, so the page never scrolls; the header says
+// how many that is, and its hover lists them all.
+function fitSecrets(main) {
+  const list = main.querySelector('.bars.secret');
+  if (!list) return;
+  const rows = [...list.children];
+  let n = rows.length;
+  while (n > 1 && list.scrollHeight > list.clientHeight + 1) rows[--n].remove();
+  if (n < rows.length) document.getElementById('secret').textContent = `top ${n} of ${rows.length}`;
 }
 
 export async function render(app) {
@@ -97,9 +117,9 @@ export async function render(app) {
           .map(([key, [label, lo, hi, show]]) => slider(label, knobValue(s, key), lo, hi, show(knobValue(s, key)), knobNote(l?.knobs.find((k) => k.key === key), m.auto)))
           .join('')}</div></div>
       <div class="stackc">${learning}
-        <div class="panel col grow"><div class="ph"><h3>Pals with secret moves</h3><span>share of damage</span></div>${
+        <div class="panel col grow"><div class="ph"><h3>Pals with secret moves</h3><span id="secret" title="${esc(m.unlisted.map((u) => `${u.pal} ${pct(u.share)}`).join('\n'))}">share of damage</span></div>${
           m.unlisted.length
-            ? `<div class="fillin bars">${m.unlisted.map((u) => `<div class="hbar" title="${esc(u.moves.map((x) => x[0]).join(', '))}"><span>${esc(u.pal)} <span class="muted">· ${u.moves.map((x) => esc(x[0])).join(', ')}</span></span><b class="gold">${pct(u.share)}</b><div class="b"><i style="width:${(100 * u.share) / maxShare}%"></i></div></div>`).join('')}</div>`
+            ? `<div class="fillin bars secret">${m.unlisted.map((u) => `<div class="hbar" title="${esc(u.moves.map((x) => x[0]).join(', '))}"><span>${esc(u.pal)} <span class="muted">· ${u.moves.map((x) => esc(x[0])).join(', ')}</span></span><b class="gold">${pct(u.share)}</b><div class="b"><i style="width:${(100 * u.share) / maxShare}%"></i></div></div>`).join('')}</div>`
             : empty('eye', 'None found yet', 'Pals whose damage comes from moves the site doesn’t list, once enough fight tapes are in.')
         }</div></div>
       <div class="stackc">
@@ -121,6 +141,7 @@ export async function render(app) {
             : empty('star', 'Nothing yet', 'Every check so far says the settings hold. Changes show here when the results say so.')
         }</div></div>
     </div>`;
+  fitSecrets(main);
   document.getElementById('rt').onclick = async (e) => {
     e.target.disabled = true;
     await invoke('learn_now').catch(() => {});

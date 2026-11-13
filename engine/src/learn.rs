@@ -36,7 +36,7 @@ struct Knob {
     grid: &'static [f64],
 }
 
-const KNOBS: [Knob; 9] = [
+const KNOBS: [Knob; 10] = [
     Knob { key: "TYPE_BONUS", source: Source::PastDuels, grid: &[1.0, 1.1, 1.25, 1.4, 1.5, 1.65, 1.8, 2.0, 2.25, 2.5] },
     Knob { key: "TYPE_RESIST", source: Source::PastDuels, grid: &[1.0, 1.1, 1.25, 1.4, 1.5, 1.65, 1.8, 2.0] },
     Knob { key: "POWER_EXP", source: Source::PastDuels, grid: &[0.0, 0.1, 0.2, 0.3, 0.35, 0.4, 0.5, 0.65, 0.8, 1.0] },
@@ -46,6 +46,8 @@ const KNOBS: [Knob; 9] = [
     Knob { key: "COOLDOWN_EXP", source: Source::LiveCalls, grid: &[0.0, 0.25, 0.5, 0.75, 1.0] },
     Knob { key: "HIT_WEIGHT", source: Source::PastDuels, grid: &[0.0, 0.25, 0.5, 0.75, 1.0] },
     Knob { key: "SPECIES_LIVE", source: Source::LiveCalls, grid: &[0.0, 0.25, 0.5, 0.75, 1.0, 1.2, 1.4, 1.6, 2.0] },
+    // per 10 points of the site's power score; past duels showed nothing, so only real calls that have it decide
+    Knob { key: "PAL_RANK_WEIGHT", source: Source::LiveCalls, grid: &[0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5] },
 ];
 
 /// One setting after a learning run.
@@ -99,6 +101,11 @@ pub struct Change {
     pub n: usize,
 }
 
+/// Both sides' pal ranks were read when it was called (calls from before Augur read them haven't).
+fn has_pal_ranks(c: &CallRecord) -> bool {
+    c.fighters.as_ref().is_some_and(|(h, a)| h.fighter.pal_rank.is_some() && a.fighter.pal_rank.is_some())
+}
+
 fn has_cooldown(c: &CallRecord) -> bool {
     c.fighters.as_ref().is_some_and(|(h, a)| (h.fighter.speed - 1.0).abs() > 1e-9 || (a.fighter.speed - 1.0).abs() > 1e-9)
 }
@@ -140,10 +147,12 @@ pub fn learn_on(past: &[PastDuel], calls: &[CallRecord], current: &Settings, now
     let past_loss = |set: &[PastDuel], s: &Settings| history::score_past(set, s).log_loss;
     let live_loss = |set: &[CallRecord], s: &Settings| history::evaluate(set, s).0;
     let cooldown_calls = calls.iter().filter(|c| has_cooldown(c)).count();
+    let rank_calls = calls.iter().filter(|c| has_pal_ranks(c)).count();
     let ready = |k: &Knob| match (k.source, k.key) {
         (Source::PastDuels, _) => past.len() >= 200,
         (Source::LiveCalls, GRADUAL) => !calls.is_empty(),
         (Source::LiveCalls, "COOLDOWN_EXP") => calls.len() >= MIN_CALLS && cooldown_calls >= MIN_COOLDOWN_CALLS,
+        (Source::LiveCalls, "PAL_RANK_WEIGHT") => rank_calls >= MIN_CALLS,
         (Source::LiveCalls, _) => calls.len() >= MIN_CALLS,
     };
 
@@ -208,6 +217,7 @@ pub fn learn_on(past: &[PastDuel], calls: &[CallRecord], current: &Settings, now
                 (Source::PastDuels, _) => (past.len(), 200),
                 (Source::LiveCalls, GRADUAL) => (calls.len(), 0),
                 (Source::LiveCalls, "COOLDOWN_EXP") if calls.len() >= MIN_CALLS => (cooldown_calls, MIN_COOLDOWN_CALLS),
+                (Source::LiveCalls, "PAL_RANK_WEIGHT") => (rank_calls, MIN_CALLS),
                 (Source::LiveCalls, _) => (calls.len(), MIN_CALLS),
             };
             let status = if !ready(k) {
@@ -274,6 +284,7 @@ mod tests {
             passives: vec![],
             hidden_boost: 1.0,
             speed: 1.0,
+            pal_rank: None,
         }
     }
 
@@ -348,6 +359,65 @@ mod tests {
         let few = learn_on(&[], &calls[..20], &start, 1);
         let v = |l: &Learned| l.settings.species_on_calls();
         assert!(v(&few) < start.species_weight && v(&few) > v(&l), "20 calls: {}, 120 calls: {}", v(&few), v(&l));
+    }
+
+    /// Real calls between equal pals where the higher-ranked one wins 4 in 5: the pal rank waits for 60 calls that
+    /// read it, then switches on.
+    #[test]
+    fn the_pal_rank_learns_once_enough_calls_have_it() {
+        use crate::model::PalRank;
+        let side = |power: Option<u32>| crate::db::CallFighter {
+            fighter: Fighter {
+                pal_rank: power.map(|power| PalRank { tier: "B".into(), rank: 400 - power * 3, of: 357, power }),
+                ..fighter(&["neutral"], "neutral")
+            },
+            ivs: Default::default(),
+        };
+        let calls = |n: i64, ranked: bool| -> Vec<CallRecord> {
+            (0..n)
+                .map(|i| {
+                    let (home, away) = if ranked { (Some(80), Some(40)) } else { (None, None) };
+                    CallRecord {
+                        id: i,
+                        seen_at: i,
+                        home_owner: "a".into(),
+                        away_owner: "b".into(),
+                        home_pal: "x".into(),
+                        away_pal: "y".into(),
+                        pick: "home".into(),
+                        prob: 0.5,
+                        p_stats: None,
+                        p_species: None,
+                        p_h2h: None,
+                        species_rec: Some([[0.0; 2]; 2]),
+                        pal_h2h: [0.0; 2],
+                        duel_id: None,
+                        winner: Some(if i % 5 == 0 { "away" } else { "home" }.into()),
+                        fought_at: None,
+                        ko: None,
+                        winner_hp_left: None,
+                        stake: None,
+                        fighters: Some((side(home), side(away))),
+                        late: None,
+                        late_only: false,
+                        version: String::new(),
+                        model: String::new(),
+                        damaged: false,
+                    }
+                })
+                .collect()
+        };
+        let start = Settings::default();
+        let rank = |l: &Learned| l.knobs.iter().find(|k| k.key == "PAL_RANK_WEIGHT").unwrap().clone();
+        // 120 calls, but from before Augur read the ranks
+        let k = rank(&learn_on(&[], &calls(120, false), &start, 1));
+        assert_eq!((k.status.as_str(), k.value, k.have, k.need), ("waiting", 0.0, 0, MIN_CALLS));
+        let mut some = calls(80, false);
+        some.extend(calls(40, true));
+        assert_eq!(rank(&learn_on(&[], &some, &start, 1)).have, 40, "only the calls that read the ranks count");
+        let l = learn_on(&[], &calls(120, true), &start, 1);
+        assert!(l.settings.pal_rank_weight > 0.0, "{:?}", l.settings);
+        assert_eq!(rank(&l).status, "changed");
     }
 
     /// Coin-flip history: nothing to learn, so nothing moves.

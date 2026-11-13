@@ -1,6 +1,9 @@
 // The bet Augur suggests for a call: the chat command to copy, and a short line on why.
 import { esc, fmt } from './format.js';
 
+// how a bet lined up with Augur's call (bets::Label), for Your bets and a call's breakdown
+export const BET_LABELS = { followed: 'Followed', deviated: 'Deviated', missed: 'Missed', no_call: 'No call', pending: 'Pending' };
+
 // the command to copy: the suggested one, or the bare side command when no stake came with the call
 export const betCommand = (p, stake) => (stake ? stake.command : p.pick === 'home' ? '!h' : '!a');
 

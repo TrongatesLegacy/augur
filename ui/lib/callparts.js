@@ -60,12 +60,12 @@ function notes(d) {
 // Both pals face to face, Augur's pick and its chance in the middle. verdict goes under the pick's name (History:
 // right or missed; Live: the bet), line under the dial (History: how it ended; Live: why the bet), then the notes.
 // chance: the dial's, when it isn't the call's own (Live shows the chance as it stands)
-export function headline(d, { verdict = '', line = '', chance } = {}) {
+export function headline(d, { verdict = '', line = '', extra = '', chance } = {}) {
   const c = d.call;
   return `<div class="stage cstage${pending(c) ? ' pending' : ''}">${side(d, 'home')}
     <div class="cmid"><div class="cverdict">${dial(chance ?? c.prob, 80)}<div>
       <div class="cpick"><span class="label">${pending(c) ? 'Augur calls' : 'Augur called'}</span><b>${esc(pal(c, c.pick))}</b></div>${verdict}</div></div>
-      ${line ? `<div class="cwon">${line}</div>` : ''}${notes(d)}</div>
+      ${line ? `<div class="cwon">${line}</div>` : ''}${extra}${notes(d)}</div>
     ${side(d, 'away')}</div>`;
 }
 

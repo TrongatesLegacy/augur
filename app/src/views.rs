@@ -348,6 +348,11 @@ pub struct CallDetail {
     pub model: Option<ModelCall>,
     /// each side's moves as the model saw them against the other: [home, away] (empty without fighters)
     pub sides: Vec<SideDetail>,
+    /// the money on it, as Your bets lines it up: Augur's stake and what it made, your bet and what it made (None for
+    /// a call that's up, or one left out of the money because it was overwritten after the fight)
+    pub bet: Option<bets::Fight>,
+    /// the picks list has been read at least once, so "no bet" means you didn't bet
+    pub bets_read: bool,
 }
 
 /// The duel as it was fought.
@@ -583,8 +588,13 @@ pub struct MoveLine {
 }
 
 /// One settled call's breakdown, or None if there's no such settled call.
-pub fn call_detail(conn: &Connection, id: i64) -> R<Option<CallDetail>> {
+pub fn call_detail(conn: &Connection, id: i64, staking: &StakeSettings) -> R<Option<CallDetail>> {
     let Some(call) = db::settled_call(conn, id)? else { return Ok(None) };
+    let synced_at: Option<u64> = db::meta_get(conn, "bets_synced_at")?.and_then(|v| v.parse().ok());
+    let bet = bets::compare(std::slice::from_ref(&call), &db::bets(conn)?, staking, &bets::odds(conn)?, synced_at.unwrap_or(0))
+        .fights
+        .into_iter()
+        .find(|f| f.call_id == Some(id));
     let (stats_from, estimated, stake_cmd): (Option<String>, bool, Option<String>) =
         conn.query_row("SELECT stats_from, COALESCE(estimated, 0) = 1, stake_cmd FROM predictions WHERE id = ?", [id], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?))
@@ -613,6 +623,8 @@ pub fn call_detail(conn: &Connection, id: i64) -> R<Option<CallDetail>> {
         settings,
         fight,
         sides,
+        bet,
+        bets_read: synced_at.is_some(),
         call,
     }))
 }
@@ -662,6 +674,8 @@ pub fn live_detail(p: &Prediction, stake: Option<&Stake>) -> CallDetail {
         fight: None,
         model: model_call(&call, s),
         sides: sides.unwrap_or_default(),
+        bet: None,
+        bets_read: false,
         call,
     }
 }
@@ -790,6 +804,8 @@ fn side_detail(s: &model::Settings, me: &model::Fighter, them: &model::Fighter) 
 
 #[cfg(test)]
 mod tests {
+    use augur_engine::stake::StakeSettings;
+
     #[test]
     fn off_air_lists_the_latest_calls_newest_first() {
         let conn = augur_engine::seed::store();
@@ -812,7 +828,7 @@ mod tests {
         let calls = augur_engine::db::settled(&conn).unwrap();
         let c = calls.last().unwrap();
         assert!(augur_engine::seed::tape(&conn, c.duel_id.unwrap()));
-        let d = super::call_detail(&conn, c.id).unwrap().expect("the newest call");
+        let d = super::call_detail(&conn, c.id, &StakeSettings::default()).unwrap().expect("the newest call");
         assert_eq!(d.call.id, c.id);
         assert_eq!(d.slugs[0], augur_engine::site::slug_for(&c.home_pal));
         assert!(d.settings.is_some(), "the call's own settings");
@@ -851,22 +867,38 @@ mod tests {
     }
 
     #[test]
+    fn a_call_shows_the_money_on_it_as_your_bets_does() {
+        let conn = augur_engine::seed::store();
+        let s = StakeSettings::default();
+        let id = augur_engine::db::settled(&conn).unwrap().last().unwrap().id;
+        let d = super::call_detail(&conn, id, &s).unwrap().unwrap();
+        let b = d.bet.expect("Augur's side, before your picks list is read");
+        assert!(!d.bets_read && b.backed.is_none() && b.augur_stake > 0);
+        augur_engine::seed::import_bets(&conn);
+        let all = super::bets_view(&conn, &s, "all", 0, Default::default()).unwrap().comparison.fights;
+        let row = all.iter().find(|f| f.backed.is_some() && f.call_id.is_some()).expect("a call you bet on");
+        let d = super::call_detail(&conn, row.call_id.unwrap(), &s).unwrap().unwrap();
+        assert!(d.bets_read);
+        assert_eq!(serde_json::to_value(d.bet).unwrap(), serde_json::to_value(row).unwrap(), "the same line as Your bets");
+    }
+
+    #[test]
     fn a_call_without_a_tape_or_fighters_still_breaks_down() {
         let conn = augur_engine::seed::store();
         let c = augur_engine::db::settled(&conn).unwrap().remove(0);
-        let d = super::call_detail(&conn, c.id).unwrap().unwrap();
+        let d = super::call_detail(&conn, c.id, &StakeSettings::default()).unwrap().unwrap();
         let f = d.fight.unwrap();
         assert!(f.hits.is_empty() && f.hp.iter().all(|h| h.len() == 1) && f.biggest.is_empty(), "no tape: nothing made up");
         // an old call: no fighters kept, factors stored
         conn.execute("DELETE FROM fighters WHERE prediction_id = ?", [c.id]).unwrap();
         conn.execute("UPDATE predictions SET p_stats = 0.3, p_species = 0.6, p_h2h = 0.5, stats_from = 'home: from their box; away: shown' WHERE id = ?", [c.id]).unwrap();
-        let d = super::call_detail(&conn, c.id).unwrap().unwrap();
+        let d = super::call_detail(&conn, c.id, &StakeSettings::default()).unwrap().unwrap();
         assert!(d.call.fighters.is_none() && d.sides.is_empty());
         let m = d.model.unwrap();
         assert!(!m.rescored && m.score.is_none());
         assert_eq!(m.factors[0].p_home, 0.3);
         assert_eq!(d.stats_from, ["from their box".to_string(), "shown".to_string()]);
-        assert!(super::call_detail(&conn, 999_999).unwrap().is_none());
+        assert!(super::call_detail(&conn, 999_999, &StakeSettings::default()).unwrap().is_none());
     }
 
     #[test]

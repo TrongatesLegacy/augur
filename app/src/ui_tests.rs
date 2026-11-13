@@ -107,9 +107,11 @@ pub fn fixture_data() -> Value {
         c.late = Some((if c.pick == "home" { "away" } else { "home" }.into(), 0.575));
     }
     // a call's breakdown: the newest call (the first row) with a made-up fight tape, re-called after the bell like
-    // its row, and its home side's stats taken from the owner's box (a store of its own, so the counts above hold)
+    // its row, its home side's stats taken from the owner's box, and your bet on it (a store of its own, so the counts
+    // above hold)
     let call_detail = {
         let conn = seed::store();
+        seed::import_bets(&conn);
         let newest = augur_engine::db::settled(&conn).unwrap().pop().unwrap();
         seed::tape(&conn, newest.duel_id.unwrap());
         conn.execute(
@@ -117,7 +119,7 @@ pub fn fixture_data() -> Value {
             [newest.id],
         )
         .unwrap();
-        let mut d = views::call_detail(&conn, newest.id).unwrap().unwrap();
+        let mut d = views::call_detail(&conn, newest.id, &StakeSettings::default()).unwrap().unwrap();
         d.call.late = history.calls.first().and_then(|c| c.late.clone());
         d
     };
@@ -724,7 +726,7 @@ fn every_tab_renders_headless() {
     let (home, away) = (d["call"]["home_pal"].as_str().unwrap().to_lowercase(), d["call"]["away_pal"].as_str().unwrap().to_lowercase());
     let ko = d["fight"]["ko"].as_str().unwrap();
     assert!(call.contains(&home) && call.contains(&away) && call.contains("augur called"), "the breakdown names both pals: {call}");
-    assert!(call.contains(&format!("k.o. {ko}")) && call.contains("% hp left"), "the result, K.O. and HP left: {call}");
+    assert!(call.contains(&format!("k.o.\n{ko}\n")) && call.contains("% hp left"), "the K.O. and HP left under the dial: {call}");
     assert!(call.contains("how it went") && call.contains("damage by move") && call.contains("top hits"), "how the duel went: {call}");
     assert!(call.contains("counted most for"), "the breakdown says what swung the call most: {call}");
     assert!(
@@ -736,6 +738,12 @@ fn every_tab_renders_headless() {
         "the tape and the settings: {call}"
     );
     assert!(call.contains("after the bell") && call.contains("taken from its owner’s box"), "how the call was made: {call}");
+    let bet = &d["bet"];
+    let (cmd, label) = (bet["augur_command"].as_str().unwrap().to_lowercase(), bet["label"].as_str().unwrap());
+    assert!(bet["backed"].is_string(), "the seed has a bet on its newest call: {bet}");
+    let side = if bet["backed"] == "home" { "!h" } else { "!a" };
+    let yours = format!("your bet\n{label}\n{side} {}\n", bet["stake"].as_u64().unwrap());
+    assert!(call.contains(&format!("augur’s bet\n{cmd}\n")) && call.contains(&yours), "the money on it, Augur's and yours: {call}");
     assert_eq!(r["chart"]["lines"], json!(2), "an HP line per side");
     assert_eq!(r["chart"]["hits"].as_u64().unwrap() as usize, d["fight"]["hits"].as_array().unwrap().len(), "a dot per hit");
     assert_eq!(r["chart"]["ko"], json!(true), "the K.O. is marked");

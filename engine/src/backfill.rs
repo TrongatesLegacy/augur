@@ -3,12 +3,14 @@
 //! 429s in a row wait longer and longer, then end the run (the next one tries again); it pauses while a duel is up on
 //! stream, and resumes where it left off. Each page is checked against the store just
 //! before it's fetched, so an import part-way through (a backup from another computer) stops the work it covers.
+//! At launch a short catch-up fetches the duels fought while Augur was closed first, slowly but without pausing.
 
 use crate::db;
 use crate::error::Error;
 use crate::site;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeSet, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -17,7 +19,7 @@ pub const TAPES_FROM: u64 = 2980;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Progress {
-    /// "species", "duels", "bets" or "done"
+    /// "catchup" (the duels missed while closed), "species", "duels", "bets" or "done"
     pub phase: String,
     pub done: usize,
     pub total: usize,
@@ -180,41 +182,30 @@ pub fn species(conn: &Connection, pacer: &mut Pacer, ctl: &Control, refresh: boo
 /// Past duels up to `latest` (the newest in the live state), tape-era ones first, newest first. Skips stored ones.
 pub fn duels(conn: &Connection, latest: u64, pacer: &mut Pacer, ctl: &Control) -> crate::Result<usize> {
     let have = db::duel_ids(conn)?;
-    // numbers the site has said aren't there: not asked for again
-    let mut missing: std::collections::BTreeSet<u64> =
-        db::meta_get(conn, "missing_duels")?.and_then(|m| serde_json::from_str(&m).ok()).unwrap_or_default();
+    let missing = missing_duels(conn)?;
     let order: Vec<u64> = (TAPES_FROM..=latest)
         .rev()
         .chain((1..TAPES_FROM.min(latest + 1)).rev())
         .filter(|i| !have.contains(i) && !missing.contains(i))
         .collect();
-    let mut p = Progress { phase: "duels".into(), total: order.len(), delay_ms: pacer.delay.as_millis() as u64, ..Default::default() };
-    (ctl.progress)(&p);
-    for id in order {
-        if !wait_while_busy(ctl, &mut p) {
-            break;
-        }
-        if db::has_duel(conn, id)? {
-            p.done += 1;
-            continue;
-        }
-        if let Some(d) = pacer.get(&format!("{}/duel/{id}?show=1", site::BASE), site::parse_duel, ctl, &mut p) {
-            if d.home_pal.is_some() || !d.hits.is_empty() {
-                db::save_duel(conn, id, &d)?;
-            }
-        } else if pacer.missing {
-            missing.insert(id);
-            db::meta_set(conn, "missing_duels", &serde_json::to_string(&missing)?)?;
-        }
-        if pacer.gave_up {
-            break;
-        }
-        p.done += 1;
-        if p.done.is_multiple_of(25) || p.done == p.total {
-            (ctl.progress)(&p);
-        }
-    }
-    Ok(p.done)
+    fetch_duels(conn, order, "duels", true, pacer, ctl)
+}
+
+/// The most duels a catch-up fetches: about a day of streaming. More than that waits for the full run.
+pub const CATCH_UP_MAX: usize = 100;
+
+/// The duels since the newest one stored, newest first, at most `CATCH_UP_MAX`. None on a store with no duels yet
+/// (that's the full run's job).
+pub fn catch_up_ids(have: &HashSet<u64>, missing: &BTreeSet<u64>, latest: u64) -> Vec<u64> {
+    let Some(newest) = have.iter().max() else { return vec![] };
+    (newest + 1..=latest).rev().filter(|i| !missing.contains(i)).take(CATCH_UP_MAX).collect()
+}
+
+/// At launch: the duels fought while Augur was closed, before anything else. Unlike the full run it carries on while
+/// a duel is up, so the caller gives it a slow pace.
+pub fn catch_up(conn: &Connection, latest: u64, pacer: &mut Pacer, ctl: &Control) -> crate::Result<usize> {
+    let order = catch_up_ids(&db::duel_ids(conn)?, &missing_duels(conn)?, latest);
+    fetch_duels(conn, order, "catchup", false, pacer, ctl)
 }
 
 /// The whole backfill: species first (the Pals tab and the model need them; every species is read again once a
@@ -241,6 +232,45 @@ pub fn run(conn: &Connection, ctl: &Control) -> crate::Result<()> {
     Ok(())
 }
 
+// --- helpers ---
+
+/// Duel numbers the site has said aren't there: not asked for again.
+fn missing_duels(conn: &Connection) -> crate::Result<BTreeSet<u64>> {
+    Ok(db::meta_get(conn, "missing_duels")?.and_then(|m| serde_json::from_str(&m).ok()).unwrap_or_default())
+}
+
+/// Fetches and stores each duel in `order`, reporting progress under `phase`; `pause` waits while a duel is up.
+fn fetch_duels(conn: &Connection, order: Vec<u64>, phase: &str, pause: bool, pacer: &mut Pacer, ctl: &Control) -> crate::Result<usize> {
+    let mut missing = missing_duels(conn)?;
+    let mut p = Progress { phase: phase.into(), total: order.len(), delay_ms: pacer.delay.as_millis() as u64, ..Default::default() };
+    (ctl.progress)(&p);
+    for id in order {
+        if (pause && !wait_while_busy(ctl, &mut p)) || ctl.stop.load(Ordering::Relaxed) {
+            break;
+        }
+        if db::has_duel(conn, id)? {
+            p.done += 1;
+            continue;
+        }
+        if let Some(d) = pacer.get(&format!("{}/duel/{id}?show=1", site::BASE), site::parse_duel, ctl, &mut p) {
+            if d.home_pal.is_some() || !d.hits.is_empty() {
+                db::save_duel(conn, id, &d)?;
+            }
+        } else if pacer.missing {
+            missing.insert(id);
+            db::meta_set(conn, "missing_duels", &serde_json::to_string(&missing)?)?;
+        }
+        if pacer.gave_up {
+            break;
+        }
+        p.done += 1;
+        if p.done.is_multiple_of(25) || p.done == p.total {
+            (ctl.progress)(&p);
+        }
+    }
+    Ok(p.done)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,5 +281,15 @@ mod tests {
         let mins: Vec<u64> = (1..=6).map(|n| slow.cool_off(n).as_secs() / 60).collect();
         assert_eq!(mins, [2, 4, 8, 16, 30, 30], "at the slowest pace: 2, 4, 8, 16, then 30 minutes");
         assert_eq!(Pacer::new(Duration::from_millis(750)).cool_off(1).as_secs(), 3);
+    }
+
+    #[test]
+    fn a_catch_up_fetches_only_whats_new_newest_first() {
+        let have: HashSet<u64> = [4700, 4702, 4703].into();
+        let missing: BTreeSet<u64> = [4706].into();
+        assert_eq!(catch_up_ids(&have, &missing, 4708), [4708, 4707, 4705, 4704], "older gaps wait for the full run");
+        assert!(catch_up_ids(&have, &missing, 4703).is_empty(), "nothing new");
+        assert!(catch_up_ids(&HashSet::new(), &missing, 4708).is_empty(), "a new store waits for the full run");
+        assert_eq!(catch_up_ids(&[10].into(), &missing, 5000).len(), CATCH_UP_MAX);
     }
 }

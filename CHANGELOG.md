@@ -2,7 +2,10 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.9 (current)
+## 0.1.10 (current)
+- The main window fills large screens on Windows too
+
+## 0.1.9
 - Records on real calls learns from every call, a little at a time
 - Installer builds reuse their compiled crates again
 

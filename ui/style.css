@@ -527,7 +527,9 @@ body.pop { padding: 7px 9px 12px; box-sizing: border-box; }
 .bxp.tier-c { --tint: rgba(79,227,255,.07); }
 .bxh { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 9px; align-items: center; }
 .bxh .orb { box-shadow: 0 0 0 1px rgba(255,255,255,.08); }
-.bxn { display: grid; gap: 3px; min-width: 0; }
+/* the name from the top, the tier at the foot: the header is as tall as the row's longest name, and a one-line name
+   leaves its second line empty rather than floating between its neighbours' two */
+.bxn { display: grid; grid-template-rows: 1fr auto; align-content: space-between; gap: 3px; min-width: 0; align-self: stretch; }
 /* a long name takes two lines rather than being cut */
 .bxn b { font: 700 15.5px/1.1 var(--cond); letter-spacing: .03em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: break-word; }
 .bxn small { display: flex; gap: 5px; align-items: center; min-height: 16px; }

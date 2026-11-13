@@ -521,12 +521,17 @@ body.pop { padding: 7px 9px 12px; box-sizing: border-box; }
    two-line name or a missing foot moves the whole row, not one card */
 .bxbox { display: grid; grid-auto-rows: auto auto 1fr; gap: 10px; padding: 2px; }
 .bxgap { grid-row: span 3; }
-.bxp { --tint: rgba(255,255,255,.035); grid-column: span 2; grid-row: span 3; min-width: 0; min-height: 104px; display: grid; grid-template-rows: auto auto 1fr; grid-template-rows: subgrid; row-gap: 11px; padding: 11px 13px; border-radius: 14px; background: radial-gradient(120% 90% at 0% 0%, var(--tint), transparent 60%), rgba(255,255,255,.025); border: 1px solid var(--line); }
+.bxp { --tint: rgba(255,255,255,.035); grid-column: span 2; grid-row: span 3; min-width: 0; min-height: 104px; display: grid; grid-template-rows: auto auto 1fr; grid-template-rows: subgrid; row-gap: 11px; position: relative; overflow: hidden; padding: 11px 13px; border-radius: 14px; background: radial-gradient(120% 90% at 0% 0%, var(--tint), transparent 60%), rgba(255,255,255,.025); border: 1px solid var(--line); }
 .bxp.tier-a { --tint: rgba(255,207,107,.13); border-color: rgba(255,207,107,.26); }
 .bxp.tier-b { --tint: rgba(61,220,151,.1); }
 .bxp.tier-c { --tint: rgba(79,227,255,.07); }
-.bxh { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 9px; align-items: center; }
-.bxh .orb { box-shadow: 0 0 0 1px rgba(255,255,255,.08); }
+.bxh { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 9px; align-items: center; }
+/* the pal's art faded into the card's bottom corner rather than an icon in the header, so the name has its width. Nothing
+   shows until the art is cached (no initials: the name is right there) */
+.bxp > .bxart { position: absolute; inset: auto -6px -6px auto; width: min(62%, 140px) !important; height: auto !important; aspect-ratio: 1; border-radius: 0; opacity: .2; pointer-events: none; -webkit-mask-image: radial-gradient(circle at 70% 70%, #000 35%, transparent 72%); mask-image: radial-gradient(circle at 70% 70%, #000 35%, transparent 72%); }
+.bxart > span { display: none; }
+.bxart img { border-radius: 0; object-fit: cover; }
+.bxp > :not(.bxart) { position: relative; }
 /* the name from the top, the tier at the foot: the header is as tall as the row's longest name, and a one-line name
    leaves its second line empty rather than floating between its neighbours' two */
 .bxn { display: grid; grid-template-rows: 1fr auto; align-content: space-between; gap: 3px; min-width: 0; align-self: stretch; }

@@ -28,13 +28,13 @@ export function boxGrid(cards, cols, cls = '') {
   return `<div class="fillin bxbox ${cls}" style="grid-template-columns: repeat(${cols * 2}, minmax(0, 1fr))">${cards.slice(0, last).join('')}${gap}${cards.slice(last).join('')}</div>`;
 }
 
-// one card: a header, its rolls and a foot (the box lines these up across a row); `extra` goes in the foot, `attrs` on the card itself (a click target, a selection), `passives: false`
+// one card: its art faded in behind (once it's cached), a header, its rolls and a foot (the box lines these up across a row); `extra` goes in the foot, `attrs` on the card itself (a click target, a selection), `passives: false`
 // leaves them off (they don't change with a reroll, so You › Pals shows them with the reroll instead)
 export function boxCard(p, { extra = '', attrs = '', cls = '', title = '', passives = true } = {}) {
   const tier = (p.tier || '').toLowerCase();
   const pills = passives ? `${passivePills(p.passives || [])}${p.rerolls ? `<span class="pill">rerolled ×${fmt(p.rerolls)}</span>` : ''}` : '';
-  return `<div class="bxp ${tier ? `tier-${esc(tier)}` : ''} ${cls}" ${attrs} title="${esc(title)}">
-    <div class="bxh">${orb(p.pal, p.slug, 'h av', 36)}
+  return `<div class="bxp ${tier ? `tier-${esc(tier)}` : ''} ${cls}" ${attrs} title="${esc(title)}">${orb(p.pal, p.slug, 'bxart', 0)}
+    <div class="bxh">
       <div class="bxn"><b>${esc(p.pal)}</b><small>${tier ? `<span class="tierb">${esc(p.tier)}</span>` : ''}${p.alpha ? '<span class="alpha">alpha</span>' : ''}</small></div>
       <div class="bxpw" title="The site's power rating for ${esc(p.pal)}"><b>${p.power != null ? fmt(p.power) : '—'}</b><small>power</small></div></div>
     ${ivRow(ivsOf(p))}

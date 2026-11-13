@@ -91,11 +91,15 @@ function rerollPanel(s) {
   const p = s.pal;
   const a = p.advice;
   const panel = s.panel;
-  const working = panel.busy || panel.sync || panel.wait;
+  // busy (rolling, saving a choice) or waiting: the site's own status, a spinner, no buttons; syncing (a choice
+  // saved, the card catching up) shows as done
+  const working = panel.busy || panel.wait;
   const head = `<div class="ph"><h3>Reroll</h3><button class="btn ghost sm" id="mrr-x">Back</button></div>
     <div class="mrr-pal">${orb(p.pal, p.slug, 'h', 52)}<div><b>${esc(p.pal)}</b><small>${p.tier ? `<span class="tierb tier-${esc(p.tier.toLowerCase())}">${esc(p.tier)}</span>` : ''}power ${p.power != null ? fmt(p.power) : '—'}${a ? `<span class="tag ${TAG[a.tag]}">${esc(a.tag)}</span>` : ''}${p.rerolls ? ` · rerolled ×${fmt(p.rerolls)}` : ''}</small>${p.passives?.length ? `<div class="pills">${passivePills(p.passives)}</div>` : ''}</div></div>`;
   let body;
-  if (panel.rolls.length >= 2) {
+  if (working && panel.rolls.length < 2) {
+    body = `${panel.rolls[0] ? dice(panel.rolls[0][1]) : ''}<div class="mrr-wait"><span class="spin" aria-hidden="true"></span><b>${esc(panel.state || 'The site is working on it…')}</b><small>${esc(panel.note || '')}</small></div>`;
+  } else if (panel.rolls.length >= 2) {
     // after a roll: the two side by side, Augur's pick marked, and the site's choices
     const keep = s.recommend === 'keep';
     const old = panel.rolls.findIndex(([l]) => /now|old|current|before/i.test(l));
@@ -107,23 +111,28 @@ function rerollPanel(s) {
     const marks = [{ at: s.wins[o] ?? a?.now, label: 'old' }];
     if (s.wins[n] != null) marks.push({ at: s.wins[n], label: 'new', cls: 'new' });
     body = `<div class="mrr-vs">${side(o, s.recommend && !keep)}${side(n, s.recommend && keep)}</div>
+      ${panel.verdict ? `<div class="mrr-verdict ${keep ? 'ok' : ''}">${esc(panel.verdict)}</div>` : ''}
       ${a && marks[0].at != null ? spreadChart(a, marks) : ''}
       <div class="mrr-acts">${panel.forms.map((f, i) => `<button class="btn ${(f.fields.find(([k]) => k === 'op')?.[1] === s.recommend) ? '' : 'ghost'}" data-form="${i}">${esc(f.label || 'Choose')}</button>`).join('')}</div>
-      <p class="small mrr-note">${esc(panel.note || 'Credits are spent either way.')}</p>`;
+      <p class="small mrr-note ${/minute/i.test(panel.note) ? 'gold' : ''}">${esc(panel.note || 'Credits are spent either way.')}</p>`;
   } else {
     const roll = panel.forms.findIndex((f) => f.fields.some(([k, v]) => k === 'op' && v === 'roll'));
-    const price = s.pal.price;
+    // the price is the roll form's own limit: what's sent, and the most the site may charge
+    const max = roll >= 0 ? panel.forms[roll].fields.find(([k]) => k === 'max')?.[1] : null;
+    const price = max != null ? Number(String(max).replace(/,/g, '')) : null;
     body = `${panel.rolls[0] ? dice(panel.rolls[0][1]) : ''}
       ${a ? `<div class="mrr-odds"><div><b>${pts(a.now)}</b><small>win chance now</small></div><span aria-hidden="true">→</span><div><b class="${gain(a) >= 0.01 ? 'ok' : ''}">${pts(a.after)}</b><small>on average after one reroll</small></div></div>
         ${spreadChart(a, [{ at: a.now, label: 'now' }], `Against the pals it meets: ${a.own_duels ? `its species' last ${fmt(a.duels)} duels` : 'species of its power'}.`)}` : '<p class="small">Augur doesn’t know enough duels for this species to say what a reroll would do.</p>'}
-      ${working ? `<div class="mrr-busy"><span class="spin" aria-hidden="true"></span>The site is working on it…</div>` : roll >= 0 && price != null
+      ${roll >= 0 && price != null
         ? `<div class="mrr-acts">${confirming
             ? `<button class="btn big" data-form="${roll}" data-price="${price}">Spend ${fmt(price)} credits</button><button class="btn ghost no" id="mrr-no">Cancel</button>`
             : `<button class="btn big" id="mrr-roll">Roll for ${fmt(price)} credits</button>`}</div>
           <p class="small mrr-note">${esc(panel.note || '')}${panel.note ? ` Next: ${fmt(price * 2)}.` : ''}</p>`
         : `<p class="small">${esc(panel.said || 'No roll offered right now.')}</p>`}`;
   }
-  return `<div class="panel col mrr sel">${head}${panel.said ? `<div class="mrr-said">${esc(panel.said)}</div>` : ''}<div class="mrr-body">${body}</div></div>`;
+  // what the site last said: its flash, or its status once a step is done ("Kept! …")
+  const said = panel.said || (!working && panel.rolls.length < 2 ? panel.state : '');
+  return `<div class="panel col mrr sel">${head}${said ? `<div class="mrr-said">${esc(said)}</div>` : ''}<div class="mrr-body">${body}</div></div>`;
 }
 
 function draw(app) {
@@ -163,7 +172,16 @@ function keepPolling(app) {
   poll = setTimeout(async () => {
     if (app.state.tab !== 'you' || app.state.youView !== 'pals' || selected !== id) return;
     try {
+      const was = sheet.panel;
       sheet = await invoke('reroll_open', { id });
+      const now = sheet.panel;
+      // a step just finished (a choice saved, the card caught up): read the box again, so the pal's rolls, advice and
+      // next price are the new ones
+      const settled = (((was.busy || was.wait) && !(now.busy || now.wait)) || (was.sync && !now.sync)) && now.rolls.length < 2;
+      if (settled) {
+        view = await invoke('own_box', { prices: false });
+        sheet = await invoke('reroll_open', { id });
+      }
       draw(app);
       keepPolling(app);
     } catch (e) {

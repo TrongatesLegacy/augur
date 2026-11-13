@@ -255,39 +255,26 @@ pub fn fixture_data() -> Value {
         panel: before,
         recommend: None,
     };
-    let dice = |hp, atk, def| {
-        format!(
-            r#"<ul class="rr-dice"><li class="rr-die"><span class="rr-die-k">HP</span><b class="rr-die-v">{hp}</b></li><li class="rr-die"><span class="rr-die-k">ATK</span><b class="rr-die-v">{atk}</b></li><li class="rr-die"><span class="rr-die-k">DEF</span><b class="rr-die-v">{def}</b></li></ul>"#
-        )
+    // Swee's real reroll, step by step (its id made up): rolling, the new roll against the old, and kept
+    let swee = own_box.pals.iter().find(|p| p.pal.pal == "Swee").cloned().unwrap();
+    let step = |name: &str, wins: Vec<Option<f64>>, recommend: Option<&str>| views::RerollSheet {
+        id: swee.pal.id.clone().unwrap(),
+        pal: swee.clone(),
+        panel: site::parse_reroll_panel(&page(name)).unwrap(),
+        wins,
+        recommend: recommend.map(str::to_string),
     };
-    let form = |op: &str, label: &str| {
-        format!(
-            r#"<form method="post" action="/reroll" data-rr-form><input type="hidden" name="op" value="{op}"><input type="hidden" name="pal" value="pal-05"><button type="submit">{label}</button></form>"#
-        )
-    };
-    let after = json!({
-        "ok": true,
-        "said": "Rolled! Keep the new three or the old.",
-        "html": format!(
-            r#"<p class="rr-kick">Your IVs now</p>{}<p class="rr-kick">The new roll</p>{}{}{}<p class="rr-note">Credits are spent either way, and the price doubles.</p>"#,
-            dice(72, 56, 25),
-            dice(64, 81, 77),
-            form("keep", "Keep the new three"),
-            form("stay", "Stay with the old")
-        )
-    });
-    let reroll_after = views::RerollSheet {
-        wins: vec![Some(0.39), Some(0.47)],
-        panel: site::parse_reroll_panel(&after.to_string()).unwrap(),
-        recommend: Some("keep".into()),
-        ..reroll_open.clone()
-    };
+    let reroll_after = step("reroll-reveal.json", vec![Some(0.28), Some(0.57)], Some("keep"));
+    let reroll_busy = step("reroll-rolling.json", vec![], None);
+    let reroll_kept = step("reroll-kept.json", vec![Some(0.57)], None);
     json!({
         "live": live,
         "history": history,
         "own_box": own_box,
         "reroll_open": reroll_open,
         "reroll_after": reroll_after,
+        "reroll_busy": reroll_busy,
+        "reroll_kept": reroll_kept,
         "reroll_send": reroll_after,
         "call_detail": call_detail,
         "bets_view": views::bets_view(&conn, &StakeSettings::default(), "all", 0, Default::default()).unwrap(),
@@ -458,7 +445,7 @@ const MAIN_DRIVER: &str = r#"
       .map((el) => `${el.tagName.toLowerCase()}.${[...el.classList].join('.')} (${el.clientWidth}px, needs ${el.scrollWidth}px): ${el.textContent.trim().replace(/\s+/g, ' ').slice(0, 50)}`);
   if (!window.augur) window.__errors.push('the page never started (a module failed to load)');
   else {
-    for (const tab of only ? [only] : ['live', 'liveedge', 'history', 'call', 'bets', 'pals', 'players', 'you', 'titles', 'titlesone', 'mypals', 'mypalsone', 'mypalsroll', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'changelog', 'updates', 'offair']) {
+    for (const tab of only ? [only] : ['live', 'liveedge', 'history', 'call', 'bets', 'pals', 'players', 'you', 'titles', 'titlesone', 'mypals', 'mypalsone', 'mypalsroll', 'mypalsbusy', 'mypalskept', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'changelog', 'updates', 'offair']) {
       // "ownmodel" is Settings › Model with self-tuning off and your own values
       const own = DATA.get_settings;
       if (tab === 'ownmodel') DATA.get_settings = { ...own, model_auto: false };
@@ -476,7 +463,9 @@ const MAIN_DRIVER: &str = r#"
       window.augur.state.youView = ['titles', 'titlesone'].includes(tab) ? 'titles' : tab.startsWith('mypals') ? 'pals' : 'profile';
       // "mypals" is You › Pals; "mypalsone" with Jellroy picked and Roll clicked (waiting to confirm), "mypalsroll"
       // with a roll made (the old and the new side by side)
-      if (tab.startsWith('mypals')) DATA.reroll_open = tab === 'mypalsroll' ? DATA.reroll_after : DATA.reroll_sheet_before || (DATA.reroll_sheet_before = DATA.reroll_open);
+      // "mypalsbusy" with the dice rolling, "mypalskept" with the new roll kept (both Swee's real reroll)
+      DATA.reroll_sheet_before ||= DATA.reroll_open;
+      if (tab.startsWith('mypals')) DATA.reroll_open = { mypalsroll: DATA.reroll_after, mypalsbusy: DATA.reroll_busy, mypalskept: DATA.reroll_kept }[tab] || DATA.reroll_sheet_before;
       // "call" is History with the first call's breakdown opened from its row
       window.augur.state.call = null;
       // "offair" is Live with no duel up, after a stream
@@ -539,8 +528,8 @@ const MAIN_DRIVER: &str = r#"
         out.scrollers[tab] = scrolling();
       }
       const visible = () => [...document.querySelectorAll('.tgrp')].filter((g) => !g.hidden).map((g) => g.querySelector('h4').textContent);
-      if (tab === 'mypalsone' || tab === 'mypalsroll') {
-        [...document.querySelectorAll('.bxp.own')].find((c) => c.innerText.includes('Jellroy'))?.click();
+      if (tab.startsWith('mypals') && tab !== 'mypals') {
+        [...document.querySelectorAll('.bxp.own')].find((c) => c.innerText.includes(tab === 'mypalsone' ? 'Jellroy' : 'Swee'))?.click();
         await sleep(300);
         if (tab === 'mypalsone') document.getElementById('mrr-roll')?.click();
         await sleep(100);
@@ -675,7 +664,8 @@ fn render_at(port: u16, name: &str, shot: Option<(&Path, &str)>, (w, h): (u32, u
             .arg("--default-background-color=00000000") // the popover's window is transparent around its card
             .arg("--lang=en-GB") // dates read the same on every machine ("11 Nov")
             .arg(format!("--user-data-dir={}", dir.join("profile").display()))
-            .arg("--virtual-time-budget=10000");
+            // every page in one run, each with its clicks and waits
+            .arg("--virtual-time-budget=20000");
     };
     let mut c = Command::new(&chrome);
     base(&mut c);
@@ -780,6 +770,8 @@ fn big_numbers_fit() {
             "mypals",
             "mypalsone",
             "mypalsroll",
+            "mypalsbusy",
+            "mypalskept",
             "model",
             "settings",
             "staking",
@@ -980,11 +972,15 @@ fn every_tab_renders_headless() {
         "a roll waits for its second click: {one}"
     );
     let roll = text("mypalsroll");
+    assert!(roll.contains("keep new") && roll.contains("stay with old") && roll.contains("augur’s pick"), "a roll made: {roll}");
+    assert!(roll.contains("57.0%") && roll.contains("28.0%"), "each roll's win chance: {roll}");
+    assert!(roll.contains("better overall, +159") && roll.contains("15 minutes"), "the site's verdict and its time limit: {roll}");
+    assert!(text("mypalsbusy").contains("rolling your ivs"), "the dice rolling: {}", text("mypalsbusy"));
+    let kept = text("mypalskept");
     assert!(
-        roll.contains("keep the new three") && roll.contains("stay with the old") && roll.contains("augur’s pick"),
-        "a roll made: {roll}"
+        kept.contains("kept! your swee fights with these now.") && kept.contains("roll for 500 credits"),
+        "kept, at the doubled price: {kept}"
     );
-    assert!(roll.contains("47.0%") && roll.contains("39.0%"), "each roll's win chance: {roll}");
     assert!(
         text("offair").contains("off air") && text("offair").contains("last stream") && text("offair").contains("latest calls"),
         "Live off air: {}",
@@ -1101,6 +1097,8 @@ fn every_tab_renders_headless() {
             "mypals",
             "mypalsone",
             "mypalsroll",
+            "mypalsbusy",
+            "mypalskept",
             "model",
             "settings",
             "staking",

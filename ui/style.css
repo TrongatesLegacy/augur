@@ -584,9 +584,9 @@ body.pop { padding: 7px 9px 12px; box-sizing: border-box; }
 .mrr-vsw { margin: 0; line-height: 1.5; color: var(--t3); } .mrr-vsw .tag { margin-left: 4px; }
 .mrr-acts { display: flex; gap: 8px; margin-top: auto; }
 .mrr-acts .btn { flex: 1; } .mrr-acts .btn.no { flex: none; }
-.mrr-chart { flex: 1 1 auto; min-height: 120px; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px 10px; border-radius: 12px; background: rgba(255,255,255,.025); border: 1px solid var(--line); }
+.mrr-chart { flex: 1 1 auto; display: flex; flex-direction: column; gap: 8px; padding: 12px 14px 10px; border-radius: 12px; background: rgba(255,255,255,.025); border: 1px solid var(--line); }
 .mrr-ch { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; } .mrr-ch small { font-size: 11px; color: var(--t3); }
-.mrr-bars { position: relative; flex: 1; min-height: 60px; display: flex; align-items: flex-end; gap: 3px; margin-top: 16px; border-bottom: 1px solid var(--line); }
+.mrr-bars { position: relative; flex: 1; min-height: 48px; display: flex; align-items: flex-end; gap: 3px; margin-top: 16px; border-bottom: 1px solid var(--line); }
 .mrr-bars i { flex: 1; border-radius: 3px 3px 0 0; background: rgba(255,255,255,.11); }
 .mrr-bars i.up { background: linear-gradient(180deg, var(--ok), rgba(61,220,151,.3)); }
 .mrr-bars s { position: absolute; top: -14px; bottom: 0; width: 2px; margin-left: -1px; background: var(--gold); text-decoration: none; }
@@ -602,6 +602,12 @@ body.pop { padding: 7px 9px 12px; box-sizing: border-box; }
 .mrr-pal small .tag { margin-left: 4px; }
 .mrr-note { margin: 0; color: var(--t3); line-height: 1.45; }
 .mrr-said { margin: -4px 0 10px; padding: 8px 12px; border-radius: 10px; background: rgba(61,220,151,.1); color: var(--ok); font-size: 12.5px; }
+.mrr-wait { flex: 1; display: grid; place-content: center; justify-items: center; gap: 10px; text-align: center; padding: 20px; border-radius: 12px; background: rgba(255,207,107,.05); border: 1px dashed rgba(255,207,107,.25); }
+.mrr-wait .spin { width: 28px; height: 28px; border-width: 3px; }
+.mrr-wait b { font: 700 18px var(--cond); letter-spacing: .03em; color: var(--gold); } .mrr-wait small { font-size: 12px; color: var(--t3); }
+.mrr-verdict { padding: 8px 12px; border-radius: 10px; background: rgba(255,255,255,.04); font: 700 13px var(--cond); letter-spacing: .04em; color: var(--t2); text-align: center; }
+.mrr-verdict.ok { background: rgba(61,220,151,.1); color: var(--ok); }
+.mrr-note.gold { color: var(--gold); }
 .mrr-busy { display: flex; align-items: center; gap: 10px; margin-top: auto; padding: 12px 14px; border-radius: 12px; background: rgba(255,207,107,.08); color: var(--gold); font-size: 13px; }
 .spin { width: 16px; height: 16px; border-radius: 50%; border: 2px solid rgba(255,207,107,.25); border-top-color: var(--gold); animation: mrrspin .9s linear infinite; }
 @keyframes mrrspin { to { transform: rotate(360deg); } }

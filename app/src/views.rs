@@ -988,6 +988,21 @@ mod tests {
         assert_eq!(serde_json::to_value(d.bet).unwrap(), serde_json::to_value(row).unwrap(), "the same line as Your bets");
     }
 
+    /// A real new roll (all three up): Augur picks keep. With the rolls the other way round it would stay.
+    #[test]
+    fn after_a_roll_augur_picks_the_better() {
+        let conn = augur_engine::seed::store();
+        let s = augur_engine::model::Settings::default();
+        let panel = augur_engine::site::parse_reroll_panel(&augur_engine::seed::page("reroll-reveal.json")).unwrap();
+        let pal = augur_engine::site::BoxPal { pal: "Swee".into(), id: Some("x".into()), ..Default::default() };
+        assert_eq!(super::reroll_sheet(&conn, &s, "x", &pal, panel.clone()).recommend.as_deref(), Some("keep"));
+        let mut worse = panel;
+        worse.rolls.swap(0, 1);
+        worse.rolls[0].0 = "Your IVs now".into();
+        worse.rolls[1].0 = "Your new roll".into();
+        assert_eq!(super::reroll_sheet(&conn, &s, "x", &pal, worse).recommend.as_deref(), Some("stay"));
+    }
+
     #[test]
     fn a_call_without_a_tape_or_fighters_still_breaks_down() {
         let conn = augur_engine::seed::store();

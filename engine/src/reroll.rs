@@ -132,6 +132,15 @@ impl Matchups {
         sum / weight
     }
 
+    /// The same pal with other IVs (its stats moved by what they add): the rolls it has once a reroll is kept, before
+    /// the box has been read again.
+    pub fn with_ivs(&self, ivs: [f64; 3]) -> Matchups {
+        let (then, was) = (rolled(self.base, ivs, &self.me.passives), rolled(self.base, self.ivs, &self.me.passives));
+        let at = |i: usize, now: f64| if was[i] > 0.0 { (now * then[i] / was[i]).round() } else { now };
+        let me = Fighter { hp: at(0, self.me.hp), atk: at(1, self.me.atk), def: at(2, self.me.def), ..self.me.clone() };
+        Matchups { me, ivs, opponents: self.opponents.clone(), ..*self }
+    }
+
     /// Its win chance now, on average after one reroll (keeping the better roll), and whether that's worth `price`.
     pub fn advise(&self, s: &Settings, price: Option<u64>) -> Advice {
         let now = self.win(s, self.ivs);
@@ -286,6 +295,9 @@ mod tests {
         assert!(p.best >= p.after && g.best >= g.after);
         assert!((p.spread.iter().sum::<f64>() - 1.0).abs() < 1e-9 && p.spread.len() == BINS, "every roll is in the spread");
         assert!(p.low < p.now && p.now < p.high);
+        // rerolled well, it's no longer worth another
+        let kept = poor.with_ivs([90.0, 90.0, 90.0]).advise(&s, Some(500));
+        assert!((kept.now - g.now).abs() < 0.01 && kept.tag != "Reroll", "{kept:?} vs {g:?}");
     }
 
     #[test]

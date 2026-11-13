@@ -245,6 +245,12 @@ pub struct RerollSheet {
 
 pub fn reroll_sheet(conn: &Connection, s: &model::Settings, id: &str, pal: &BoxPal, panel: RerollPanel) -> RerollSheet {
     let m = reroll::matchups(conn, pal).ok().flatten();
+    // a reroll just kept: the panel has the new IVs before the box is read again, so the advice goes by them
+    let ivs = ["HP", "ATK", "DEF"].map(|k| pal.stats.get(k).map_or(0.0, |s| s.1));
+    let m = match (&panel.rolls[..], m) {
+        ([(_, now)], Some(m)) if *now != ivs && now.iter().all(|v| *v > 0.0) => Some(m.with_ivs(*now)),
+        (_, m) => m,
+    };
     let wins: Vec<Option<f64>> = panel.rolls.iter().map(|(_, ivs)| m.as_ref().map(|m| m.win(s, *ivs))).collect();
     // after a roll: the roll you have (labelled "now", or the first) against the new one
     let ops: Vec<&str> = panel.forms.iter().map(|f| f.op()).collect();

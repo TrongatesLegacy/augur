@@ -266,7 +266,13 @@ pub fn fixture_data() -> Value {
     };
     let reroll_after = step("reroll-reveal.json", vec![Some(0.28), Some(0.57)], Some("keep"));
     let reroll_busy = step("reroll-rolling.json", vec![], None);
-    let reroll_kept = step("reroll-kept.json", vec![Some(0.57)], None);
+    // kept: the advice goes by the new IVs at the doubled price (as the 13 Nov reroll worked out: no longer worth it)
+    let mut reroll_kept = step("reroll-kept.json", vec![Some(0.578)], None);
+    if let Some(a) = reroll_kept.pal.advice.as_mut() {
+        (a.now, a.after, a.better, a.best, a.price, a.tag) = (0.578, 0.582, 0.11, 0.61, Some(500), "Keep".into());
+        (a.low, a.high) = (0.44, 0.61);
+    }
+    reroll_kept.pal.price = Some(500);
     json!({
         "live": live,
         "history": history,

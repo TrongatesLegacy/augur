@@ -2,7 +2,11 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.8 (current)
+## 0.1.9 (current)
+- Records on real calls learns from every call, a little at a time
+- Installer builds reuse their compiled crates again
+
+## 0.1.8
 - Species records get their own weight on real calls, learned once there are 60
 
 ## 0.1.7

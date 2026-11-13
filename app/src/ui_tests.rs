@@ -170,7 +170,26 @@ pub fn fixture_data() -> Value {
             era("0.1.5", &["TYPE_BONUS 1.4 → 1.5"], recent as i64 - 3_600_000, 4, 5),
             era("0.1.5", &["version 0.1.4 → 0.1.5"], recent as i64 - 20_000_000, 9, 13),
             era("0.1.4", &[], recent as i64 - 90_000_000, 13, 18),
+            era("0.1.4", &["STATS_STEEPNESS 3 → 5"], recent as i64 - 95_000_000, 1, 1),
         ];
+        // a long run's worth of species with secret moves (made up)
+        mv.unlisted = [
+            ("Bushi Noct", 0.66, "Iai Slash"),
+            ("Prunelia", 0.51, "Poison Shower"),
+            ("Paladius", 0.49, "One Spear Rushes"),
+            ("Beakon Cryst", 0.39, "Snow Storm"),
+            ("Mycora Cryst", 0.31, "Spore Burst"),
+            ("Turtacle", 0.22, "Shell Spin"),
+            ("Lapiron", 0.17, "Iron Roll"),
+            ("Xenolord", 0.12, "Void Claw"),
+        ]
+        .iter()
+        .map(|(pal, share, mv)| augur_engine::history::UnlistedLeader {
+            pal: pal.to_string(),
+            share: *share,
+            moves: vec![(mv.to_string(), share * 90.0)],
+        })
+        .collect();
         mv
     };
     json!({

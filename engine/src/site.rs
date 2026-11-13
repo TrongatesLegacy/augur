@@ -2,7 +2,7 @@
 //! players. The site rate-limits bursts (HTTP 429), so `fetch` backs off and callers keep parallel fetches low.
 
 pub use crate::error::{Error, Result};
-use crate::model::{Move, StatLine};
+use crate::model::{Move, PalRank, StatLine};
 use regex::Regex;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -173,6 +173,9 @@ pub struct State {
     pub away: Option<StateSide>,
     #[serde(default)]
     pub hud: Option<String>,
+    /// the two pals' cards (with each one's pal rank)
+    #[serde(default)]
+    pub arena: Option<String>,
     #[serde(default)]
     pub skills: Option<String>,
     #[serde(default)]
@@ -214,6 +217,19 @@ impl State {
 }
 
 pub type Sides<T> = HashMap<String, T>;
+
+/// Each side's pal rank from the duel up (the state's arena): its card's "Tier C - ranked 154 of 357 species,
+/// power 55/100".
+pub fn parse_pal_ranks(arena: &str) -> Sides<PalRank> {
+    let mut out = Sides::new();
+    for card in regex!(r#"(?s)<article class="pal duel-pal duel-(home|away)[^"]*">(.*?)</article>"#).captures_iter(arena) {
+        if let Some(t) = regex!(r#"title="Tier (\w+) - ranked (\d+) of (\d+) species, power (\d+)/100""#).captures(&card[2]) {
+            let n = |i: usize| t[i].parse().unwrap_or(0);
+            out.entry(card[1].to_string()).or_insert(PalRank { tier: t[1].to_string(), rank: n(2), of: n(3), power: n(4) });
+        }
+    }
+    out
+}
 
 /// {side: {stat: StatLine}} from the HUD stats grid.
 pub fn parse_stats(hud: &str) -> Sides<HashMap<String, StatLine>> {
@@ -1124,6 +1140,9 @@ mod tests {
         let tale = parse_tale(&hud);
         assert_eq!(tale.species_records(), [[57.0, 99.0], [7.0, 8.0]]);
         assert_eq!(tale.type_edge, "no type edge either way");
+        let ranks = parse_pal_ranks(s.arena.as_deref().unwrap());
+        assert_eq!(ranks["home"], PalRank { tier: "C".into(), rank: 154, of: 357, power: 55 });
+        assert_eq!(ranks["away"], PalRank { tier: "B".into(), rank: 98, of: 357, power: 65 }, "each card's own rank, not a past duel's");
         let skills = parse_skills(&s.skills.unwrap());
         assert_eq!(skills["home"].len(), 8);
         assert!(skills["away"].iter().any(|m| m.name == "Diamond Rain" && m.power == 600.0 && m.el == "ice"));

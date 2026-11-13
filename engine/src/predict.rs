@@ -216,6 +216,7 @@ pub fn predict(state: &State, opts: &Options) -> Option<Prediction> {
         skills.values_mut().for_each(|m| db::with_hit_sizes(m, &sizes));
     }
     let passives = site::parse_passives(hud);
+    let ranks = site::parse_pal_ranks(state.arena.as_deref().unwrap_or(""));
     let tale = site::parse_tale(hud);
     let species_rec = tale.species_records();
     let empty = Vec::new();
@@ -277,6 +278,7 @@ pub fn predict(state: &State, opts: &Options) -> Option<Prediction> {
             hidden_boost: (model::hidden_boost(hidden.share) * 1000.0).round() / 1000.0,
             speed: (model::speed(&pas) * 1000.0).round() / 1000.0,
             passives: pas,
+            pal_rank: ranks.get(key).cloned(),
         };
         let ivs = ["HP", "ATK", "DEF"].iter().map(|k| (k.to_string(), st.get(*k).and_then(|s| s.iv))).collect();
         let base = ["HP", "ATK", "DEF"].map(|k| st.get(k).and_then(|s| s.base));

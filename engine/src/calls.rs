@@ -149,6 +149,27 @@ mod tests {
         let _ = std::fs::remove_file(out);
     }
 
+    /// The pal ranks a call read travel with it: to the calls file and into another computer's store.
+    #[test]
+    fn pal_ranks_travel_with_the_calls() {
+        let fixture = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/calls.jsonl"));
+        let mac = db::open_memory().unwrap();
+        import(&mac, fixture).unwrap();
+        let id = db::settled(&mac).unwrap()[0].id;
+        mac.execute("UPDATE fighters SET tier = 'C', pal_rank = 154, rank_of = 357, power = 55 WHERE prediction_id = ?", [id]).unwrap();
+        let rank = |conn: &Connection| {
+            let c = db::settled(conn).unwrap().into_iter().find(|c| c.fighters.as_ref().unwrap().0.fighter.pal_rank.is_some());
+            c.map(|c| c.fighters.unwrap().1.fighter.pal_rank.unwrap())
+        };
+        assert_eq!(rank(&mac), Some(crate::model::PalRank { tier: "C".into(), rank: 154, of: 357, power: 55 }), "read back from the store");
+        let out = std::env::temp_dir().join(format!("augur-ranks-{}.jsonl", std::process::id()));
+        export(&mac, &out).unwrap();
+        let pc = db::open_memory().unwrap();
+        import(&pc, &out).unwrap();
+        assert_eq!(rank(&pc), rank(&mac), "through the calls file");
+        let _ = std::fs::remove_file(out);
+    }
+
     /// A damaged mark set on one computer reaches the others: on a call they don't have yet, and on one they do.
     #[test]
     fn the_damaged_mark_travels_with_the_calls() {

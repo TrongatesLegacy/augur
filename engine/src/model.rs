@@ -11,6 +11,8 @@ use std::sync::OnceLock;
 /// hides a side's stats until the bell and its owner's box doesn't show them either.
 const FIT: [(&str, f64, f64); 3] = [("HP", 979.0, 48.5), ("ATK", 98.0, 5.27), ("DEF", 136.0, 6.65)];
 pub const ASSUMED_IV: f64 = 50.0;
+/// Pal rank power points per step on the log-odds scale, so PAL_RANK_WEIGHT reads per 10 points.
+const RANK_POINTS: f64 = 10.0;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -40,9 +42,18 @@ pub struct Settings {
     /// calls once there are enough. On 13 Nov the first 50 calls leaned toward about 0.3 against 1.2, too few to tell
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub species_live: Option<f64>,
+    /// how much the site's pal rank counts, per 10 points of its power score (0 = not at all, the start). Over 1,346
+    /// past duels on 13 Nov it added nothing to the stats and records; on 36 real calls it hinted at about 0.4, too
+    /// few to tell, so it learns on real calls that have it
+    #[serde(default)]
+    pub pal_rank_weight: f64,
 }
 
 fn half() -> f64 {
+    0.5
+}
+
+fn even() -> f64 {
     0.5
 }
 
@@ -58,13 +69,14 @@ impl Default for Settings {
             cooldown_exp: 0.5,
             hit_weight: 0.0,
             species_live: None,
+            pal_rank_weight: 0.0,
         }
     }
 }
 
 impl Settings {
     /// Every setting's key, as settings.json and `augur tune` name them.
-    pub const KEYS: [&'static str; 9] = [
+    pub const KEYS: [&'static str; 10] = [
         "TYPE_BONUS",
         "TYPE_RESIST",
         "POWER_EXP",
@@ -74,6 +86,7 @@ impl Settings {
         "COOLDOWN_EXP",
         "HIT_WEIGHT",
         "SPECIES_LIVE",
+        "PAL_RANK_WEIGHT",
     ];
 
     pub fn get(&self, key: &str) -> Option<f64> {
@@ -87,6 +100,7 @@ impl Settings {
             "COOLDOWN_EXP" => self.cooldown_exp,
             "HIT_WEIGHT" => self.hit_weight,
             "SPECIES_LIVE" => self.species_on_calls(),
+            "PAL_RANK_WEIGHT" => self.pal_rank_weight,
             _ => return None,
         })
     }
@@ -104,6 +118,7 @@ impl Settings {
             "COOLDOWN_EXP" => c.cooldown_exp = v,
             "HIT_WEIGHT" => c.hit_weight = v,
             "SPECIES_LIVE" => c.species_live = Some(v),
+            "PAL_RANK_WEIGHT" => c.pal_rank_weight = v,
             _ => {}
         }
         c
@@ -158,6 +173,19 @@ pub struct Fighter {
     pub hidden_boost: f64,
     #[serde(default = "unit")]
     pub speed: f64,
+    /// the site's rank for the pal when it was called (None before Augur read it, or when the page didn't say)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pal_rank: Option<PalRank>,
+}
+
+/// The site's pal rank: "Tier C - ranked 154 of 357 species, power 55/100". It moves as a species wins or loses
+/// against its rank.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct PalRank {
+    pub tier: String,
+    pub rank: u32,
+    pub of: u32,
+    pub power: u32,
 }
 
 fn unit() -> f64 {
@@ -171,6 +199,9 @@ pub struct Score {
     pub p_stats: f64,
     pub p_species: f64,
     pub p_h2h: f64,
+    /// the pal ranks' home win chance on their own (50% when either side's is unknown)
+    #[serde(default = "even")]
+    pub p_rank: f64,
     pub p_home: f64,
     /// each species' record, shrunk toward 50%: [home, away]
     pub rates: [f64; 2],
@@ -308,8 +339,13 @@ pub fn score(s: &Settings, home: &Fighter, away: &Fighter, species_rec: [[f64; 2
     let rates = species_rec.map(|[w, l]| (w + 5.0) / (w + l + 10.0));
     let p_species = sigmoid(logit(rates[0]) - logit(rates[1]));
     let p_h2h = (pal_h2h[0] + 2.0) / (pal_h2h[0] + pal_h2h[1] + 4.0);
-    let p_home = sigmoid(logit(p_stats) + s.species_weight * logit(p_species) + s.pal_h2h_weight * logit(p_h2h));
-    Score { t_home, t_away, p_stats, p_species, p_h2h, p_home, rates }
+    let p_rank = match (&home.pal_rank, &away.pal_rank) {
+        (Some(h), Some(a)) => sigmoid((f64::from(h.power) - f64::from(a.power)) / RANK_POINTS),
+        _ => 0.5,
+    };
+    let p_home =
+        sigmoid(logit(p_stats) + s.species_weight * logit(p_species) + s.pal_h2h_weight * logit(p_h2h) + s.pal_rank_weight * logit(p_rank));
+    Score { t_home, t_away, p_stats, p_species, p_h2h, p_rank, p_home, rates }
 }
 
 /// Fit log(hit %) = c + a*log(power) + b*log(type mult) + log(ATK/DEF) by least squares over one peak hit per
@@ -370,6 +406,30 @@ mod tests {
         assert_eq!(type_mult(&s, "ice", &types(&["fire"])), 1.0 / 1.5);
         // dark beats neutral, dragon resists dark: they cancel
         assert_eq!(type_mult(&s, "dark", &types(&["dragon", "neutral"])), 1.0);
+    }
+
+    #[test]
+    fn the_pal_rank_counts_only_with_a_weight() {
+        let f = |power: Option<u32>| Fighter {
+            pal: "x".into(),
+            types: types(&["neutral"]),
+            hp: 5000.0,
+            atk: 500.0,
+            def: 600.0,
+            skills: vec![Move { name: "m".into(), el: "neutral".into(), power: 100.0, lv: 1, hit: 1.0 }],
+            passives: vec![],
+            hidden_boost: 1.0,
+            speed: 1.0,
+            pal_rank: power.map(|power| PalRank { tier: "B".into(), rank: 100, of: 357, power }),
+        };
+        let p = |s: &Settings, h: Option<u32>, a: Option<u32>| score(s, &f(h), &f(a), [[0.0; 2]; 2], [0.0; 2]);
+        let off = Settings::default();
+        assert_eq!(off.pal_rank_weight, 0.0, "a new install starts with it off");
+        assert_eq!(p(&off, Some(75), Some(45)).p_home, p(&off, None, None).p_home, "off, it changes nothing");
+        assert!((p(&off, Some(75), Some(45)).p_rank - sigmoid(3.0)).abs() < 1e-12, "30 points is 3 steps");
+        let on = off.with("PAL_RANK_WEIGHT", 0.2);
+        assert!(p(&on, Some(75), Some(45)).p_home > 0.5 && p(&on, Some(45), Some(75)).p_home < 0.5, "the higher power is favoured");
+        assert_eq!(p(&on, Some(75), None).p_home, 0.5, "one side unknown: no lean");
     }
 
     #[test]

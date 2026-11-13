@@ -515,9 +515,18 @@ fn summary(c: &db::CallRecord, parts: &[Part], factors: &[Factor]) -> String {
             // word joiners keep a record like 58–20 on one line
             ("species", Some([[hw, hl], [aw, al]])) => [format!("{hw}\u{2060}–\u{2060}{hl}"), format!("{aw}\u{2060}–\u{2060}{al}")],
             ("h2h", _) => [format!("{} wins", c.pal_h2h[0]), format!("{}", c.pal_h2h[1])],
+            ("rank", _) => match ranks(c) {
+                Some((h, a)) => [format!("#{}", h.rank), format!("#{}", a.rank)],
+                None => continue,
+            },
             _ => continue,
         };
-        drivers.push((if f.key == "species" { "Species records" } else { "Their head-to-head" }.into(), f.logit, values));
+        let label = match f.key.as_str() {
+            "species" => "Species records",
+            "rank" => "Pal rank",
+            _ => "Their head-to-head",
+        };
+        drivers.push((label.into(), f.logit, values));
     }
     if parts.is_empty() {
         if let Some(f) = factors.iter().find(|f| f.key == "stats") {
@@ -745,6 +754,12 @@ fn fight_view(id: u64, d: site::Duel, fighters: Option<&(db::CallFighter, db::Ca
     }
 }
 
+/// Both sides' pal ranks, when the call read them.
+fn ranks(c: &db::CallRecord) -> Option<(&model::PalRank, &model::PalRank)> {
+    let (h, a) = c.fighters.as_ref()?;
+    h.fighter.pal_rank.as_ref().zip(a.fighter.pal_rank.as_ref())
+}
+
 fn model_call(c: &db::CallRecord, s: &model::Settings) -> Option<ModelCall> {
     let score = match (&c.fighters, c.species_rec) {
         (Some((h, a)), Some(rec)) => Some(model::score(&s.for_calls(), &h.fighter, &a.fighter, rec, c.pal_h2h)),
@@ -758,11 +773,16 @@ fn model_call(c: &db::CallRecord, s: &model::Settings) -> Option<ModelCall> {
         (None, Some(sc)) => ([sc.p_stats, sc.p_species, sc.p_h2h], true),
         (None, None) => return None,
     };
-    let factors: Vec<Factor> = [("stats", 1.0), ("species", s.species_on_calls()), ("h2h", s.pal_h2h_weight)]
+    let mut factors: Vec<Factor> = [("stats", 1.0), ("species", s.species_on_calls()), ("h2h", s.pal_h2h_weight)]
         .iter()
         .zip(ps)
         .map(|((key, weight), p)| Factor { key: key.to_string(), p_home: p, weight: *weight, logit: weight * model::logit(p) })
         .collect();
+    // the pal ranks count only once the learner has given them a weight, and only on calls that read them
+    if let Some(sc) = score.as_ref().filter(|_| s.pal_rank_weight > 0.0 && ranks(c).is_some()) {
+        let w = s.pal_rank_weight;
+        factors.push(Factor { key: "rank".into(), p_home: sc.p_rank, weight: w, logit: w * model::logit(sc.p_rank) });
+    }
     let total = factors.iter().map(|f| f.logit).sum();
     let parts = c.fighters.as_ref().map(|(h, a)| stats_parts(s, &h.fighter, &a.fighter)).unwrap_or_default();
     let summary = summary(c, &parts, &factors);
@@ -848,6 +868,24 @@ mod tests {
         assert!((p_pick - c.prob).abs() < 0.01, "{p_pick} vs the call's {}", c.prob);
         assert_eq!(d.sides.len(), 2);
         assert!(d.sides[0].moves.iter().any(|m| m.usable));
+    }
+
+    #[test]
+    fn the_pal_rank_joins_the_sum_once_it_has_a_weight() {
+        let conn = augur_engine::seed::store();
+        let mut c = augur_engine::db::settled_all(&conn).unwrap().pop().unwrap();
+        let (h, a) = c.fighters.as_mut().unwrap();
+        h.fighter.pal_rank = Some(augur_engine::model::PalRank { tier: "B".into(), rank: 88, of: 357, power: 66 });
+        a.fighter.pal_rank = Some(augur_engine::model::PalRank { tier: "C".into(), rank: 171, of: 357, power: 51 });
+        let keys =
+            |s: &augur_engine::model::Settings| super::model_call(&c, s).unwrap().factors.iter().map(|f| f.key.clone()).collect::<Vec<_>>();
+        let off = augur_engine::model::Settings::default();
+        assert_eq!(keys(&off), ["stats", "species", "h2h"], "at 0 it isn't part of the call");
+        let on = off.with("PAL_RANK_WEIGHT", 0.3);
+        assert_eq!(keys(&on), ["stats", "species", "h2h", "rank"]);
+        let m = super::model_call(&c, &on).unwrap();
+        let f = m.factors.last().unwrap();
+        assert!(f.p_home > 0.5 && (f.logit - 0.3 * 1.5).abs() < 1e-9, "15 points toward home at 0.3: {}", f.logit);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! The SQLite store: calls (picks made live, with the fighters as seen before the bell), finished duels with their
 //! fight tapes, every species' types, base stats and listed moves, and the developer's own bets.
 
-use crate::model::{Fighter, Move};
+use crate::model::{Fighter, Move, PalRank};
 use crate::site::{Duel, Hit, Pick, Recent, Species};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -114,6 +114,11 @@ const ADDED: &[(&str, &str, &str)] = &[
     // its pre-fight call was overwritten after the fight (before 0.1.5): counted right or wrong, but its stake
     // isn't one you were shown, so it's left out of the money comparison
     ("predictions", "damaged", "INTEGER DEFAULT 0"),
+    // the site's pal rank for each side when called: "Tier C - ranked 154 of 357 species, power 55/100"
+    ("fighters", "tier", "TEXT"),
+    ("fighters", "pal_rank", "INTEGER"),
+    ("fighters", "rank_of", "INTEGER"),
+    ("fighters", "power", "INTEGER"),
 ];
 
 fn migrate(conn: &Connection) -> Result<()> {
@@ -462,9 +467,11 @@ pub fn close_call(conn: &Connection, home_owner: &str, away_owner: &str) -> Resu
 fn save_fighters(conn: &Connection, id: i64, c: &NewCall) -> Result<()> {
     for (side, f) in [("home", &c.home), ("away", &c.away)] {
         let iv = |k: &str| f.ivs.get(k).copied().flatten().map(|v| v as i64);
+        let rank = f.fighter.pal_rank.as_ref();
         conn.execute(
-            "INSERT INTO fighters (prediction_id, side, pal, types, hp, atk, def, hp_iv, atk_iv, def_iv, passives, hidden_boost, speed)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT INTO fighters (prediction_id, side, pal, types, hp, atk, def, hp_iv, atk_iv, def_iv, passives, hidden_boost, speed,
+                                   tier, pal_rank, rank_of, power)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 id,
                 side,
@@ -478,7 +485,11 @@ fn save_fighters(conn: &Connection, id: i64, c: &NewCall) -> Result<()> {
                 iv("DEF"),
                 serde_json::to_string(&f.fighter.passives).unwrap(),
                 f.fighter.hidden_boost,
-                f.fighter.speed
+                f.fighter.speed,
+                rank.map(|r| r.tier.as_str()),
+                rank.map(|r| r.rank),
+                rank.map(|r| r.of),
+                rank.map(|r| r.power),
             ],
         )?;
         save_moves(conn, &f.fighter.pal, &f.fighter.skills)?;
@@ -564,7 +575,8 @@ impl CallRecord {
 
 fn fighters_of(conn: &Connection, id: i64, sizes: &std::collections::HashMap<String, f64>) -> Result<Option<(CallFighter, CallFighter)>> {
     let mut st = conn.prepare_cached(
-        "SELECT side, pal, types, hp, atk, def, hp_iv, atk_iv, def_iv, passives, hidden_boost, speed FROM fighters WHERE prediction_id = ?",
+        "SELECT side, pal, types, hp, atk, def, hp_iv, atk_iv, def_iv, passives, hidden_boost, speed, tier, pal_rank, rank_of, power
+         FROM fighters WHERE prediction_id = ?",
     )?;
     let rows: Vec<(String, CallFighter)> = st
         .query_map([id], |r| {
@@ -586,6 +598,10 @@ fn fighters_of(conn: &Connection, id: i64, sizes: &std::collections::HashMap<Str
                         passives: serde_json::from_str(&r.get::<_, Option<String>>(9)?.unwrap_or_default()).unwrap_or_default(),
                         hidden_boost: r.get::<_, Option<f64>>(10)?.unwrap_or(1.0),
                         speed: r.get::<_, Option<f64>>(11)?.unwrap_or(1.0),
+                        pal_rank: match (r.get::<_, Option<String>>(12)?, r.get(13)?, r.get(14)?, r.get(15)?) {
+                            (Some(tier), Some(rank), Some(of), Some(power)) => Some(PalRank { tier, rank, of, power }),
+                            _ => None,
+                        },
                     },
                     ivs,
                 },
@@ -822,6 +838,10 @@ fn merge_attached(conn: &Connection) -> Result<Merged> {
         > 0;
     let pcols = "seen_at, home_owner, away_owner, home_pal, away_pal, pick, prob, p_stats, p_species, p_h2h, estimated, home_species_w,                  home_species_l, away_species_w, away_species_l, pal_h2h_home, pal_h2h_away, model, status, duel_id";
     let extra = if stake_cols { ", stake, stake_cmd" } else { "" };
+    // a backup from before Augur read pal ranks hasn't the columns
+    let rank_cols =
+        conn.query_row("SELECT COUNT(*) FROM pragma_table_info('fighters', 'other') WHERE name = 'power'", [], |r| r.get::<_, i64>(0))? > 0;
+    let fx = if rank_cols { ", tier, pal_rank, rank_of, power" } else { "" };
     let new: Vec<i64> = tx
         .prepare(
             "SELECT o.id FROM other.predictions o WHERE NOT EXISTS (SELECT 1 FROM predictions p
@@ -833,8 +853,10 @@ fn merge_attached(conn: &Connection) -> Result<Merged> {
         tx.execute(&format!("INSERT INTO predictions ({pcols}{extra}) SELECT {pcols}{extra} FROM other.predictions WHERE id = ?"), [old])?;
         let id = tx.last_insert_rowid();
         tx.execute(
-            "INSERT INTO fighters (prediction_id, side, pal, types, hp, atk, def, hp_iv, atk_iv, def_iv, passives, hidden_boost, speed)
-             SELECT ?1, side, pal, types, hp, atk, def, hp_iv, atk_iv, def_iv, passives, hidden_boost, speed FROM other.fighters WHERE prediction_id = ?2",
+            &format!(
+                "INSERT INTO fighters (prediction_id, side, pal, types, hp, atk, def, hp_iv, atk_iv, def_iv, passives, hidden_boost, speed{fx})
+                 SELECT ?1, side, pal, types, hp, atk, def, hp_iv, atk_iv, def_iv, passives, hidden_boost, speed{fx} FROM other.fighters WHERE prediction_id = ?2"
+            ),
             [id, old],
         )?;
         m.calls += 1;
@@ -871,6 +893,7 @@ mod tests {
                 passives: vec![],
                 hidden_boost: 1.0,
                 speed: 1.0,
+                pal_rank: None,
             },
             ivs: Default::default(),
         }
@@ -920,12 +943,14 @@ mod tests {
         let file = dir.join("backup.db");
         let mac = crate::seed::store();
         crate::seed::import_bets(&mac);
+        mac.execute("UPDATE fighters SET tier = 'B', pal_rank = 98, rank_of = 357, power = 65", []).unwrap();
         backup_to(&mac, &file).unwrap();
         let pc = open_memory().unwrap();
         let m = merge_from(&pc, &file).unwrap();
         assert_eq!((m.calls, m.duels, m.tapes, m.species, m.bets), (19, 20, 1, 1, 13), "the 19 calls' duels and #4702 with its tape");
         assert_eq!(settled(&pc).unwrap().len(), 19, "the calls arrive settled, with their fighters");
         assert!(settled(&pc).unwrap().iter().all(|c| c.fighters.is_some()));
+        assert!(settled(&pc).unwrap().iter().all(|c| c.fighters.as_ref().unwrap().0.fighter.pal_rank.is_some()), "with their pal ranks");
         let again = merge_from(&pc, &file).unwrap();
         assert_eq!((again.calls, again.duels, again.bets), (0, 0, 0), "merging twice adds nothing");
         assert!(merge_from(&pc, &dir.join("missing.db")).is_err());

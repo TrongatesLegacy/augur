@@ -400,6 +400,8 @@ const MAIN_DRIVER: &str = r#"
         out[tab + 'Panels'] = {
           h2h: inside(document.querySelector('.hh')),
           race: inside(document.querySelector('.hr')),
+          // a box that scrolls down mustn't also scroll sideways (a grey bar under the pals with scroll bars always on)
+          sideways: [...document.querySelectorAll('.hh .fillin, .hh .hhm')].some((el) => el.scrollWidth > el.clientWidth),
           ends: ends.length,
           apart: ends.length === 2 && (ends[0].bottom <= ends[1].top || ends[1].bottom <= ends[0].top),
           meetings: document.querySelectorAll('.hh .hhr').length,
@@ -712,6 +714,7 @@ fn every_tab_renders_headless() {
     for tab in ["livePanels", "liveedgePanels"] {
         let f = &r[tab];
         assert_eq!((&f["h2h"], &f["race"]), (&json!(true), &json!(true)), "{tab}: nothing spills out of the panels: {f}");
+        assert_eq!(f["sideways"], json!(false), "{tab}: the head to head doesn't scroll sideways: {f}");
         assert_eq!((&f["ends"], &f["apart"]), (&json!(2), &json!(true)), "{tab}: the race's end labels never overlap: {f}");
     }
     assert!(text("history").contains("14 / 19"), "History: {}", text("history"));

@@ -820,7 +820,7 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 .hhx { font: 700 12px var(--sans); letter-spacing: .12em; text-transform: uppercase; color: var(--t3); }
 .hhw { display: flex; flex-direction: column; }
 .hhw > * { flex: none; }
-.hhw > .hhm { flex: 1 1 0; min-height: 26px; overflow: auto; margin: 0 -4px; padding: 0 4px; }
+.hhw > .hhm { flex: 1 1 0; min-height: 26px; overflow: auto; }
 .hhw > .hhe { flex: 1 1 0; min-height: 26px; }
 .hhr { display: grid; grid-template-columns: 50px minmax(0, 1fr) 18px minmax(0, 1fr); align-items: center; gap: 6px; padding: 3px 0; border-bottom: 1px solid var(--line); font-size: 12.5px; }
 .hhr:last-child { border: 0; }

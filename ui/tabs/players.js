@@ -1,7 +1,7 @@
 // Players: anyone's record, rivals and pals used, and their pal box (rerolling your own lives in You › Pals).
 import { invoke } from '../lib/bridge.js';
 import { esc, fmt, pct } from '../lib/format.js';
-import { boxCard, boxCols } from '../lib/box.js';
+import { boxCard, boxCols, boxGrid } from '../lib/box.js';
 import { face, orb } from '../lib/pal.js';
 import { empty, icon, ring, stack } from '../lib/viz.js';
 
@@ -60,7 +60,7 @@ export async function render(app) {
         ${v.roster.length ? `${stack([[tiers('A'), 'A', 'gold'], [tiers('B'), 'B', 'ok'], [tiers('C'), 'C', 'home'], [tiers('D'), 'D', 'dim']])}` : ''}</div></div>
     <div class="pgrid grow"><div class="panel col"><div class="ph"><h3>Pal box</h3><span>strongest first · power is the site's rating for the species</span></div>
       ${v.roster_error ? `<div class="small bad">Couldn't load the box: ${esc(v.roster_error)}</div>` : ''}
-      ${v.roster.length ? `<div class="fillin bxbox" style="--cols:${boxCols(v.roster.length)}">${v.roster.sort(byStrength).map((p) => boxCard(p, { title: `Beats a typical pal ${pct(p.rating)} of the time on stats` })).join('')}</div>` : empty('box', 'No pals in the box', 'Their pal box shows here once it can be read.')}</div>
+      ${v.roster.length ? boxGrid(v.roster.sort(byStrength).map((p) => boxCard(p, { title: `Beats a typical pal ${pct(p.rating)} of the time on stats` })), boxCols(v.roster.length)) : empty('box', 'No pals in the box', 'Their pal box shows here once it can be read.')}</div>
       <div class="stackc">
         <div class="panel col grow"><div class="ph"><h3>Rivals</h3><span>most met</span></div>${d.rivals.length ? `<div class="fillin bars">${records(d.rivals)}</div>` : empty('swords', 'No duels yet', 'Who they meet most, and how it goes.')}</div>
         <div class="panel col grow"><div class="ph"><h3>Pals used</h3></div>${d.pals_used.length ? `<div class="fillin bars">${records(d.pals_used, true)}</div>` : empty('egg', 'No pals used yet', 'The pals they duel with, and their record on each.')}</div>

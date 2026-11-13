@@ -19,7 +19,16 @@ export const ivsOf = (p) => STATS.map((k) => p.stats?.[k]?.[1] ?? 0);
 // columns for n cards: the box fills its panel, about square cards, the last row centred
 export const boxCols = (n) => Math.max(1, Math.min(5, n <= 3 ? n : Math.round(Math.sqrt(n * 1.4))));
 
-// one card; `extra` goes at its foot, `attrs` on the card itself (a click target, a selection), `passives: false`
+// the box around the cards, `cols` across. Each card is two of the grid's columns wide, so an empty cell half a card
+// wide per missing card centres a short last row
+export function boxGrid(cards, cols, cls = '') {
+  const short = cards.length % cols ? cols - (cards.length % cols) : 0;
+  const gap = short ? `<i class="bxgap" style="grid-column: span ${short}"></i>` : '';
+  const last = cards.length - (cards.length % cols || cols);
+  return `<div class="fillin bxbox ${cls}" style="grid-template-columns: repeat(${cols * 2}, minmax(0, 1fr))">${cards.slice(0, last).join('')}${gap}${cards.slice(last).join('')}</div>`;
+}
+
+// one card: a header, its rolls and a foot (the box lines these up across a row); `extra` goes in the foot, `attrs` on the card itself (a click target, a selection), `passives: false`
 // leaves them off (they don't change with a reroll, so You › Pals shows them with the reroll instead)
 export function boxCard(p, { extra = '', attrs = '', cls = '', title = '', passives = true } = {}) {
   const tier = (p.tier || '').toLowerCase();
@@ -29,5 +38,5 @@ export function boxCard(p, { extra = '', attrs = '', cls = '', title = '', passi
       <div class="bxn"><b>${esc(p.pal)}</b><small>${tier ? `<span class="tierb">${esc(p.tier)}</span>` : ''}${p.alpha ? '<span class="alpha">alpha</span>' : ''}</small></div>
       <div class="bxpw" title="The site's power rating for ${esc(p.pal)}"><b>${p.power != null ? fmt(p.power) : '—'}</b><small>power</small></div></div>
     ${ivRow(ivsOf(p))}
-    ${pills ? `<div class="bxf pills">${pills}</div>` : ''}${extra}</div>`;
+    ${pills || extra ? `<div class="bxft">${pills ? `<div class="bxf pills">${pills}</div>` : ''}${extra}</div>` : ''}</div>`;
 }

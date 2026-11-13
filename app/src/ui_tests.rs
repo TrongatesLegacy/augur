@@ -494,6 +494,12 @@ const MAIN_DRIVER: &str = r#"
           .map((el) => `${el.closest('.panel')?.querySelector('h3')?.textContent || el.className}: ${el.clientHeight} of ${el.scrollHeight}px`);
       out.scrollers ||= {};
       out.scrollers[tab] = scrolling();
+      // a pal box's cards line up: in each row of cards, the talent rolls start at the same height
+      if (tab === 'players' || tab === 'mypals') {
+        const rows = {};
+        for (const c of document.querySelectorAll('.bxp')) (rows[Math.round(c.getBoundingClientRect().top)] ||= []).push(Math.round(c.querySelector('.bxi').getBoundingClientRect().top - c.getBoundingClientRect().top));
+        out[tab + 'BoxRows'] = Object.values(rows).map((tops) => Math.max(...tops) - Math.min(...tops));
+      }
       if (tab === 'bets') out.betRows = document.querySelectorAll('#main tr[data-call]').length;
       // Updates' panels don't run into each other, and their text stays inside them (the changelog scrolls in its own)
       if (tab === 'updates' || tab === 'changelog') {
@@ -1053,6 +1059,10 @@ fn every_tab_renders_headless() {
         text("pals")
     );
     assert!(text("players").contains("nyafia primo"), "Players: {}", text("players"));
+    for tab in ["players", "mypals"] {
+        let rows = r[format!("{tab}BoxRows")].as_array().unwrap_or_else(|| panic!("{tab}: no pal box cards"));
+        assert!(!rows.is_empty() && rows.iter().all(|d| d.as_i64() == Some(0)), "{tab}: the box cards' rows don't line up: {rows:?}");
+    }
     assert!(
         text("model").contains("history test")
             && text("model").contains("learned from your duels")

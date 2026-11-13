@@ -3,7 +3,7 @@
 // the old and new rolls sit side by side with Augur's pick, and you choose with the site's own buttons.
 import { invoke } from '../lib/bridge.js';
 import { esc, fmt, pct } from '../lib/format.js';
-import { boxCard, boxCols, ivRow, STATS, ivTone } from '../lib/box.js';
+import { boxCard, boxCols, boxGrid, ivRow, STATS, ivTone } from '../lib/box.js';
 import { orb, passivePills } from '../lib/pal.js';
 import { empty } from '../lib/viz.js';
 
@@ -140,7 +140,7 @@ function draw(app) {
   const pals = [...v.pals].sort(byWorth);
   const left = `<div class="panel col"><div class="ph"><h3>Your pals</h3><span>win chance now → after a reroll · best value first${v.priced ? '' : ' · reading prices…'}</span></div>
     ${v.error ? `<div class="small bad">Couldn't read your box: ${esc(v.error)}</div>` : ''}
-    ${pals.length ? `<div class="fillin bxbox own" style="--cols:${Math.min(3, boxCols(pals.length))}">${pals.map(card).join('')}</div>` : empty('box', 'No pals in your box', 'Hatch one on the stream and it shows here.')}</div>`;
+    ${pals.length ? boxGrid(pals.map(card), Math.min(3, boxCols(pals.length)), 'own') : empty('box', 'No pals in your box', 'Hatch one on the stream and it shows here.')}</div>`;
   const right = sheet && sheet.id === selected ? rerollPanel(sheet) : overview(v);
   app.main.querySelector('.mpg').innerHTML = left + right;
   wire(app);

@@ -19,6 +19,7 @@ export const KNOBS = {
   PAL_H2H_WEIGHT: ['Pal head to head', 0, 1.5, (v) => `${v}`],
   COOLDOWN_EXP: ['Cooldown passives', 0, 1, (v) => `^${v}`],
   HIT_WEIGHT: ['Real hit size', 0, 1, (v) => `^${v}`],
+  PAL_RANK_WEIGHT: ['Pal rank', 0, 0.5, (v) => `×${v}`],
 };
 
 // a setting's value: Records on real calls follows Species records until it's learned or set
@@ -30,7 +31,8 @@ function knobNote(k, auto) {
   // Records on real calls moves calls / (calls + 60) of the way from Species records to what the calls fit best
   if (k.key === 'SPECIES_LIVE')
     return `<small class="kn ${auto && k.status === 'changed' ? 'ok' : auto ? '' : 'muted'}">${k.status === 'changed' ? `learned: was ${KNOBS[k.key][3](k.was)} · ` : ''}${fmt(k.have)} real calls, ${pct(k.have / (k.have + 60))} of the way</small>`;
-  const from = k.source === 'past_duels' ? 'past duels' : 'real calls';
+  // the pal rank counts only the calls that read it
+  const from = k.source === 'past_duels' ? 'past duels' : k.key === 'PAL_RANK_WEIGHT' ? 'calls with a rank' : 'real calls';
   const [label, text] =
     k.status === 'changed'
       ? ['ok', `learned: was ${KNOBS[k.key][3](k.was)}`]

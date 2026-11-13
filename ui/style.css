@@ -725,6 +725,9 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 .ctag.pick { background: rgba(255,207,107,.15); color: var(--gold); }
 .ctag.won { background: rgba(61,220,151,.14); color: var(--ok); }
 .ctag.lost { background: rgba(255,255,255,.06); color: var(--t3); }
+/* the site's pal rank tier: A strongest */
+.ctag.tier { min-width: 19px; text-align: center; letter-spacing: 0; background: rgba(255,255,255,.08); color: var(--t2); cursor: help; }
+.ctag.tier-a { background: rgba(255,207,107,.18); color: var(--gold); } .ctag.tier-b { background: rgba(61,220,151,.14); color: var(--ok); }
 .cpick { display: grid; gap: 5px; }
 .cpick b { font: 800 22px/1 var(--cond); letter-spacing: .06em; text-transform: uppercase; }
 .cres { display: flex; align-items: center; gap: 7px; margin-top: 7px; font-weight: 700; font-size: 13px; white-space: nowrap; }

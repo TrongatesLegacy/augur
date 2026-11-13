@@ -117,6 +117,13 @@ pub fn fixture_data() -> Value {
             [newest.id],
         )
         .unwrap();
+        // the pal ranks it read (made up)
+        conn.execute(
+            "UPDATE fighters SET tier = CASE side WHEN 'home' THEN 'B' ELSE 'C' END, pal_rank = CASE side WHEN 'home' THEN 88 ELSE 171 END,
+             rank_of = 357, power = CASE side WHEN 'home' THEN 66 ELSE 51 END WHERE prediction_id = ?",
+            [newest.id],
+        )
+        .unwrap();
         let mut d = views::call_detail(&conn, newest.id).unwrap().unwrap();
         d.call.late = history.calls.first().and_then(|c| c.late.clone());
         d
@@ -574,9 +581,9 @@ fn html_unescape(s: &str) -> String {
 /// times, rolls, ranks and positions keep their values.
 fn bigger(v: &mut Value, key: &str) {
     let k = key.to_ascii_lowercase();
-    let keep = ["id", "seq", "pos", "at", "ms", "n", "z"].contains(&k.as_str())
+    let keep = ["id", "seq", "pos", "at", "ms", "n", "z", "of"].contains(&k.as_str())
         || ["_id", "_at", "_ms"].iter().any(|e| k.ends_with(e))
-        || ["iv", "tier", "secs", "hp_left", "zoom", "width", "height", "version"].iter().any(|e| k.contains(e))
+        || ["iv", "tier", "rank", "secs", "hp_left", "zoom", "width", "height", "version"].iter().any(|e| k.contains(e))
         || k.starts_with("lv")
         || k.starts_with("page");
     match v {
@@ -733,6 +740,12 @@ fn every_tab_renders_headless() {
         "the tape and the settings: {call}"
     );
     assert!(call.contains("after the bell") && call.contains("taken from its owner’s box"), "how the call was made: {call}");
+    // the site's pal rank: each side's tier with its tags, and a row in the tale of the tape
+    assert!(call.contains("#88\npal rank\n#171"), "the pal ranks in the tale of the tape: {call}");
+    assert!(text("live").contains("#154\npal rank\n#98"), "Live reads the pal ranks from the feed: {}", text("live"));
+    for (tab, tags) in [("call", "b\nwon"), ("live", "b\naugur's pick")] {
+        assert!(text(tab).contains(tags), "{tab}: the tier sits with the side's tags: {}", text(tab));
+    }
     assert_eq!(r["chart"]["lines"], json!(2), "an HP line per side");
     assert_eq!(r["chart"]["hits"].as_u64().unwrap() as usize, d["fight"]["hits"].as_array().unwrap().len(), "a dot per hit");
     assert_eq!(r["chart"]["ko"], json!(true), "the K.O. is marked");

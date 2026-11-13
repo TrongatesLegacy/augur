@@ -1041,5 +1041,5 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 [data-wvp][hidden] { display: none; }
 [data-wvp="model"] .cmodel { margin: 0; padding: 0; border: 0; }
 .seg.sm button { white-space: nowrap; }
-/* a long title name ends in "…" rather than squeezing its card (Windows' font runs wider) */
-.tcb b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* a long title name takes a second line rather than being cut (Windows' font runs wider) */
+.tcb b { overflow-wrap: break-word; }

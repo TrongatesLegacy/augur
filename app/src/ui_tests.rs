@@ -453,18 +453,33 @@ const MAIN_DRIVER: &str = r#"
         out.titlesAll = document.querySelectorAll('.tmap:not([hidden]) .mrow').length;
         // every category's cards, a tab at a time (All is the map), then back to All for the screenshot
         const cats = [];
-        const cut = [];
-        for (const b of document.querySelectorAll('.tcat[data-tg]:not([data-tg="all"])')) {
-          b.click();
-          await sleep(30);
-          cats.push(document.querySelector('.tall').closest('.panel').innerText);
-          // a title's name and blurb show in full (a long one is cut short only if it must be), and so do the earned ones
-          for (const el of document.querySelectorAll('.tall .tcb b, .tall .tcb small:not(.tfew):not(.thold)'))
-            if (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1) cut.push(el.textContent);
+        const cut = new Set();
+        // a title's name and blurb show in full (a long one is cut short only if it must be), and so do the earned
+        // ones; the names also with every letter 0.8px wider, which cuts the ones Windows' CI found cut under the old rule
+        const widen = (on) =>
+          document.querySelectorAll('#main *').forEach((el) => (el.style.letterSpacing = on ? `calc(${getComputedStyle(el).letterSpacing === 'normal' ? '0px' : getComputedStyle(el).letterSpacing} + 0.8px)` : ''));
+        const check = (sel, both) => {
+          // cut means hidden: text that runs past a box that shows its overflow isn't cut (the spill check sees it)
+          for (const el of document.querySelectorAll(sel)) {
+            if (getComputedStyle(el).overflow === 'visible') continue;
+            if (el.scrollWidth > el.clientWidth + 1 || (both && el.scrollHeight > el.clientHeight + 1)) cut.add(el.textContent);
+          }
+        };
+        for (const wide of [false, true]) {
+          for (const b of document.querySelectorAll('.tcat[data-tg]:not([data-tg="all"])')) {
+            b.click();
+            await sleep(30);
+            if (!wide) cats.push(document.querySelector('.tall').closest('.panel').innerText);
+            widen(wide);
+            await sleep(10);
+            check(wide ? '.tall .tcb b' : '.tall .tcb b, .tall .tcb small:not(.tfew):not(.thold)', true);
+            widen(false);
+          }
         }
+        // the earned list measures its names as it's drawn (a long one takes a whole row), so it's checked as drawn
+        check('.tearned .ter b', false);
         out.titlesCats = cats.join('\n');
-        for (const el of document.querySelectorAll('.tearned .ter b')) if (el.scrollWidth > el.clientWidth + 1) cut.push(el.textContent);
-        out.titlesCut = cut;
+        out.titlesCut = [...cut];
         document.querySelector('.tcat[data-tg="all"]').click();
         await sleep(30);
       }

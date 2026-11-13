@@ -87,10 +87,14 @@ function showWelcome(live) {
 const bf = document.getElementById('bf');
 const busy = { fetch: null, bets: null, sync: null, flash: null };
 let flashTimer;
+let tickTimer;
 function showActivity() {
   const a = activity(busy);
   bf.hidden = !a;
+  clearTimeout(tickTimer);
   if (!a) return;
+  // a countdown in the ring: no event comes while the fetch waits out the site, so count down here
+  if (a.tick) tickTimer = setTimeout(showActivity, 15_000);
   bf.title = a.long;
   bf.dataset.go = a.go;
   bf.className = `bf ${a.kind}${a.warn ? ' warn' : ''}`;

@@ -19,15 +19,15 @@ export function activity({ fetch, bets, sync, flash }, now = Date.now()) {
     items.push({ kind: 'sync', go: 'sync', share: 1, short: n ? `+${n}` : '✓', label: 'Synced', long: `${flash.summary} from ${flash.from}` });
   }
   if (running(fetch, 'catchup')) {
-    const st = backfillState(fetch);
-    items.push({ ...st, kind: 'fetch', go: 'model', label: st.warn ? 'Site busy' : 'Catch-up' });
+    const st = backfillState(fetch, now);
+    items.push({ label: 'Catch-up', ...st, kind: 'fetch', go: 'model' });
   } else if (fetch && fetch.phase !== 'catchup') {
-    const st = backfillState(fetch);
-    if (st) items.push({ ...st, kind: 'fetch', go: 'model', label: st.warn ? 'Site busy' : 'Fetching' });
+    const st = backfillState(fetch, now);
+    if (st) items.push({ label: 'Fetching', ...st, kind: 'fetch', go: 'model' });
   }
   if (running(bets, 'bets')) {
-    const st = backfillState(bets);
-    items.push({ ...st, kind: 'bets', go: 'bets', label: st.warn ? 'Site busy' : 'Bets' });
+    const st = backfillState(bets, now);
+    items.push({ label: 'Bets', ...st, kind: 'bets', go: 'bets' });
   }
   if (!items.length) return null;
   const lines = items.map((i) => i.long);

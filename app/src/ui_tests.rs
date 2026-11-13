@@ -485,6 +485,10 @@ const MAIN_DRIVER: &str = r#"
       nothingNew: activity({ fetch: { phase: 'catchup', done: 0, total: 0 }, sync }, now),
       both: line(activity({ fetch: { phase: 'duels', done: 1, total: 4 }, bets: { phase: 'bets', done: 1, total: 2 }, sync }, now)),
       idle: activity({ fetch: { phase: 'done' }, bets: { phase: 'done' }, sync }, now),
+      // the ring holds a number: the minutes until the site is asked again, the share when paused or stopped
+      waiting: line(activity({ fetch: { phase: 'duels', done: 1, total: 4, resume_at: now + 4 * 60_000 } }, now)),
+      paused: line(activity({ fetch: { phase: 'duels', done: 1, total: 4, paused: true } }, now)),
+      stopped: line(activity({ fetch: { phase: 'duels', done: 1, total: 4, gave_up: true } }, now)),
     };
   }
   out.upbar = document.getElementById('upbar')?.innerText || '';
@@ -832,6 +836,11 @@ fn every_tab_renders_headless() {
     assert_eq!(a["settings"], json!("✓"), "settings arriving: {a}");
     assert_eq!(a["catchup"], json!("fetch|25%|Catch-up|2"), "the launch's catch-up: {a}");
     assert_eq!(a["both"], json!("fetch|25%|Fetching|3"), "the fetch shows, the bets import is in the hover: {a}");
+    assert_eq!(
+        (&a["waiting"], &a["paused"], &a["stopped"]),
+        (&json!("fetch|4m|Site busy|1"), &json!("fetch|25%|Paused|1"), &json!("fetch|25%|Stopped|1")),
+        "the word goes under the ring, not in it: {a}"
+    );
     let stake = data["live"]["stake"]["command"].as_str().unwrap();
     assert!(
         !stake.is_empty() && text("live").contains(&format!("{stake}\n")) && text("live").contains(" credits\ncopy\n"),

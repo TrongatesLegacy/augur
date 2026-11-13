@@ -720,10 +720,18 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 .cverdict { display: flex; align-items: center; gap: 16px; }
 .cverdict .dialw b { font-size: 28px; }
 .cwon { color: var(--t2); font-size: 13px; }
-.cbet { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 4px 14px; font-size: 12.5px; line-height: 1.2; color: var(--t2); }
-.cbet .cb { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
-.cbet .who { font: 700 9px var(--sans); letter-spacing: .1em; text-transform: uppercase; color: var(--t3); }
-.cbet b { color: var(--t1); } .cbet b.ok { color: var(--ok); } .cbet b.bad { color: var(--bad); }
+.ledger { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, auto); justify-content: space-evenly; width: 100%; padding-top: 7px; margin-top: 2px; border-top: 1px solid var(--line); }
+.lc { display: grid; justify-items: center; align-content: start; gap: 4px; padding: 0 8px; min-width: 0; }
+.lc + .lc { border-left: 1px solid var(--line); }
+.ll { display: flex; align-items: center; gap: 6px; height: 14px; font: 700 9px var(--sans); letter-spacing: .12em; text-transform: uppercase; color: var(--t3); white-space: nowrap; }
+.ll .lab { font-size: 8px; padding: 1px 5px; }
+/* a very big amount wraps under its command rather than spilling */
+.lv { display: flex; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: 0 7px; max-width: 100%; font-size: 13.5px; line-height: 1.2; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.lv b { font-weight: 700; color: var(--t1); }
+.lv small { font-size: 11.5px; color: var(--t3); }
+.lv em { font-style: normal; font-weight: 700; } .lv em.ok { color: var(--ok); } .lv em.bad { color: var(--bad); } .lv em.muted { color: var(--t3); }
+.lv em small { font-weight: 500; }
+.ledger + .cnotes { margin-top: 3px; font-size: 11px; line-height: 1.35; }
 .ctags { display: flex; gap: 5px; margin-bottom: 6px; } .fx.r .ctags { justify-content: flex-end; }
 .ctag { font: 700 9.5px var(--sans); letter-spacing: .1em; padding: 3px 7px; border-radius: 5px; text-transform: uppercase; }
 .ctag.pick { background: rgba(255,207,107,.15); color: var(--gold); }

@@ -723,7 +723,7 @@ fn every_tab_renders_headless() {
     let (home, away) = (d["call"]["home_pal"].as_str().unwrap().to_lowercase(), d["call"]["away_pal"].as_str().unwrap().to_lowercase());
     let ko = d["fight"]["ko"].as_str().unwrap();
     assert!(call.contains(&home) && call.contains(&away) && call.contains("augur called"), "the breakdown names both pals: {call}");
-    assert!(call.contains(&format!("k.o. {ko}")) && call.contains("% hp left"), "the result, K.O. and HP left: {call}");
+    assert!(call.contains(&format!("k.o.\n{ko}\n")) && call.contains("% hp left"), "the K.O. and HP left under the dial: {call}");
     assert!(call.contains("how it went") && call.contains("damage by move") && call.contains("top hits"), "how the duel went: {call}");
     assert!(call.contains("counted most for"), "the breakdown says what swung the call most: {call}");
     assert!(
@@ -739,11 +739,8 @@ fn every_tab_renders_headless() {
     let (cmd, label) = (bet["augur_command"].as_str().unwrap().to_lowercase(), bet["label"].as_str().unwrap());
     assert!(bet["backed"].is_string(), "the seed has a bet on its newest call: {bet}");
     let side = if bet["backed"] == "home" { "!h" } else { "!a" };
-    let yours = format!("you\n{side} {}", bet["stake"].as_u64().unwrap());
-    assert!(
-        call.contains(&format!("augur\n{cmd}")) && call.contains(&yours) && call.contains(label),
-        "the money on it, Augur's and yours: {call}"
-    );
+    let yours = format!("your bet\n{label}\n{side} {}\n", bet["stake"].as_u64().unwrap());
+    assert!(call.contains(&format!("augur’s bet\n{cmd}\n")) && call.contains(&yours), "the money on it, Augur's and yours: {call}");
     assert_eq!(r["chart"]["lines"], json!(2), "an HP line per side");
     assert_eq!(r["chart"]["hits"].as_u64().unwrap() as usize, d["fight"]["hits"].as_array().unwrap().len(), "a dot per hit");
     assert_eq!(r["chart"]["ko"], json!(true), "the K.O. is marked");

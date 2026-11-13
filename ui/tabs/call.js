@@ -12,28 +12,35 @@ const clock = (t) => `${Math.floor(t / 60)}:${String(Math.round(t % 60)).padStar
 // the shared headline, with how it ended: right or missed, the winner, the K.O. and the HP it had left
 function headline(d) {
   const c = d.call;
-  const f = d.fight;
   const right = c.winner === c.pick;
-  const result = [`${esc(pal(c, c.winner))} won`, f?.ko || c.ko ? `K.O. ${esc(f?.ko || c.ko)}` : '', (f?.winner_hp_left ?? c.winner_hp_left) != null ? `${f?.winner_hp_left ?? c.winner_hp_left}% HP left` : '']
-    .filter(Boolean)
-    .join(' · ');
   const verdict = `<div class="cres ${right ? 'ok' : 'bad'}"><span class="res ${right ? 'o' : 'x'}">${right ? '✓' : '✕'}</span>${right ? 'Right' : 'Missed'}</div>`;
-  return callHeadline(d, { verdict, line: result, extra: money(d) });
+  return callHeadline(d, { verdict, extra: ledger(d) });
 }
 
-// the money on it, as Your bets lines it up: Augur's bet and what it made, then yours (once the picks list is read)
-function money(d) {
-  const b = d.bet;
+// Under the dial, a column each: how it ended, then the money on it as Your bets lines it up (Augur's bet and what it
+// made, then yours once the picks list has been read). The winner is on its side already, crowned.
+function ledger(d) {
   const c = d.call;
-  if (!b) return c.damaged ? '<div class="cbet"><span class="muted">Left out of the money: the call was overwritten after the fight</span></div>' : '';
-  const made = (n, est) => (n == null ? '' : `<b class="${n > 0 ? 'ok' : n < 0 ? 'bad' : 'muted'}">${signed(n)}</b>${est ? ' <span class="est" title="Estimated at your usual payout">est.</span>' : ''}`);
-  const part = (who, what, result = '') => `<span class="cb"><span class="who">${who}</span>${what}${result}</span>`;
-  const augur = b.augur_stake ? part('Augur', `<b>${esc(b.augur_command)}</b>`, made(b.augur_result, b.estimated)) : part('Augur', 'sat out');
-  if (!d.bets_read) return `<div class="cbet">${augur}</div>`;
-  // yours as the chat command too, so the two read alike (the pal's name is on hover)
+  const f = d.fight;
+  const b = d.bet;
+  const ko = f?.ko || c.ko;
+  const hp = f?.winner_hp_left ?? c.winner_hp_left;
+  const col = (label, value) => `<div class="lc"><span class="ll">${label}</span><span class="lv">${value}</span></div>`;
+  const made = (n, est) =>
+    n == null ? '' : `<em class="${n > 0 ? 'ok' : n < 0 ? 'bad' : 'muted'}">${signed(n)}${est ? '<small title="Estimated at your usual payout"> est.</small>' : ''}</em>`;
+  // yours as the chat command, like Augur's (the amount and the pal are on hover)
   const cmd = (side, n) => `${side === 'home' ? '!h' : '!a'} ${n}`;
-  const you = b.backed ? part('You', `<b title="${fmt(b.stake)} on ${esc(pal(c, b.backed))}">${cmd(b.backed, b.stake)}</b>`, made(b.result)) : part('You', 'no bet');
-  return `<div class="cbet">${augur}${you}<span class="lab ${b.label}">${BET_LABELS[b.label]}</span></div>`;
+  const cols = [ko ? col('K.O.', `<b>${esc(ko)}</b>${hp != null ? `<small>${hp}% HP left</small>` : ''}`) : col('Won', `<b>${esc(pal(c, c.winner))}</b>`)];
+  if (b) {
+    cols.push(col('Augur’s bet', b.augur_stake ? `<b>${esc(b.augur_command)}</b>${made(b.augur_result, b.estimated)}` : '<small>sat out</small>'));
+    if (d.bets_read) {
+      const you = b.backed ? `<b title="${fmt(b.stake)} on ${esc(pal(c, b.backed))}">${cmd(b.backed, b.stake)}</b>${made(b.result)}` : '<small>no bet</small>';
+      cols.push(col(`Your bet <span class="lab ${b.label}">${BET_LABELS[b.label]}</span>`, you));
+    }
+  } else if (c.damaged) {
+    cols.push(col('Money', '<small title="Its call was overwritten after the fight, so it’s left out of the money">left out</small>'));
+  }
+  return `<div class="ledger">${cols.join('')}</div>`;
 }
 
 // each side's HP over the fight as steps, from the tape: home cyan, away pink; the hardest hits ringed, the K.O. marked

@@ -45,7 +45,7 @@ function side(d, s) {
   const tier = r ? `<span class="ctag tier tier-${esc(r.tier).toLowerCase()}" title="${esc(rankTitle(r))}">${esc(r.tier)}</span>` : '';
   const tags = `${tier}${c.pick === s ? `<span class="ctag pick">Augur's pick</span>` : ''}${result}`;
   return `<div class="fx ${s === 'away' ? 'r' : ''}"><div><div class="ctags">${tags || '<span class="ctag none"></span>'}</div><div class="nm" style="${lit ? '' : 'color:var(--t2)'}">${esc(pal(c, s))}</div>
-      <div class="ow">${face(owner, 'a av', 18)}${s.toUpperCase()} · ${esc(owner)}</div>
+      <div class="ow">${face(owner, 'a av', 18)}<span title="${esc(owner)}">${s.toUpperCase()} · ${esc(owner)}</span></div>
       ${f ? `<div class="els">${f.types.map((t) => `<span class="el">${esc(t)}</span>`).join('')}</div>` : ''}</div></div>`;
 }
 

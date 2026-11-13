@@ -94,21 +94,36 @@ td.num, .num { font: 600 15px var(--cond); letter-spacing: .03em; }
 .orb.dim { opacity: .82; box-shadow: 0 0 0 1px rgba(255,255,255,.15); }
 /* a pal's art faded into what holds it (pal.js art()): no circle, no initials, nothing until the art is cached */
 .orb.art { position: absolute; width: auto !important; height: auto !important; aspect-ratio: 1; border-radius: 0; box-shadow: none; pointer-events: none; }
-.orb.art > span { display: none; }
+.orb.art > span, .orb.art:not(:has(img)) { display: none; }
 .orb.art img { border-radius: 0; object-fit: cover; }
 .crown { position: absolute; top: -16px; left: 50%; transform: translateX(-50%); font-size: 18px; color: var(--gold); filter: drop-shadow(0 0 6px var(--gold)); }
 
 /* live */
 .stage { position: relative; overflow: hidden; display: grid; grid-template-columns: 1fr 340px 1fr; align-items: center; padding: 10px 26px; background: radial-gradient(60% 120% at 50% 0%, rgba(255,207,107,.08), transparent 70%), var(--panel); border: 1px solid var(--line); border-radius: 16px; }
 .fx { display: flex; gap: 16px; align-items: center; } .fx.r { flex-direction: row-reverse; text-align: right; }
-/* each pal's art fades in from its own end of the stage, the one Augur didn't pick (or the loser) dimmed. The names
-   sit a little in, so the art's face shows beside them */
+/* Versus: each pal full-colour in a slanted panel at its own end, in its side's colour, the side Augur didn't pick
+   (or the loser) greyed. The art faces left, so home's is mirrored to face the middle. The panels and the room the
+   names leave them scale with the stage; a long owner gets "…" and a tag never splits */
+.stage { container-type: inline-size; }
 .stage > :not(.art) { position: relative; }
-.stage > .art { top: 0; height: 100% !important; opacity: .34; transition: opacity .2s; }
-.stage > .art.home { left: 0; -webkit-mask-image: linear-gradient(to right, #000 25%, transparent); mask-image: linear-gradient(to right, #000 25%, transparent); }
-.stage > .art.away { right: 0; -webkit-mask-image: linear-gradient(to left, #000 25%, transparent); mask-image: linear-gradient(to left, #000 25%, transparent); }
-.stage > .art.off { opacity: .14; filter: grayscale(.7); }
-.stage:has(> .art.home img) > .fx:not(.r) { padding-left: 60px; } .stage:has(> .art.away img) > .fx.r { padding-right: 60px; }
+.stage > .art { top: 0; height: 100% !important; width: clamp(100px, 17cqw, 200px) !important; aspect-ratio: auto; overflow: hidden; transition: opacity .2s; }
+.stage > .art img { object-position: center 35%; }
+.stage > .art.home { left: 0; clip-path: polygon(0 0, 100% 0, 72% 100%, 0 100%); background: linear-gradient(135deg, rgba(79,227,255,.45), rgba(79,227,255,.06)); -webkit-mask-image: linear-gradient(to right, #000 30%, transparent 80%); mask-image: linear-gradient(to right, #000 30%, transparent 80%); }
+.stage > .art.home img { transform: scaleX(-1); }
+.stage > .art.away { right: 0; clip-path: polygon(28% 0, 100% 0, 100% 100%, 0 100%); background: linear-gradient(225deg, rgba(255,92,168,.45), rgba(255,92,168,.06)); -webkit-mask-image: linear-gradient(to left, #000 30%, transparent 80%); mask-image: linear-gradient(to left, #000 30%, transparent 80%); }
+.stage > .art.off { filter: grayscale(1) brightness(.6); }
+.stage:has(> .art.home img) > .fx:not(.r) { padding-left: clamp(16px, 50cqw - 440px, 150px); }
+.stage:has(> .art.away img) > .fx.r { padding-right: clamp(16px, 50cqw - 440px, 150px); }
+.stage > .fx, .stage > .fx > div { min-width: 0; }
+.stage .nm { font-size: clamp(22px, 2.5cqw, 28px); overflow-wrap: break-word; text-shadow: 0 2px 14px rgba(0,0,0,.8); }
+.stage .ow { min-width: 0; } .stage .ow > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stage .ctags { flex-wrap: wrap; } .stage .ctag { white-space: nowrap; }
+/* too narrow to keep the names clear of the art (the window zooms rather than narrows the page, so this is a guard):
+   the art fades to a backdrop and the text gets a shadow to read over it */
+@container (max-width: 1060px) {
+  .stage > .art { opacity: .32; } .stage > .art.off { opacity: .2; }
+  .stage .fx :is(.nm, .ow, .el) { text-shadow: 0 1px 3px #000, 0 0 12px rgba(0,0,0,.9); }
+}
 .nm { font: 800 28px/1 var(--cond); letter-spacing: .03em; }
 .ow { display: flex; align-items: center; gap: 6px; color: var(--t3); font-size: 13px; margin-top: 4px; } .fx.r .ow { justify-content: flex-end; } .ow .orb { box-shadow: none; font-size: 8px !important; }
 .els { display: flex; gap: 5px; margin-top: 8px; flex-wrap: wrap; } .fx.r .els { justify-content: flex-end; }
@@ -151,8 +166,9 @@ td.num, .num { font: 600 15px var(--cond); letter-spacing: .03em; }
 .hero { display: grid; grid-template-columns: 1fr auto; gap: 18px; align-items: center; }
 .panel.hero { position: relative; overflow: hidden; }
 .panel.hero:has(> .art img) { padding-left: 112px; }
-/* the species' art fades in from the left, under its name */
+/* the species' art fades in from the left, under its name, mirrored to face it (the art faces left) */
 .hero > :not(.art) { position: relative; }
+.hero > .art img { transform: scaleX(-1); }
 .hero > .art { left: 0; top: 0; height: 100% !important; opacity: .4; -webkit-mask-image: linear-gradient(to right, #000 35%, transparent); mask-image: linear-gradient(to right, #000 35%, transparent); }
 .kpi { display: grid; grid-template-columns: repeat(4, auto); gap: 22px; text-align: center; }
 .kpi > div > b { display: block; font: 800 30px/1 var(--cond); }

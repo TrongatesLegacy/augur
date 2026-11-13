@@ -497,6 +497,16 @@ const MAIN_DRIVER: &str = r#"
           .filter((el) => /auto|scroll/.test(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight + 2)
           .map((el) => `${el.closest('.panel')?.querySelector('h3')?.textContent || el.className}: ${el.clientHeight} of ${el.scrollHeight}px`);
       out.scrollers ||= {};
+      // the headline's two sides keep their text inside the stage and clear of the middle (the art behind them can't push them)
+      const stageFits = () => {
+        const st = document.querySelector('#main .stage');
+        if (!st) return null;
+        const [b, mid] = [st.getBoundingClientRect(), st.querySelector('.cmid').getBoundingClientRect()];
+        return [...st.querySelectorAll(':scope > .fx :is(.nm, .ow > span, .ctags, .els)')].every((el) => {
+          const r = el.getBoundingClientRect();
+          return r.left >= b.left - 1 && r.right <= b.right + 1 && (r.right <= mid.left + 1 || r.left >= mid.right - 1);
+        });
+      };
       out.scrollers[tab] = scrolling();
       // a pal box's cards line up: in each row of cards, the talent rolls start at the same height
       if (['players', 'playersfew', 'mypals'].includes(tab)) {
@@ -533,6 +543,7 @@ const MAIN_DRIVER: &str = r#"
           return !r.height || (r.bottom <= b.bottom + 1 && r.right <= b.right + 1);
         });
         const ends = [...document.querySelectorAll('.hr .re')].map((e) => e.getBoundingClientRect());
+        out[tab + 'Stage'] = stageFits();
         out[tab + 'Panels'] = {
           h2h: inside(document.querySelector('.hh')),
           race: inside(document.querySelector('.hr')),
@@ -547,6 +558,7 @@ const MAIN_DRIVER: &str = r#"
       if (tab === 'call') {
         document.querySelector('#main tr[data-call]')?.click();
         await sleep(400);
+        out.callStage = stageFits();
         out.chart = { lines: document.querySelectorAll('.hpc path.line').length, proj: document.querySelectorAll('.hpc path.proj').length, hits: document.querySelectorAll('.hpc circle').length, ko: !!document.querySelector('.hpc .ko') };
         out.fits = document.getElementById('main').scrollHeight <= document.getElementById('main').clientHeight + 1;
         out.scrollers[tab] = scrolling();
@@ -832,6 +844,37 @@ fn big_numbers_fit() {
     assert!(spills.is_empty(), "text spills out of its box with big numbers:\n{}", spills.join("\n"));
 }
 
+/// Long names fit: the longest pal names and 25-character owners (Kick's longest) stay inside the headline on Live
+/// and in a call's breakdown, clear of the middle, and spill nowhere.
+#[test]
+fn long_names_fit() {
+    if !have_chrome() {
+        return;
+    }
+    let mut data = fixture_data();
+    for call in ["/live/detail/call", "/call_detail/call"] {
+        let call = data.pointer_mut(call).expect("a call in the fixture");
+        call["home_pal"] = json!("Jormuntide Ignis");
+        call["away_pal"] = json!("Bellanoir Libero");
+        call["home_owner"] = json!("player-with-a-long-name-1");
+        call["away_owner"] = json!("player-with-a-long-name-2");
+    }
+    let port = serve("index.html", &data, MAIN_DRIVER);
+    let r = render_at(port, "main", None, (1280, 720));
+    assert_eq!(r["errors"], json!([]), "script errors: {}", r["errors"]);
+    for tab in ["live", "call"] {
+        assert_eq!(r[format!("{tab}Stage")], true, "{tab}: long names run into the middle or out of the headline");
+        assert_eq!(r["spills"][tab], json!([]), "{tab}: long names spill: {}", r["spills"][tab]);
+    }
+    if let Some(folder) = std::env::var_os("AUGUR_UI_SHOTS").map(PathBuf::from) {
+        let folder = folder.join("long");
+        std::fs::create_dir_all(&folder).unwrap();
+        for tab in ["live", "call"] {
+            render(port, tab, Some((&folder, tab)));
+        }
+    }
+}
+
 #[test]
 fn every_tab_renders_headless() {
     if !have_chrome() {
@@ -903,6 +946,9 @@ fn every_tab_renders_headless() {
         text("liveedge")
     );
     assert_eq!((&r["liveFits"], &r["liveedgeFits"]), (&json!(true), &json!(true)), "Live fits the window without scrolling");
+    for tab in ["liveStage", "liveedgeStage", "callStage"] {
+        assert_eq!(r[tab], true, "{tab}: the headline's text runs into the middle or out of the stage");
+    }
     for tab in ["livePanels", "liveedgePanels"] {
         let f = &r[tab];
         assert_eq!((&f["h2h"], &f["race"]), (&json!(true), &json!(true)), "{tab}: nothing spills out of the panels: {f}");

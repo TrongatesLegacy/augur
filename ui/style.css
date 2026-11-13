@@ -715,11 +715,15 @@ tr.go { cursor: pointer; transition: background .12s; }
 tr.go:hover, tr.go:focus-visible { background: rgba(255,207,107,.06); outline: none; }
 tr.go:focus-visible td:first-child { box-shadow: inset 2px 0 0 var(--gold); }
 td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-align: right; } tr.go:hover td.goar { color: var(--gold); }
-.cstage { grid-template-columns: 1fr 430px 1fr; padding: 12px 24px; }
+.cstage { grid-template-columns: 1fr 430px 1fr; padding: 10px 24px; }
 .cmid { display: grid; justify-items: center; gap: 4px; min-width: 0; }
 .cverdict { display: flex; align-items: center; gap: 16px; }
 .cverdict .dialw b { font-size: 28px; }
 .cwon { color: var(--t2); font-size: 13px; }
+.cbet { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 4px 14px; font-size: 12.5px; line-height: 1.2; color: var(--t2); }
+.cbet .cb { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+.cbet .who { font: 700 9px var(--sans); letter-spacing: .1em; text-transform: uppercase; color: var(--t3); }
+.cbet b { color: var(--t1); } .cbet b.ok { color: var(--ok); } .cbet b.bad { color: var(--bad); }
 .ctags { display: flex; gap: 5px; margin-bottom: 6px; } .fx.r .ctags { justify-content: flex-end; }
 .ctag { font: 700 9.5px var(--sans); letter-spacing: .1em; padding: 3px 7px; border-radius: 5px; text-transform: uppercase; }
 .ctag.pick { background: rgba(255,207,107,.15); color: var(--gold); }

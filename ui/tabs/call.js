@@ -2,8 +2,9 @@
 // from its tape, and the damage by move), and how the model came to its call (the three factors added up on the
 // log-odds scale, the tale of the tape and the settings it used). Opened from a row in Augur's calls or Your bets.
 import { invoke } from '../lib/bridge.js';
-import { esc, fmt } from '../lib/format.js';
+import { esc, fmt, signed } from '../lib/format.js';
 import { SIDES, headline as callHeadline, modelFooter, other, pal, tape, waterfall } from '../lib/callparts.js';
+import { BET_LABELS } from '../lib/stake.js';
 import { empty } from '../lib/viz.js';
 
 const clock = (t) => `${Math.floor(t / 60)}:${String(Math.round(t % 60)).padStart(2, '0')}`;
@@ -17,7 +18,22 @@ function headline(d) {
     .filter(Boolean)
     .join(' · ');
   const verdict = `<div class="cres ${right ? 'ok' : 'bad'}"><span class="res ${right ? 'o' : 'x'}">${right ? '✓' : '✕'}</span>${right ? 'Right' : 'Missed'}</div>`;
-  return callHeadline(d, { verdict, line: result });
+  return callHeadline(d, { verdict, line: result, extra: money(d) });
+}
+
+// the money on it, as Your bets lines it up: Augur's bet and what it made, then yours (once the picks list is read)
+function money(d) {
+  const b = d.bet;
+  const c = d.call;
+  if (!b) return c.damaged ? '<div class="cbet"><span class="muted">Left out of the money: the call was overwritten after the fight</span></div>' : '';
+  const made = (n, est) => (n == null ? '' : `<b class="${n > 0 ? 'ok' : n < 0 ? 'bad' : 'muted'}">${signed(n)}</b>${est ? ' <span class="est" title="Estimated at your usual payout">est.</span>' : ''}`);
+  const part = (who, what, result = '') => `<span class="cb"><span class="who">${who}</span>${what}${result}</span>`;
+  const augur = b.augur_stake ? part('Augur', `<b>${esc(b.augur_command)}</b>`, made(b.augur_result, b.estimated)) : part('Augur', 'sat out');
+  if (!d.bets_read) return `<div class="cbet">${augur}</div>`;
+  // yours as the chat command too, so the two read alike (the pal's name is on hover)
+  const cmd = (side, n) => `${side === 'home' ? '!h' : '!a'} ${n}`;
+  const you = b.backed ? part('You', `<b title="${fmt(b.stake)} on ${esc(pal(c, b.backed))}">${cmd(b.backed, b.stake)}</b>`, made(b.result)) : part('You', 'no bet');
+  return `<div class="cbet">${augur}${you}<span class="lab ${b.label}">${BET_LABELS[b.label]}</span></div>`;
 }
 
 // each side's HP over the fight as steps, from the tape: home cyan, away pink; the hardest hits ringed, the K.O. marked

@@ -508,7 +508,8 @@ async fn history(shared: tauri::State<'_, Arc<Shared>>, range: String) -> Cmd<Hi
 /// One call's breakdown, opened from History (None if it isn't a settled call).
 #[tauri::command]
 async fn call_detail(shared: tauri::State<'_, Arc<Shared>>, id: i64) -> Cmd<Option<views::CallDetail>> {
-    views::call_detail(&shared.db()?, id).map_err(|e| e.to_string())
+    let staking = shared.settings.lock().unwrap().staking.clone();
+    views::call_detail(&shared.db()?, id, &staking).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

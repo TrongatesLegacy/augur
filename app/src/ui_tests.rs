@@ -453,12 +453,18 @@ const MAIN_DRIVER: &str = r#"
         out.titlesAll = document.querySelectorAll('.tmap:not([hidden]) .mrow').length;
         // every category's cards, a tab at a time (All is the map), then back to All for the screenshot
         const cats = [];
+        const cut = [];
         for (const b of document.querySelectorAll('.tcat[data-tg]:not([data-tg="all"])')) {
           b.click();
           await sleep(30);
           cats.push(document.querySelector('.tall').closest('.panel').innerText);
+          // a title's name and blurb show in full (a long one is cut short only if it must be), and so do the earned ones
+          for (const el of document.querySelectorAll('.tall .tcb b, .tall .tcb small:not(.tfew):not(.thold)'))
+            if (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1) cut.push(el.textContent);
         }
         out.titlesCats = cats.join('\n');
+        for (const el of document.querySelectorAll('.tearned .ter b')) if (el.scrollWidth > el.clientWidth + 1) cut.push(el.textContent);
+        out.titlesCut = cut;
         document.querySelector('.tcat[data-tg="all"]').click();
         await sleep(30);
       }
@@ -859,6 +865,7 @@ fn every_tab_renders_headless() {
             && cats.contains("sparring bag"),
         "Titles, category by category: {cats}"
     );
+    assert_eq!(r["titlesCut"], json!([]), "titles cut short");
     assert!(!text("titles").contains("your balance"), "Titles is its own view: {}", text("titles"));
     assert!(
         text("offair").contains("off air") && text("offair").contains("last stream") && text("offair").contains("latest calls"),

@@ -27,6 +27,9 @@ export const knobValue = (s, key) => s[key] ?? (key === 'SPECIES_LIVE' ? s.SPECI
 // what the learner last did with a setting, as a line under its name
 function knobNote(k, auto) {
   if (!k) return '';
+  // Records on real calls moves calls / (calls + 60) of the way from Species records to what the calls fit best
+  if (k.key === 'SPECIES_LIVE')
+    return `<small class="kn ${auto && k.status === 'changed' ? 'ok' : auto ? '' : 'muted'}">${k.status === 'changed' ? `learned: was ${KNOBS[k.key][3](k.was)} · ` : ''}${fmt(k.have)} real calls, ${pct(k.have / (k.have + 60))} of the way</small>`;
   const from = k.source === 'past_duels' ? 'past duels' : 'real calls';
   const [label, text] =
     k.status === 'changed'

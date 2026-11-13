@@ -164,12 +164,24 @@ jobs:
           ref: ${{ needs.prepare.outputs.sha || github.sha }}
 
       - uses: dtolnay/rust-toolchain@stable
+        id: toolchain
         with:
           targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || 'x86_64-pc-windows-msvc' }}
 
+      # the downloaded crates
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+          cache-targets: false
+
+      # the compiled crates, cached whole: rust-cache prunes the .fingerprint folders out of target/<triple>/release
+      # (these builds use --target), and without them Cargo rebuilds all ~600 crates every time. The key moves with
+      # the toolchain and Cargo.lock (a release changes it), and falls back to the newest cache for this target
+      - uses: actions/cache@v6
+        with:
+          path: target
+          key: target-${{ matrix.target }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          restore-keys: target-${{ matrix.target }}-${{ steps.toolchain.outputs.cachekey }}-
 
       # the Tauri command line, downloaded ready-built (building it from source took 8-10 minutes a run)
       - uses: taiki-e/install-action@v2

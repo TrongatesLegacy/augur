@@ -565,6 +565,9 @@ pub fn duel(id: u64) -> Result<Duel> {
 /// A pal in a player's box: species, talent rolls (IVs) and rerolls.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct BoxPal {
+    /// the pal's own id, on your own box signed in (None on anyone else's)
+    #[serde(default)]
+    pub id: Option<String>,
     pub pal: String,
     pub slug: String,
     pub tier: String,
@@ -579,15 +582,20 @@ pub struct BoxPal {
     pub alpha: bool,
 }
 
+/// A player's pal box from their profile page. Your own page, signed in, also has each pal's reroll panel (a
+/// section inside the box's), so the box runs to the next page section rather than the first `</section>`.
 pub fn parse_roster(page: &str) -> Vec<BoxPal> {
-    let Some(sect) = between(page, r#"<section class="sect" id="pals">"#, &["</section>"]) else { return vec![] };
-    regex!(r#"(?s)<article class="pal[^"]*">(.*?)</article>"#)
+    let start = r#"<section class="sect" id="pals">"#;
+    let Some(sect) = between(page, start, &[r#"<section class="sect""#, "</main>", "<footer"]) else { return vec![] };
+    regex!(r#"(?s)<article class="pal[^"]*"([^>]*)>(.*?)</article>"#)
         .captures_iter(sect)
         .filter_map(|c| {
-            let a = &c[1];
+            let a = &c[2];
             let name = regex!(r#"<h3 class="pal-n"><a href="/pal/([^"]+)">(.*?)</a>"#).captures(a)?;
             let foot = between(a, r#"<div class="pal-foot">"#, &["</div>"]).unwrap_or("");
             Some(BoxPal {
+                // only on your own pals, signed in: what the reroll panel is asked for
+                id: regex!(r#"data-rr-card="([^"]+)""#).captures(&c[1]).map(|m| m[1].to_string()),
                 slug: name[1].to_string(),
                 pal: text(&name[2]),
                 tier: regex!(r#"title="Tier (\w)"#).captures(a).map(|t| t[1].to_string()).unwrap_or_default(),
@@ -615,6 +623,185 @@ pub fn parse_roster(page: &str) -> Vec<BoxPal> {
 
 pub fn roster(user_key: &str) -> Result<Vec<BoxPal>> {
     Ok(parse_roster(&fetch(&format!("{BASE}/u/{user_key}"))?))
+}
+
+/// Your own box, signed in: with each pal's id for its reroll panel.
+pub fn own_roster(user_key: &str, cookie: &str) -> Result<Vec<BoxPal>> {
+    Ok(parse_roster(&fetch_once(&format!("{BASE}/u/{user_key}"), Some(cookie))?))
+}
+
+// --- rerolling a pal's IVs (/reroll, your own pals, signed in) ---
+
+/// A form the reroll panel offers, exactly as the site gives it: where it posts, its fields and its button's words.
+/// Augur sends these as they are rather than building its own, so a change on the site can't make it send
+/// something the site didn't offer.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct RerollForm {
+    pub action: String,
+    pub fields: Vec<(String, String)>,
+    pub label: String,
+}
+
+impl RerollForm {
+    pub fn field(&self, name: &str) -> Option<&str> {
+        self.fields.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+    }
+
+    /// "roll", "keep", "stay"…
+    pub fn op(&self) -> &str {
+        self.field("op").unwrap_or("")
+    }
+
+    /// The most a roll may cost (the site refuses if its price has gone up since)
+    pub fn max(&self) -> Option<u64> {
+        self.field("max").and_then(|m| m.replace(',', "").parse().ok())
+    }
+}
+
+/// One pal's reroll panel: the rolls it shows (its label and HP, ATK, DEF: after a roll, the IVs it has and the new
+/// ones), the forms it offers, what it says, and whether the site is still working on a step (busy, sync, wait: ask
+/// again soon) or has finished one (done).
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct RerollPanel {
+    pub rolls: Vec<(String, [f64; 3])>,
+    pub forms: Vec<RerollForm>,
+    /// the site's flash message after a step, its status line ("Rolling your IVs…", "Kept! …"), its verdict on a
+    /// new roll ("Better overall, +159") and its note ("Choose within 15 minutes, or the old IVs stay.")
+    pub said: String,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub verdict: String,
+    pub note: String,
+    pub busy: bool,
+    pub sync: bool,
+    pub wait: bool,
+    pub done: bool,
+}
+
+impl RerollPanel {
+    /// What the next roll costs: the roll form's limit.
+    pub fn price(&self) -> Option<u64> {
+        self.forms.iter().find(|f| f.op() == "roll").and_then(RerollForm::max)
+    }
+}
+
+pub fn parse_reroll_panel(body: &str) -> Result<RerollPanel> {
+    let v: serde_json::Value = serde_json::from_str(body).map_err(|e| Error::Parse(format!("the reroll panel: {e}")))?;
+    if v["ok"] == serde_json::Value::Bool(false) {
+        return Err(Error::Parse(format!(
+            "the reroll panel: {}",
+            v["said"].as_str().or(v["error"].as_str()).unwrap_or("the site said no")
+        )));
+    }
+    let html = v["html"].as_str().unwrap_or("");
+    // each set of dice, with the label just before it ("Your IVs now", "Your new roll"). Spinning dice (the roll is
+    // still being made) aren't a roll yet; after a roll each die reads "11 to 28": the IVs it has, and the new ones
+    let mut rolls = vec![];
+    let mut from = 0;
+    for m in regex!(r#"(?s)<ul class="rr-dice([^"]*)"[^>]*>(.*?)</ul>"#).captures_iter(html) {
+        let whole = m.get(0).unwrap();
+        let before = &html[from..whole.start()];
+        from = whole.end();
+        if m[1].contains("is-spin") {
+            continue;
+        }
+        let label = regex!(r#"(?s)<p class="rr-(?:kick|state)[^"]*"[^>]*>(.*?)</p>"#)
+            .captures_iter(before)
+            .last()
+            .map(|l| text(&l[1]))
+            .unwrap_or_default();
+        let (mut had, mut now, mut moved) = ([0.0; 3], [0.0; 3], false);
+        for die in m[2].split(r#"<li class="rr-die""#).skip(1) {
+            let Some(k) =
+                regex!(r#"rr-die-k">(\w+)</span>"#).captures(die).and_then(|k| ["HP", "ATK", "DEF"].iter().position(|s| *s == &k[1]))
+            else {
+                continue;
+            };
+            if let Some(c) = regex!(r"(\d+) to (\d+)").captures(die) {
+                (had[k], now[k], moved) = (c[1].parse().unwrap_or(0.0), c[2].parse().unwrap_or(0.0), true);
+            } else if let Some(v) = regex!(r#"<b class="rr-die-v">(\d+)</b>"#).captures(die) {
+                (had[k], now[k]) = (v[1].parse().unwrap_or(0.0), v[1].parse().unwrap_or(0.0));
+            }
+        }
+        if moved {
+            rolls.push(("Your IVs now".to_string(), had));
+            rolls.push((if label.is_empty() { "Your new roll".into() } else { label }, now));
+        } else {
+            rolls.push((label, now));
+        }
+    }
+    let forms = regex!(r#"(?s)<form([^>]*\bdata-rr-form\b[^>]*)>(.*?)</form>"#)
+        .captures_iter(html)
+        .map(|f| RerollForm {
+            action: regex!(r#"action="([^"]*)""#)
+                .captures(&f[1])
+                .map(|a| html_escape::decode_html_entities(&a[1]).to_string())
+                .unwrap_or_default(),
+            fields: regex!(r#"<input([^>]*)>"#)
+                .captures_iter(&f[2])
+                .filter_map(|i| {
+                    let name = regex!(r#"name="([^"]*)""#).captures(&i[1])?[1].to_string();
+                    let value = regex!(r#"value="([^"]*)""#)
+                        .captures(&i[1])
+                        .map(|v| html_escape::decode_html_entities(&v[1]).to_string())
+                        .unwrap_or_default();
+                    Some((name, value))
+                })
+                .collect(),
+            label: regex!(r#"(?s)<button[^>]*>(.*?)</button>"#).captures(&f[2]).map(|b| text(&b[1])).unwrap_or_default(),
+        })
+        .collect();
+    let flag = |k: &str| v[k].as_bool().unwrap_or(false);
+    Ok(RerollPanel {
+        rolls,
+        forms,
+        said: v["said"].as_str().unwrap_or("").to_string(),
+        state: regex!(r#"(?s)<p class="rr-state[^"]*"[^>]*>(.*?)</p>"#).captures(html).map(|n| text(&n[1])).unwrap_or_default(),
+        verdict: regex!(r#"(?s)<p class="rr-verdict[^"]*"[^>]*>(.*?)</p>"#).captures(html).map(|n| squash(&n[1])).unwrap_or_default(),
+        note: regex!(r#"(?s)<p class="rr-note[^"]*"[^>]*>(.*?)</p>"#).captures(html).map(|n| text(&n[1])).unwrap_or_default(),
+        busy: flag("busy"),
+        sync: flag("sync"),
+        wait: flag("wait"),
+        done: flag("done"),
+    })
+}
+
+/// A pal's reroll panel, read as the site's own page reads it when you open it. Changes nothing.
+pub fn reroll_panel(pal_id: &str, cookie: &str) -> Result<RerollPanel> {
+    let url = format!("{BASE}/reroll?pal={}&part=1&view=card", urlencoding(pal_id));
+    let mut req = agent().get(&url).header("User-Agent", UA).header("Cache-Control", "no-store").header("Accept", "application/json");
+    req = req.header("Cookie", cookie);
+    match req.call() {
+        Ok(mut resp) => parse_reroll_panel(&resp.body_mut().read_to_string().map_err(|e| Error::Net(e.to_string()))?),
+        Err(ureq::Error::StatusCode(code)) => Err(Error::Http(code)),
+        Err(e) => Err(Error::Net(e.to_string())),
+    }
+}
+
+/// Sends one of a panel's forms, as the site's page does. A "roll" spends credits. Only forms on palduels.com's own
+/// /reroll are sent.
+pub fn reroll_send(form: &RerollForm, cookie: &str) -> Result<RerollPanel> {
+    if form.action != "/reroll" {
+        return Err(Error::Parse(format!("the reroll panel offered a form to {}, which Augur won't send", form.action)));
+    }
+    let req = agent()
+        .post(format!("{BASE}/reroll"))
+        .header("User-Agent", UA)
+        .header("Accept", "application/json")
+        .header("Origin", BASE)
+        .header("Referer", format!("{BASE}/reroll"))
+        .header("Cookie", cookie);
+    match req.send_form(form.fields.iter().map(|(k, v)| (k.as_str(), v.as_str()))) {
+        Ok(mut resp) => parse_reroll_panel(&resp.body_mut().read_to_string().map_err(|e| Error::Net(e.to_string()))?),
+        Err(ureq::Error::StatusCode(code)) => Err(Error::Http(code)),
+        Err(e) => Err(Error::Net(e.to_string())),
+    }
+}
+
+/// A pal id is letters, digits and dashes; anything else is left out rather than sent.
+fn urlencoding(id: &str) -> String {
+    id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect()
 }
 
 // --- your picks (/u/<name>?bp=<page>#bets, only shown when signed in) ---
@@ -1185,6 +1372,66 @@ mod tests {
         let nyafia = pals.iter().find(|p| p.pal == "Nyafia Primo").unwrap();
         assert_eq!(nyafia.stats["HP"], (7518.0, 89.0));
         assert_eq!(nyafia.rerolls, 0);
+        assert!(pals.iter().all(|p| p.id.is_none()), "someone else's box: no reroll ids");
+    }
+
+    /// Your own box, signed in: every pal (each card is followed by its reroll panel, a section of its own) with
+    /// its id.
+    #[test]
+    fn own_box_has_reroll_ids() {
+        let pals = parse_roster(&page("own-box.html"));
+        assert_eq!(pals.iter().map(|p| p.pal.as_str()).collect::<Vec<_>>(), ["Broncherry Aqua", "Nyafia Primo"]);
+        assert_eq!(pals[0].id.as_deref(), Some("00000000-0000-4000-8000-000000000002"));
+        assert_eq!((pals[0].tier.as_str(), pals[0].power), ("B", Some(60)));
+        assert_eq!(pals[0].stats["ATK"].1, 26.0);
+    }
+
+    #[test]
+    fn reroll_panel_before_a_roll() {
+        let p = parse_reroll_panel(&page("reroll-panel.json")).unwrap();
+        assert_eq!(p.rolls, [("Your IVs now".to_string(), [72.0, 56.0, 25.0])]);
+        assert_eq!(p.price(), Some(250));
+        let roll = &p.forms[0];
+        assert_eq!((roll.action.as_str(), roll.op(), roll.label.as_str()), ("/reroll", "roll", "Roll for 250 credits"));
+        assert_eq!(roll.field("pal"), Some("00000000-0000-4000-8000-000000000001"));
+        assert!(p.note.contains("price doubles"));
+        assert!(!(p.busy || p.sync || p.wait || p.done));
+    }
+
+    /// A real reroll, step by step (one pal's, its id made up): the dice spinning, the new roll against the old with the
+    /// site's keep and stay, saving the choice, and kept, at the doubled price.
+    #[test]
+    fn reroll_panel_through_a_roll() {
+        let rolling = parse_reroll_panel(&page("reroll-rolling.json")).unwrap();
+        assert!(rolling.busy && rolling.rolls.is_empty() && rolling.forms.is_empty(), "spinning dice aren't a roll yet");
+        assert_eq!(rolling.state, "Rolling your IVs…");
+
+        let reveal = parse_reroll_panel(&page("reroll-reveal.json")).unwrap();
+        assert_eq!(reveal.rolls, [("Your IVs now".to_string(), [11.0, 31.0, 14.0]), ("Your new roll".to_string(), [28.0, 92.0, 95.0])]);
+        assert_eq!(
+            reveal.forms.iter().map(|f| (f.op(), f.label.as_str())).collect::<Vec<_>>(),
+            [("keep", "Keep new"), ("stay", "Stay with old")]
+        );
+        assert_eq!(reveal.forms[0].field("roll"), Some("544a91438feda0d747e797cb7242f1b1"), "the choice names the roll it's for");
+        assert_eq!(reveal.verdict, "Better overall, +159 ALL THREE UP");
+        assert!(reveal.note.contains("15 minutes"), "there's a time limit: {}", reveal.note);
+        assert!(!(reveal.busy || reveal.sync || reveal.wait) && reveal.price().is_none());
+
+        let saving = parse_reroll_panel(&page("reroll-saving.json")).unwrap();
+        assert!(saving.busy && saving.rolls.is_empty() && saving.state.starts_with("Saving your choice"));
+
+        let kept = parse_reroll_panel(&page("reroll-kept.json")).unwrap();
+        assert!(kept.sync && kept.state.starts_with("Kept!"));
+        assert_eq!(kept.rolls, [(kept.state.clone(), [28.0, 92.0, 95.0])]);
+        assert_eq!(kept.price(), Some(500), "the price doubles");
+
+        assert!(parse_reroll_panel(r#"{"ok": false, "said": "Not enough credits"}"#)
+            .unwrap_err()
+            .to_string()
+            .contains("Not enough credits"));
+        // a form posting anywhere but the site's own /reroll isn't sent (checked before any request)
+        let elsewhere = RerollForm { action: "https://example.com/steal".into(), ..reveal.forms[0].clone() };
+        assert!(reroll_send(&elsewhere, "session=x").unwrap_err().to_string().contains("won't send"));
     }
 
     #[test]

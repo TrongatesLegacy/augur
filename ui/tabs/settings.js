@@ -148,9 +148,8 @@ function modelPage(s) {
 function account(s, acct) {
   return `<div class="sg">
     <div class="panel"><div class="ph"><h3>PalDuels</h3><span>optional</span></div>
-      ${row('Sign-in', `${acct.signed_in ? `Signed in${acct.name ? ' as <b>' + esc(acct.name) + '</b>' : ''}. ` : ''}Only reads your picks and balance. Augur never picks, chats or spends for you.`, acct.signed_in ? '<button class="btn ghost" id="so">Sign out</button>' : '<button class="btn" id="si">Sign in</button>')}
-      ${row('Your Kick name', 'for your pal box and rivals; public, no sign-in needed', `<input type="text" data-n="kick_name" value="${esc(s.kick_name)}" placeholder="TrongatesLegacy">`)}
-      ${row('Reroll cost (credits)', 'not on the site yet; enables exact reroll advice', `<input type="number" data-n="reroll_cost" value="${s.reroll_cost ?? ''}" placeholder="Not set" style="width:120px">`)}</div>
+      ${row('Sign-in', `${acct.signed_in ? `Signed in${acct.name ? ' as <b>' + esc(acct.name) + '</b>' : ''}. ` : ''}Reads your picks, balance and pal box. It never picks or chats for you, and spends credits only on a reroll you confirm in You › Pals.`, acct.signed_in ? '<button class="btn ghost" id="so">Sign out</button>' : '<button class="btn" id="si">Sign in</button>')}
+      ${row('Your Kick name', 'for your pal box and rivals; public, no sign-in needed', `<input type="text" data-n="kick_name" value="${esc(s.kick_name)}" placeholder="TrongatesLegacy">`)}</div>
     <div class="panel"><div class="ph"><h3>Kept safe</h3></div><div class="small" style="line-height:1.7">
       The sign-in saves only the site's session cookie, never your password, encrypted with ${navigator.userAgent.includes('Windows') ? 'Windows (DPAPI)' : 'your Mac’s Keychain'}. It stays on this computer: sync doesn’t carry it, so sign in once on each.</div></div>
   </div>`;
@@ -295,7 +294,6 @@ export async function render(app) {
     input.onchange = () => {
       const k = input.dataset.n;
       if (k === 'poll_secs' || k === 'poll_max_secs') s[k] = Math.min(120, Math.max(2, Math.round(+input.value) || 2));
-      else if (k === 'reroll_cost') s[k] = input.value ? +input.value : null;
       else s[k] = input.value.trim();
       save();
     };

@@ -1,14 +1,17 @@
 // You (only when signed in): your PalDuels profile as Augur last read it (your balance, predictions, duels, spending
-// and titles), your pet and your Hall, and your bets next to Augur's calls. Its Titles view is in titles.js.
+// and titles), your pet and your Hall, and your bets next to Augur's calls. Its Titles view is in titles.js, its Pals
+// view (your box and rerolling) in mypals.js.
 import { invoke } from '../lib/bridge.js';
 import { ago, esc, fmt, pct, short } from '../lib/format.js';
 import { orb, passivePills } from '../lib/pal.js';
 import { empty, formDots, icon, ring, signedBar, split, stack } from '../lib/viz.js';
+import * as mypals from './mypals.js';
 import { titlesView, wire as wireTitles } from './titles.js';
 
 const YOU_VIEWS = [
   ['profile', 'Profile'],
   ['titles', 'Titles'],
+  ['pals', 'Pals'],
 ];
 
 const shortDay = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
@@ -158,8 +161,17 @@ export async function render(app) {
   const pg = y.page;
   const find = (t) => pg?.panels.find((p) => p.title.toLowerCase().startsWith(t));
   const titles = state.youView === 'titles' && pg;
-  const views = pg ? `<div class="seg ml">${YOU_VIEWS.map(([k, l]) => `<button class="${(titles ? 'titles' : 'profile') === k ? 'on' : ''}" data-yv="${k}">${l}</button>`).join('')}</div>` : '';
-  const refresh = `${views}<span class="sub ${pg ? '' : 'ml'}">${y.read_at ? `read ${ago(y.read_at)}` : 'not read yet'}</span><button class="btn ghost" id="yr">Read now</button>`;
+  const pals = state.youView === 'pals';
+  const shown = pals ? 'pals' : titles ? 'titles' : 'profile';
+  const views = pg || pals ? `<div class="seg ml">${YOU_VIEWS.map(([k, l]) => `<button class="${shown === k ? 'on' : ''}" data-yv="${k}">${l}</button>`).join('')}</div>` : '';
+  const refresh = `${views}<span class="sub ${views ? '' : 'ml'}">${y.read_at ? `read ${ago(y.read_at)}` : 'not read yet'}</span><button class="btn ghost" id="yr">Read now</button>`;
+  if (pals) {
+    // its own frame: the box and the reroll, read separately from the profile
+    const wireViews = () =>
+      main.querySelectorAll('.seg button[data-yv]').forEach((b) => (b.onclick = () => ((state.youView = b.dataset.yv), render(app))));
+    await mypals.render(app, header(`You · ${esc(y.name || 'PalDuels')} · Pals`, views), wireViews);
+    return;
+  }
   if (titles) {
     main.innerHTML = header(`You · ${esc(y.name || 'PalDuels')} · Titles`, refresh) + titlesView(y);
     wireTitles(main);

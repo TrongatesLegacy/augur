@@ -18,6 +18,10 @@ pub const MIN_CALLS: usize = 60;
 pub const MIN_COOLDOWN_CALLS: usize = 15;
 /// Changes kept in the log.
 const LOG_LEN: usize = 30;
+/// Records on real calls learns from every call, gradually: it moves from the past duels' species weight toward
+/// what the calls fit best by calls / (calls + this). A few calls barely move it; 60 take it halfway
+pub const SPECIES_LIVE_PRIOR: usize = 60;
+const GRADUAL: &str = "SPECIES_LIVE";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -112,6 +116,17 @@ fn best(knob: &Knob, s: &Settings, loss: &dyn Fn(&Settings) -> f64, margin: f64)
     scored.iter().filter(|x| x.1 <= low + margin / 10.0).min_by(|a, b| (a.0 - now).abs().total_cmp(&(b.0 - now).abs())).map_or(now, |x| x.0)
 }
 
+/// Records on real calls: the weight that fits every call best, taken calls / (calls + SPECIES_LIVE_PRIOR) of the
+/// way from the past duels' species weight, in steps of 0.05 (so it doesn't wander on each result).
+fn species_live(calls: &[CallRecord], s: &Settings) -> f64 {
+    let prior = s.species_weight;
+    let loss = |v: f64| history::evaluate(calls, &s.with(GRADUAL, v)).0;
+    let best = (0..=40).map(|i| f64::from(i) * 0.05).min_by(|a, b| loss(*a).total_cmp(&loss(*b))).unwrap_or(prior);
+    let n = calls.len() as f64;
+    let v = prior + (best - prior) * n / (n + SPECIES_LIVE_PRIOR as f64);
+    (v * 20.0).round() / 20.0
+}
+
 /// Re-fit the settings, starting from `current`. Changes nothing in the database; `save` keeps the result.
 pub fn learn(conn: &Connection, current: &Settings, now_ms: u64) -> R<Learned> {
     let past = history::past_duels(conn)?;
@@ -127,6 +142,7 @@ pub fn learn_on(past: &[PastDuel], calls: &[CallRecord], current: &Settings, now
     let cooldown_calls = calls.iter().filter(|c| has_cooldown(c)).count();
     let ready = |k: &Knob| match (k.source, k.key) {
         (Source::PastDuels, _) => past.len() >= 200,
+        (Source::LiveCalls, GRADUAL) => !calls.is_empty(),
         (Source::LiveCalls, "COOLDOWN_EXP") => calls.len() >= MIN_CALLS && cooldown_calls >= MIN_COOLDOWN_CALLS,
         (Source::LiveCalls, _) => calls.len() >= MIN_CALLS,
     };
@@ -134,7 +150,7 @@ pub fn learn_on(past: &[PastDuel], calls: &[CallRecord], current: &Settings, now
     // coordinate descent: each setting in turn, a few rounds, on the fitting part only
     let mut cand = current.clone();
     for _ in 0..3 {
-        for k in KNOBS.iter().filter(|k| ready(k)) {
+        for k in KNOBS.iter().filter(|k| ready(k) && k.key != GRADUAL) {
             let v = match k.source {
                 Source::PastDuels => best(k, &cand, &|s| past_loss(past_fit, s), MARGIN_PAST),
                 Source::LiveCalls => best(k, &cand, &|s| live_loss(calls_fit, s), MARGIN_LIVE),
@@ -144,22 +160,32 @@ pub fn learn_on(past: &[PastDuel], calls: &[CallRecord], current: &Settings, now
     }
 
     // keep each group's changes only if they do better on what was held back
-    let moved = |src: Source| KNOBS.iter().any(|k| k.source == src && cand.get(k.key) != current.get(k.key));
+    let held = |k: &&Knob| k.key != GRADUAL;
+    let moved = |src: Source| KNOBS.iter().filter(held).any(|k| k.source == src && cand.get(k.key) != current.get(k.key));
     let mut out = current.clone();
     if moved(Source::PastDuels) {
-        let trial =
-            KNOBS.iter().filter(|k| k.source == Source::PastDuels).fold(out.clone(), |s, k| s.with(k.key, cand.get(k.key).unwrap()));
+        let trial = KNOBS
+            .iter()
+            .filter(held)
+            .filter(|k| k.source == Source::PastDuels)
+            .fold(out.clone(), |s, k| s.with(k.key, cand.get(k.key).unwrap()));
         let live_ok = calls_check.len() < 20 || live_loss(calls_check, &trial) <= live_loss(calls_check, &out) + MARGIN_LIVE;
         if past_loss(past_check, &trial) < past_loss(past_check, &out) - MARGIN_PAST && live_ok {
             out = trial;
         }
     }
     if moved(Source::LiveCalls) && calls_check.len() >= 15 {
-        let trial =
-            KNOBS.iter().filter(|k| k.source == Source::LiveCalls).fold(out.clone(), |s, k| s.with(k.key, cand.get(k.key).unwrap()));
+        let trial = KNOBS
+            .iter()
+            .filter(held)
+            .filter(|k| k.source == Source::LiveCalls)
+            .fold(out.clone(), |s, k| s.with(k.key, cand.get(k.key).unwrap()));
         if live_loss(calls_check, &trial) < live_loss(calls_check, &out) - MARGIN_LIVE {
             out = trial;
         }
+    }
+    if !calls.is_empty() {
+        out = out.with(GRADUAL, species_live(calls, &out));
     }
 
     let before = history::score_past(past_check, current);
@@ -180,6 +206,7 @@ pub fn learn_on(past: &[PastDuel], calls: &[CallRecord], current: &Settings, now
             let (value, was) = (out.get(k.key).unwrap(), current.get(k.key).unwrap());
             let (have, need) = match (k.source, k.key) {
                 (Source::PastDuels, _) => (past.len(), 200),
+                (Source::LiveCalls, GRADUAL) => (calls.len(), 0),
                 (Source::LiveCalls, "COOLDOWN_EXP") if calls.len() >= MIN_CALLS => (cooldown_calls, MIN_COOLDOWN_CALLS),
                 (Source::LiveCalls, _) => (calls.len(), MIN_CALLS),
             };
@@ -274,7 +301,8 @@ mod tests {
     }
 
     /// Real calls where the stronger pal wins 4 in 5 though the species records favour the other: the learner
-    /// lowers the records' weight on real calls, and leaves the past duels' species weight alone.
+    /// lowers the records' weight on real calls, more as the calls add up, and leaves the past duels' species weight
+    /// alone.
     #[test]
     fn learns_how_much_records_count_on_real_calls() {
         let side =
@@ -316,9 +344,10 @@ mod tests {
         assert!(l.check.live_after < l.check.live_before);
         let k = l.knobs.iter().find(|k| k.key == "SPECIES_LIVE").unwrap();
         assert_eq!((k.status.as_str(), k.source), ("changed", Source::LiveCalls));
-        // under 60 calls it waits
-        let few = learn_on(&[], &calls[..40], &start, 1);
-        assert_eq!(few.settings.species_live, None);
+        // it learns from every call, a little at a time: 20 calls move it less than 120
+        let few = learn_on(&[], &calls[..20], &start, 1);
+        let v = |l: &Learned| l.settings.species_on_calls();
+        assert!(v(&few) < start.species_weight && v(&few) > v(&l), "20 calls: {}, 120 calls: {}", v(&few), v(&l));
     }
 
     /// Coin-flip history: nothing to learn, so nothing moves.

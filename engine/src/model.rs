@@ -34,7 +34,9 @@ pub struct Settings {
     #[serde(default = "half")]
     pub cooldown_exp: f64,
     /// how much a move's real hit size in fight tapes counts on top of its listed power (0 = not at all, the
-    /// start; held-back past duels preferred about 0.25 on 12 Nov)
+    /// start). Past duels, at base stats, saw no gain, but on 14 Nov both halves of the first 87 real calls
+    /// preferred 0.25-0.5 (log loss 0.548 -> 0.536, the same calls right), so it learns from every call, a little
+    /// at a time, like SPECIES_LIVE
     #[serde(default)]
     pub hit_weight: f64,
     /// SPECIES_WEIGHT on real calls, which see each pal's actual stats (the past duels the species weight is fitted

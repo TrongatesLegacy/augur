@@ -214,7 +214,7 @@ pub async fn import_file(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>) 
     };
     let conn = db::open(&settings::db_path(&shared.dir)).map_err(|e| e.to_string())?;
     let merged = if path.extension().is_some_and(|x| x == "jsonl") {
-        db::Merged { calls: augur_engine::calls::import(&conn, &path).map_err(|e| e.to_string())?, ..Default::default() }
+        augur_engine::calls::import_all(&conn, &path).map_err(|e| e.to_string())?
     } else {
         db::merge_from(&conn, &path).map_err(|e| e.to_string())?
     };

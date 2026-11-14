@@ -177,7 +177,9 @@ impl SyncState {
     fn write_own(&mut self, conn: &Connection, dir: &Path, os: &str, app: &str, now: u64) -> crate::Result<()> {
         let calls_file = dir.join("calls").join(format!("{}.jsonl", self.device));
         let settled = db::settled(conn)?;
-        let mark = format!("{}:{}", settled.len(), settled.iter().filter(|c| c.damaged).count());
+        // written again when a call is added, marked damaged or gains its pal ranks (the others fill them in)
+        let ranked = settled.iter().filter(|c| c.fighters.as_ref().is_some_and(|(h, _)| h.fighter.pal_rank.is_some())).count();
+        let mark = format!("{}:{}:{ranked}", settled.len(), settled.iter().filter(|c| c.damaged).count());
         if self.what.calls && (mark != self.calls_mark || !calls_file.exists()) {
             std::fs::create_dir_all(calls_file.parent().unwrap())?;
             self.calls_written = calls::export(conn, &calls_file)?;
@@ -433,6 +435,31 @@ mod tests {
         pc.sync(&pc_db, &none, "Windows", "0.1.0", 4_000);
         let marked: i64 = pc_db.query_row("SELECT COUNT(*) FROM predictions WHERE damaged = 1", [], |r| r.get(0)).unwrap();
         assert_eq!(marked, 1, "the PC has the Mac's mark");
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    /// Pal ranks filled in on one computer (for calls made before Augur read them) reach the other, which already has
+    /// those calls, without a new result; what the other has already set stays.
+    #[test]
+    fn filled_in_pal_ranks_reach_the_other_computer() {
+        let folder = temp("ranks");
+        let (mac_db, pc_db) = (crate::seed::store(), db::open_memory().unwrap());
+        let (mut mac, mut pc) = (computer("Mac", &folder), computer("PC", &folder));
+        let none = BTreeMap::new();
+        mac.sync(&mac_db, &none, "macOS", "0.1.0", 1_000);
+        pc.sync(&pc_db, &none, "Windows", "0.1.0", 2_000);
+        let ranked = |conn: &Connection| -> i64 {
+            conn.query_row("SELECT COUNT(*) FROM fighters WHERE power IS NOT NULL", [], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(ranked(&pc_db), 0);
+        pc_db.execute("UPDATE fighters SET power = 10 WHERE rowid = (SELECT MIN(rowid) FROM fighters)", []).unwrap();
+        mac_db.execute("UPDATE fighters SET tier = 'B', pal_rank = 98, rank_of = 357, power = 65", []).unwrap();
+        mac.sync(&mac_db, &none, "macOS", "0.1.0", 3_000);
+        pc.sync(&pc_db, &none, "Windows", "0.1.0", 4_000);
+        assert_eq!(ranked(&pc_db), ranked(&mac_db), "every side of every call has its rank");
+        let kept: i64 =
+            pc_db.query_row("SELECT power FROM fighters WHERE rowid = (SELECT MIN(rowid) FROM fighters)", [], |r| r.get(0)).unwrap();
+        assert_eq!(kept, 10, "a value the PC already had stays");
         let _ = std::fs::remove_dir_all(folder);
     }
 

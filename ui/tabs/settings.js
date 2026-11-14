@@ -389,7 +389,9 @@ export async function render(app) {
       const parts = [[m.calls, 'call'], [m.duels, 'duel'], [m.tapes, 'tape'], [m.species, 'species'], [m.bets, 'bet']]
         .filter(([n]) => n)
         .map(([n, w]) => `${fmt(n)} ${w}${n === 1 || w === 'species' ? '' : 's'}`);
-      state.syncFlash = `From ${esc(r.file)}: ${parts.length ? 'added ' + parts.join(', ') : 'nothing new'}.`;
+      const filled = m.filled ? `filled in what ${fmt(m.filled)} already here ${m.filled === 1 ? 'was' : 'were'} missing` : '';
+      const said = [parts.length ? 'added ' + parts.join(', ') : '', filled].filter(Boolean).join('; ');
+      state.syncFlash = `From ${esc(r.file)}: ${said || 'nothing new'}.`;
       render(app);
     } catch (e) {
       flash(e);

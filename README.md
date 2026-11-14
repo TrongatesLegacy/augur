@@ -96,7 +96,7 @@ Augur updates itself from this repository's GitHub releases:
 
 **Back up… and Import…** cover setting up a new computer:
 - **Back up…** saves a complete copy of the store (calls, duels, tapes, species, bets) wherever you choose, such as OneDrive.
-- **Import…** merges one in, or a calls file. It adds what's missing and never overwrites, so a new PC skips the hour-long first fetch.
+- **Import…** merges one in, or a calls file. It adds what's missing and never overwrites, so a new PC skips the hour-long first fetch. Calls, duels and species it already has gain only what they lack, such as the pal ranks on calls made before Augur read them; sync fills those in the same way.
 
 Don't move the data folder itself into OneDrive: the app writes to its database every few seconds, and syncing a live SQLite file can corrupt it.
 

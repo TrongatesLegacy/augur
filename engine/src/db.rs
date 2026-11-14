@@ -497,6 +497,36 @@ fn save_fighters(conn: &Connection, id: i64, c: &NewCall) -> Result<()> {
     Ok(())
 }
 
+/// Fills a stored call's fighter blanks (its pal rank, its IVs) from the same fighter read elsewhere; what's set stays.
+/// The call is found by its fight: (home owner, away owner, seen_at). True if anything was filled.
+pub fn fill_fighter_blanks(conn: &Connection, call: (&str, &str, i64), side: &str, f: &CallFighter) -> Result<bool> {
+    let iv = |k: &str| f.ivs.get(k).copied().flatten().map(|v| v as i64);
+    let rank = f.fighter.pal_rank.as_ref();
+    let n = conn.execute(
+        "UPDATE fighters SET tier = COALESCE(tier, ?5), pal_rank = COALESCE(pal_rank, ?6), rank_of = COALESCE(rank_of, ?7),
+                             power = COALESCE(power, ?8), hp_iv = COALESCE(hp_iv, ?9), atk_iv = COALESCE(atk_iv, ?10),
+                             def_iv = COALESCE(def_iv, ?11)
+         WHERE side = ?4 AND prediction_id IN (SELECT id FROM predictions WHERE home_owner = ?1 AND away_owner = ?2 AND seen_at = ?3)
+           AND ((tier IS NULL AND ?5 IS NOT NULL) OR (pal_rank IS NULL AND ?6 IS NOT NULL) OR (rank_of IS NULL AND ?7 IS NOT NULL)
+             OR (power IS NULL AND ?8 IS NOT NULL) OR (hp_iv IS NULL AND ?9 IS NOT NULL) OR (atk_iv IS NULL AND ?10 IS NOT NULL)
+             OR (def_iv IS NULL AND ?11 IS NOT NULL))",
+        params![
+            call.0,
+            call.1,
+            call.2,
+            side,
+            rank.map(|r| r.tier.as_str()),
+            rank.map(|r| r.rank),
+            rank.map(|r| r.of),
+            rank.map(|r| r.power),
+            iv("HP"),
+            iv("ATK"),
+            iv("DEF"),
+        ],
+    )?;
+    Ok(n > 0)
+}
+
 /// Match open calls to finished duels in the state's recent list and store their tapes. A call is only "skipped"
 /// once two other fights have finished after it was made, because the next duel is queued (and predicted) before
 /// the current one is recorded.
@@ -782,10 +812,15 @@ pub struct Merged {
     pub tapes: usize,
     pub species: usize,
     pub bets: usize,
+    /// calls, duels and species already here that gained something they were missing (say, the pal ranks of calls
+    /// made before Augur read them)
+    #[serde(default)]
+    pub filled: usize,
 }
 
 /// Adds what another store (a backup from another computer) has and this one doesn't: calls with their fighters,
-/// duels and tapes, species and moves, bets. Nothing here is changed or removed, so it's safe to run again.
+/// duels and tapes, species and moves, bets. Rows already here only gain what they're missing; nothing set is changed
+/// or removed, so it's safe to run again.
 pub fn merge_from(conn: &Connection, other: &Path) -> Result<Merged> {
     if !other.is_file() {
         return Err(crate::Error::Parse(format!("{}: not a file", other.display())));
@@ -862,8 +897,43 @@ fn merge_attached(conn: &Connection) -> Result<Merged> {
         )?;
         m.calls += 1;
     }
+    m.filled = fill_blanks(&tx, "duels", "other.duels o", "o.id = duels.id", &["id"])?
+        + fill_blanks(&tx, "species", "other.species o", "o.pal = species.pal", &["pal"])?
+        + fill_blanks(
+            &tx,
+            "fighters",
+            // the same call here: the same fight seen at the same moment
+            "(SELECT p.id AS here, f.* FROM other.fighters f JOIN other.predictions op ON op.id = f.prediction_id
+              JOIN main.predictions p ON p.home_owner = op.home_owner AND p.away_owner = op.away_owner AND p.seen_at = op.seen_at) o",
+            "o.here = fighters.prediction_id AND o.side = fighters.side",
+            &["prediction_id", "side"],
+        )?;
     tx.commit()?;
     Ok(m)
+}
+
+/// Fills the blanks in `table`'s rows from the matching rows of `from` (aliased `o`), for every column both have
+/// except the keys; values already set stay. Returns how many rows gained something (for fighters, how many calls).
+fn fill_blanks(conn: &Connection, table: &str, from: &str, matching: &str, keys: &[&str]) -> Result<usize> {
+    // only this store's own column names reach the SQL, so a crafted backup can't add its own
+    let cols: Vec<String> = conn
+        .prepare(&format!(
+            "SELECT m.name FROM pragma_table_info('{table}') m JOIN pragma_table_info('{table}', 'other') o ON o.name = m.name"
+        ))?
+        .query_map([], |r| r.get(0))?
+        .collect::<Rq<Vec<String>>>()?
+        .into_iter()
+        .filter(|c| !keys.contains(&c.as_str()))
+        .collect();
+    if cols.is_empty() {
+        return Ok(0);
+    }
+    let set = cols.iter().map(|c| format!("{c} = COALESCE({table}.{c}, o.{c})")).collect::<Vec<_>>().join(", ");
+    let gains = cols.iter().map(|c| format!("({table}.{c} IS NULL AND o.{c} IS NOT NULL)")).collect::<Vec<_>>().join(" OR ");
+    let gained = if table == "fighters" { "COUNT(DISTINCT fighters.prediction_id)" } else { "COUNT(*)" };
+    let n = conn.query_row(&format!("SELECT {gained} FROM {table} JOIN {from} ON {matching} WHERE {gains}"), [], |r| r.get::<_, i64>(0))?;
+    conn.execute(&format!("UPDATE {table} SET {set} FROM {from} WHERE {matching} AND ({gains})"), [])?;
+    Ok(n as usize)
 }
 
 /// The open call for this fight, if Augur has made one.
@@ -968,8 +1038,37 @@ mod tests {
         assert!(settled(&pc).unwrap().iter().all(|c| c.fighters.is_some()));
         assert!(settled(&pc).unwrap().iter().all(|c| c.fighters.as_ref().unwrap().0.fighter.pal_rank.is_some()), "with their pal ranks");
         let again = merge_from(&pc, &file).unwrap();
-        assert_eq!((again.calls, again.duels, again.bets), (0, 0, 0), "merging twice adds nothing");
+        assert_eq!((again.calls, again.duels, again.bets, again.filled), (0, 0, 0, 0), "merging twice adds nothing");
         assert!(merge_from(&pc, &dir.join("missing.db")).is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A backup from a computer that has since filled in what this one lacks (pal ranks on old calls, a duel's
+    /// K.O. time, a species' power): the rows already here gain it, and nothing they had set changes.
+    #[test]
+    fn a_backup_fills_in_what_rows_already_here_are_missing() {
+        let dir = std::env::temp_dir().join(format!("augur-fill-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("backup.db");
+        let mac = crate::seed::store();
+        let pc = open_memory().unwrap();
+        backup_to(&mac, &file).unwrap();
+        merge_from(&pc, &file).unwrap();
+        // the PC has the calls without ranks, one side's power of its own, a duel without its K.O. and a species
+        // without its power
+        pc.execute("UPDATE fighters SET power = 10 WHERE rowid = (SELECT MIN(rowid) FROM fighters)", []).unwrap();
+        pc.execute("UPDATE duels SET ko = NULL WHERE id = 4702", []).unwrap();
+        pc.execute("UPDATE species SET power = NULL", []).unwrap();
+        mac.execute("UPDATE fighters SET tier = 'B', pal_rank = 98, rank_of = 357, power = 65", []).unwrap();
+        backup_to(&mac, &file).unwrap();
+        let m = merge_from(&pc, &file).unwrap();
+        assert_eq!((m.calls, m.duels, m.filled), (0, 0, 19 + 1 + 1), "the 19 calls, duel 4702 and the species");
+        let n = |sql: &str| pc.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(n("SELECT COUNT(*) FROM fighters WHERE pal_rank = 98"), 38, "every side of every call has its rank");
+        assert_eq!(n("SELECT power FROM fighters WHERE rowid = (SELECT MIN(rowid) FROM fighters)"), 10, "what the PC had set stays");
+        assert_eq!(n("SELECT COUNT(*) FROM duels WHERE id = 4702 AND ko IS NOT NULL"), 1);
+        assert_eq!(n("SELECT COUNT(*) FROM species WHERE power IS NULL"), 0);
+        assert_eq!(merge_from(&pc, &file).unwrap().filled, 0, "nothing left to fill");
         let _ = std::fs::remove_dir_all(dir);
     }
 

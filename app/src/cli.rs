@@ -125,8 +125,8 @@ pub fn run(cli: Cli) -> CliResult {
             Ok(())
         }
         Command::Import { file } => {
-            let n = calls::import(&conn, &file)?;
-            println!("{n} calls imported into {}", settings::db_path(&dir).display());
+            let m = calls::import_all(&conn, &file)?;
+            println!("{} calls imported into {}, {} already there filled in", m.calls, settings::db_path(&dir).display(), m.filled);
             Ok(())
         }
         Command::Export { file } => {

@@ -72,8 +72,14 @@ pub fn export(conn: &Connection, path: &Path) -> crate::Result<usize> {
 /// Loads calls into the store, skipping ones already there (same owners and seen_at). Each call is settled from its
 /// recorded winner. Returns how many were added.
 pub fn import(conn: &Connection, path: &Path) -> crate::Result<usize> {
+    import_all(conn, path).map(|m| m.calls)
+}
+
+/// `import`, also counting the calls already here that gained something they were missing (`filled`): a call
+/// already here keeps what it has and only fills its blanks, such as pal ranks read on another computer.
+pub fn import_all(conn: &Connection, path: &Path) -> crate::Result<db::Merged> {
     let text = std::fs::read_to_string(path)?;
-    let mut added = 0;
+    let (mut added, mut filled) = (0, 0);
     for (i, raw) in text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
         let l: Line = serde_json::from_str(raw).map_err(|e| Error::Parse(format!("line {} of the calls file: {e}", i + 1)))?;
         let exists: i64 = conn.query_row(
@@ -82,13 +88,19 @@ pub fn import(conn: &Connection, path: &Path) -> crate::Result<usize> {
             |r| r.get(0),
         )?;
         if exists > 0 {
-            // a call already here: only the damaged mark carries over (it's only ever set, never cleared)
+            // a call already here: the damaged mark carries over (it's only ever set, never cleared), and its
+            // fighters' blanks are filled
             if l.damaged {
                 conn.execute(
                     "UPDATE predictions SET damaged = 1 WHERE home_owner = ?1 AND away_owner = ?2 AND seen_at = ?3",
                     rusqlite::params![l.home_owner, l.away_owner, l.seen_at],
                 )?;
             }
+            let mut gained = false;
+            for (side, f) in &l.fighters {
+                gained |= db::fill_fighter_blanks(conn, (&l.home_owner, &l.away_owner, l.seen_at), side, f)?;
+            }
+            filled += usize::from(gained);
             continue;
         }
         let (Some(home), Some(away)) = (l.fighters.get("home").cloned(), l.fighters.get("away").cloned()) else { continue };
@@ -127,7 +139,7 @@ pub fn import(conn: &Connection, path: &Path) -> crate::Result<usize> {
         }
         added += 1;
     }
-    Ok(added)
+    Ok(db::Merged { calls: added, filled, ..Default::default() })
 }
 
 #[cfg(test)]
@@ -167,6 +179,13 @@ mod tests {
         let pc = db::open_memory().unwrap();
         import(&pc, &out).unwrap();
         assert_eq!(rank(&pc), rank(&mac), "through the calls file");
+        // a computer that already had the calls, without ranks, fills them in from the same file
+        let older = db::open_memory().unwrap();
+        import(&older, fixture).unwrap();
+        let m = import_all(&older, &out).unwrap();
+        assert_eq!((m.calls, m.filled), (0, 1), "nothing added, the ranked call filled in");
+        assert_eq!(rank(&older), rank(&mac));
+        assert_eq!(import_all(&older, &out).unwrap().filled, 0, "nothing left to fill");
         let _ = std::fs::remove_file(out);
     }
 

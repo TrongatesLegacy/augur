@@ -1,5 +1,6 @@
 //! The model tunes itself. Each setting is re-fitted on the evidence that can see it (past duels for types, move
-//! power and records; real calls for the stat settings, which past duels can't see) and a change is kept only when it
+//! power and records; real calls for the stat settings, which past duels can't see; every call, a little at a time,
+//! for the two the sources disagree on) and a change is kept only when it
 //! predicts duels it wasn't fitted on better: the newest quarter of each set is held back to check.
 
 use crate::db::{self, CallRecord};
@@ -18,10 +19,12 @@ pub const MIN_CALLS: usize = 60;
 pub const MIN_COOLDOWN_CALLS: usize = 15;
 /// Changes kept in the log.
 const LOG_LEN: usize = 30;
-/// Records on real calls learns from every call, gradually: it moves from the past duels' species weight toward
-/// what the calls fit best by calls / (calls + this). A few calls barely move it; 60 take it halfway
-pub const SPECIES_LIVE_PRIOR: usize = 60;
-const GRADUAL: &str = "SPECIES_LIVE";
+/// The settings that learn from every real call, gradually: each moves from its starting point toward what the calls
+/// fit best by calls / (calls + this). A few calls barely move it; 60 take it halfway
+pub const GRADUAL_PRIOR: usize = 60;
+/// Records on real calls, and how much moves' real hit sizes count: past duels, at base stats, say one thing about
+/// each and real calls another, so neither is trusted outright. Hit size goes first, as the records sit on top of it.
+const GRADUAL: [&str; 2] = ["HIT_WEIGHT", "SPECIES_LIVE"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -44,7 +47,7 @@ const KNOBS: [Knob; 10] = [
     Knob { key: "PAL_H2H_WEIGHT", source: Source::PastDuels, grid: &[0.0, 0.25, 0.5, 0.75, 1.0, 1.5] },
     Knob { key: "STATS_STEEPNESS", source: Source::LiveCalls, grid: &[1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0] },
     Knob { key: "COOLDOWN_EXP", source: Source::LiveCalls, grid: &[0.0, 0.25, 0.5, 0.75, 1.0] },
-    Knob { key: "HIT_WEIGHT", source: Source::PastDuels, grid: &[0.0, 0.25, 0.5, 0.75, 1.0] },
+    Knob { key: "HIT_WEIGHT", source: Source::LiveCalls, grid: &[0.0, 0.25, 0.5, 0.75, 1.0] },
     Knob { key: "SPECIES_LIVE", source: Source::LiveCalls, grid: &[0.0, 0.25, 0.5, 0.75, 1.0, 1.2, 1.4, 1.6, 2.0] },
     // per 10 points of the site's power score; past duels showed nothing, so only real calls that have it decide
     Knob { key: "PAL_RANK_WEIGHT", source: Source::LiveCalls, grid: &[0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5] },
@@ -123,14 +126,24 @@ fn best(knob: &Knob, s: &Settings, loss: &dyn Fn(&Settings) -> f64, margin: f64)
     scored.iter().filter(|x| x.1 <= low + margin / 10.0).min_by(|a, b| (a.0 - now).abs().total_cmp(&(b.0 - now).abs())).map_or(now, |x| x.0)
 }
 
-/// Records on real calls: the weight that fits every call best, taken calls / (calls + SPECIES_LIVE_PRIOR) of the
-/// way from the past duels' species weight, in steps of 0.05 (so it doesn't wander on each result).
-fn species_live(calls: &[CallRecord], s: &Settings) -> f64 {
-    let prior = s.species_weight;
-    let loss = |v: f64| history::evaluate(calls, &s.with(GRADUAL, v)).0;
-    let best = (0..=40).map(|i| f64::from(i) * 0.05).min_by(|a, b| loss(*a).total_cmp(&loss(*b))).unwrap_or(prior);
+fn is_gradual(key: &str) -> bool {
+    GRADUAL.contains(&key)
+}
+
+/// A gradual setting: the value that fits every call best, taken calls / (calls + GRADUAL_PRIOR) of the way from its
+/// starting point, in steps of 0.05 (so it doesn't wander on each result). Records on real calls start at the past
+/// duels' species weight; hit size starts at 0, since past duels saw no gain from it (on 14 Nov 0.5 took their log
+/// loss 0.661 -> 0.675, while the 87 real calls went 0.548 -> 0.536 and both halves of them agreed).
+fn gradual(key: &str, calls: &[CallRecord], s: &Settings) -> f64 {
+    let (prior, top): (f64, f64) = match key {
+        "SPECIES_LIVE" => (s.species_weight, 2.0),
+        _ => (0.0, 1.0),
+    };
+    let loss = |v: f64| history::evaluate(calls, &s.with(key, v)).0;
+    let steps = (top * 20.0).round() as u32;
+    let best = (0..=steps).map(|i| f64::from(i) * 0.05).min_by(|a, b| loss(*a).total_cmp(&loss(*b))).unwrap_or(prior);
     let n = calls.len() as f64;
-    let v = prior + (best - prior) * n / (n + SPECIES_LIVE_PRIOR as f64);
+    let v = prior + (best - prior) * n / (n + GRADUAL_PRIOR as f64);
     (v * 20.0).round() / 20.0
 }
 
@@ -150,7 +163,7 @@ pub fn learn_on(past: &[PastDuel], calls: &[CallRecord], current: &Settings, now
     let rank_calls = calls.iter().filter(|c| has_pal_ranks(c)).count();
     let ready = |k: &Knob| match (k.source, k.key) {
         (Source::PastDuels, _) => past.len() >= 200,
-        (Source::LiveCalls, GRADUAL) => !calls.is_empty(),
+        (Source::LiveCalls, key) if is_gradual(key) => !calls.is_empty(),
         (Source::LiveCalls, "COOLDOWN_EXP") => calls.len() >= MIN_CALLS && cooldown_calls >= MIN_COOLDOWN_CALLS,
         (Source::LiveCalls, "PAL_RANK_WEIGHT") => rank_calls >= MIN_CALLS,
         (Source::LiveCalls, _) => calls.len() >= MIN_CALLS,
@@ -159,7 +172,7 @@ pub fn learn_on(past: &[PastDuel], calls: &[CallRecord], current: &Settings, now
     // coordinate descent: each setting in turn, a few rounds, on the fitting part only
     let mut cand = current.clone();
     for _ in 0..3 {
-        for k in KNOBS.iter().filter(|k| ready(k) && k.key != GRADUAL) {
+        for k in KNOBS.iter().filter(|k| ready(k) && !is_gradual(k.key)) {
             let v = match k.source {
                 Source::PastDuels => best(k, &cand, &|s| past_loss(past_fit, s), MARGIN_PAST),
                 Source::LiveCalls => best(k, &cand, &|s| live_loss(calls_fit, s), MARGIN_LIVE),
@@ -169,7 +182,7 @@ pub fn learn_on(past: &[PastDuel], calls: &[CallRecord], current: &Settings, now
     }
 
     // keep each group's changes only if they do better on what was held back
-    let held = |k: &&Knob| k.key != GRADUAL;
+    let held = |k: &&Knob| !is_gradual(k.key);
     let moved = |src: Source| KNOBS.iter().filter(held).any(|k| k.source == src && cand.get(k.key) != current.get(k.key));
     let mut out = current.clone();
     if moved(Source::PastDuels) {
@@ -194,7 +207,9 @@ pub fn learn_on(past: &[PastDuel], calls: &[CallRecord], current: &Settings, now
         }
     }
     if !calls.is_empty() {
-        out = out.with(GRADUAL, species_live(calls, &out));
+        for key in GRADUAL {
+            out = out.with(key, gradual(key, calls, &out));
+        }
     }
 
     let before = history::score_past(past_check, current);
@@ -215,7 +230,7 @@ pub fn learn_on(past: &[PastDuel], calls: &[CallRecord], current: &Settings, now
             let (value, was) = (out.get(k.key).unwrap(), current.get(k.key).unwrap());
             let (have, need) = match (k.source, k.key) {
                 (Source::PastDuels, _) => (past.len(), 200),
-                (Source::LiveCalls, GRADUAL) => (calls.len(), 0),
+                (Source::LiveCalls, key) if is_gradual(key) => (calls.len(), 0),
                 (Source::LiveCalls, "COOLDOWN_EXP") if calls.len() >= MIN_CALLS => (cooldown_calls, MIN_COOLDOWN_CALLS),
                 (Source::LiveCalls, "PAL_RANK_WEIGHT") => (rank_calls, MIN_CALLS),
                 (Source::LiveCalls, _) => (calls.len(), MIN_CALLS),
@@ -288,6 +303,38 @@ mod tests {
         }
     }
 
+    /// A settled real call between `home` and `away`, the home side winning or not.
+    fn call(i: i64, home: Fighter, away: Fighter, species_rec: [[f64; 2]; 2], home_won: bool) -> CallRecord {
+        let side = |fighter| crate::db::CallFighter { fighter, ivs: Default::default() };
+        CallRecord {
+            id: i,
+            seen_at: i,
+            home_owner: "a".into(),
+            away_owner: "b".into(),
+            home_pal: "x".into(),
+            away_pal: "y".into(),
+            pick: "home".into(),
+            prob: 0.5,
+            p_stats: None,
+            p_species: None,
+            p_h2h: None,
+            species_rec: Some(species_rec),
+            pal_h2h: [0.0; 2],
+            duel_id: None,
+            winner: Some(if home_won { "home" } else { "away" }.into()),
+            fought_at: None,
+            ko: None,
+            winner_hp_left: None,
+            stake: None,
+            fighters: Some((side(home), side(away))),
+            late: None,
+            late_only: false,
+            version: String::new(),
+            model: String::new(),
+            damaged: false,
+        }
+    }
+
     /// Made-up history where the side with the type edge wins 9 in 10: the learner should raise the type edge,
     /// and keep it because the held-back duels agree.
     #[test]
@@ -316,37 +363,9 @@ mod tests {
     /// alone.
     #[test]
     fn learns_how_much_records_count_on_real_calls() {
-        let side =
-            |hp: f64| crate::db::CallFighter { fighter: Fighter { hp, ..fighter(&["neutral"], "neutral") }, ivs: Default::default() };
-        let calls: Vec<CallRecord> = (0..120i64)
-            .map(|i| CallRecord {
-                id: i,
-                seen_at: i,
-                home_owner: "a".into(),
-                away_owner: "b".into(),
-                home_pal: "x".into(),
-                away_pal: "y".into(),
-                pick: "home".into(),
-                prob: 0.6,
-                p_stats: None,
-                p_species: None,
-                p_h2h: None,
-                species_rec: Some([[10.0, 40.0], [40.0, 10.0]]),
-                pal_h2h: [0.0; 2],
-                duel_id: None,
-                winner: Some(if i % 5 == 0 { "away" } else { "home" }.into()),
-                fought_at: None,
-                ko: None,
-                winner_hp_left: None,
-                stake: None,
-                fighters: Some((side(6000.0), side(4000.0))),
-                late: None,
-                late_only: false,
-                version: String::new(),
-                model: String::new(),
-                damaged: false,
-            })
-            .collect();
+        let pal = |hp: f64| Fighter { hp, ..fighter(&["neutral"], "neutral") };
+        let calls: Vec<CallRecord> =
+            (0..120i64).map(|i| call(i, pal(6000.0), pal(4000.0), [[10.0, 40.0], [40.0, 10.0]], i % 5 != 0)).collect();
         let start = Settings::default();
         assert_eq!(start.species_on_calls(), start.species_weight, "unset, it follows the species weight");
         let l = learn_on(&[], &calls, &start, 1);
@@ -361,51 +380,44 @@ mod tests {
         assert!(v(&few) < start.species_weight && v(&few) > v(&l), "20 calls: {}, 120 calls: {}", v(&few), v(&l));
     }
 
+    /// Real calls between equal pals where the one whose move really hits harder in the tapes wins 4 in 5: hit size
+    /// starts at 0 (past duels saw nothing) and moves up a little at a time, more as the calls add up.
+    #[test]
+    fn learns_how_much_real_hit_size_counts_on_real_calls() {
+        let pal = |hit: f64| Fighter {
+            skills: vec![Move { name: "m".into(), el: "neutral".into(), power: 100.0, lv: 1, hit }],
+            ..fighter(&["neutral"], "neutral")
+        };
+        let calls: Vec<CallRecord> = (0..120i64).map(|i| call(i, pal(1.5), pal(0.7), [[0.0; 2]; 2], i % 5 != 0)).collect();
+        let start = Settings::default();
+        assert_eq!(start.hit_weight, 0.0);
+        let l = learn_on(&[], &calls, &start, 1);
+        let k = l.knobs.iter().find(|k| k.key == "HIT_WEIGHT").unwrap();
+        assert_eq!((k.status.as_str(), k.source, k.have, k.need), ("changed", Source::LiveCalls, 120, 0));
+        assert!(l.check.live_after < l.check.live_before);
+        let few = learn_on(&[], &calls[..20], &start, 1);
+        assert!(
+            few.settings.hit_weight > 0.0 && few.settings.hit_weight < l.settings.hit_weight,
+            "20 calls: {}, 120 calls: {}",
+            few.settings.hit_weight,
+            l.settings.hit_weight
+        );
+        // however hard the calls lean, 120 of them take it only 120 / 180 of the way
+        assert!(l.settings.hit_weight < 1.0, "{:?}", l.settings);
+    }
+
     /// Real calls between equal pals where the higher-ranked one wins 4 in 5: the pal rank waits for 60 calls that
     /// read it, then switches on.
     #[test]
     fn the_pal_rank_learns_once_enough_calls_have_it() {
         use crate::model::PalRank;
-        let side = |power: Option<u32>| crate::db::CallFighter {
-            fighter: Fighter {
-                pal_rank: power.map(|power| PalRank { tier: "B".into(), rank: 400 - power * 3, of: 357, power }),
-                ..fighter(&["neutral"], "neutral")
-            },
-            ivs: Default::default(),
+        let pal = |power: Option<u32>| Fighter {
+            pal_rank: power.map(|power| PalRank { tier: "B".into(), rank: 400 - power * 3, of: 357, power }),
+            ..fighter(&["neutral"], "neutral")
         };
         let calls = |n: i64, ranked: bool| -> Vec<CallRecord> {
-            (0..n)
-                .map(|i| {
-                    let (home, away) = if ranked { (Some(80), Some(40)) } else { (None, None) };
-                    CallRecord {
-                        id: i,
-                        seen_at: i,
-                        home_owner: "a".into(),
-                        away_owner: "b".into(),
-                        home_pal: "x".into(),
-                        away_pal: "y".into(),
-                        pick: "home".into(),
-                        prob: 0.5,
-                        p_stats: None,
-                        p_species: None,
-                        p_h2h: None,
-                        species_rec: Some([[0.0; 2]; 2]),
-                        pal_h2h: [0.0; 2],
-                        duel_id: None,
-                        winner: Some(if i % 5 == 0 { "away" } else { "home" }.into()),
-                        fought_at: None,
-                        ko: None,
-                        winner_hp_left: None,
-                        stake: None,
-                        fighters: Some((side(home), side(away))),
-                        late: None,
-                        late_only: false,
-                        version: String::new(),
-                        model: String::new(),
-                        damaged: false,
-                    }
-                })
-                .collect()
+            let (home, away) = if ranked { (Some(80), Some(40)) } else { (None, None) };
+            (0..n).map(|i| call(i, pal(home), pal(away), [[0.0; 2]; 2], i % 5 != 0)).collect()
         };
         let start = Settings::default();
         let rank = |l: &Learned| l.knobs.iter().find(|k| k.key == "PAL_RANK_WEIGHT").unwrap().clone();

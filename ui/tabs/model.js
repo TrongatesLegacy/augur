@@ -25,18 +25,25 @@ export const KNOBS = {
 // a setting's value: Records on real calls follows Species records until it's learned or set
 export const knobValue = (s, key) => s[key] ?? (key === 'SPECIES_LIVE' ? s.SPECIES_WEIGHT : undefined);
 
+// the settings that learn from every real call, a little at a time, and where each starts
+const GRADUAL = {
+  SPECIES_LIVE: 'Starts at Species records (learned on past duels, which have base stats only)',
+  HIT_WEIGHT: 'Starts at 0 (past duels, which have base stats only, saw no gain from it)',
+};
+
 // what the learner last did with a setting, as one line under its name (cut short if need be; the hover has it all)
 function knobNote(k, auto) {
   if (!k) return '';
   const note = (cls, text, more = text) => `<small class="kn ${auto ? cls : 'muted'}" title="${esc(more)}">${esc(text)}</small>`;
   const was = k.status === 'changed' ? `was ${KNOBS[k.key][3](k.was)} · ` : '';
-  // Records on real calls moves calls / (calls + 60) of the way from Species records to what the calls fit best
-  if (k.key === 'SPECIES_LIVE') {
+  // these move calls / (calls + 60) of the way from where they start to what the calls fit best
+  const start = GRADUAL[k.key];
+  if (start) {
     const share = pct(k.have / (k.have + 60));
     return note(
       k.status === 'changed' ? 'ok' : '',
       `${was}${share} toward ${fmt(k.have)} calls’ fit`,
-      `Starts at Species records (learned on past duels, which have base stats only) and moves toward the weight your ${fmt(k.have)} real calls fit best: calls ÷ (calls + 60) of the way, ${share} so far. The more calls, the more it trusts them.`,
+      `${start} and moves toward the weight your ${fmt(k.have)} real calls fit best: calls ÷ (calls + 60) of the way, ${share} so far. The more calls, the more it trusts them.`,
     );
   }
   // the pal rank counts only the calls that read it

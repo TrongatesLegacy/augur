@@ -1,7 +1,7 @@
 // Pals: every species with duels, and one species in detail: record, moves as they really hit, owners, matchups.
 import { invoke } from '../lib/bridge.js';
 import { esc, fmt, pct, short } from '../lib/format.js';
-import { orb } from '../lib/pal.js';
+import { art, orb } from '../lib/pal.js';
 import { columns, empty, ring } from '../lib/viz.js';
 
 async function detail(app) {
@@ -23,7 +23,7 @@ async function detail(app) {
     : empty('chart', 'No tapes yet', 'The background backfill fills these in.');
   const rate = d.duels ? d.wins / d.duels : null;
   const stat = (label, v) => `<div class="bst"><span>${label}</span><b>${v ?? '—'}</b></div>`;
-  el.innerHTML = `<div class="panel hero">${orb(state.pal, sp.slug, 'h', 92)}
+  el.innerHTML = `<div class="panel hero">${art(state.pal, sp.slug)}
       <div><div class="cond" style="font-weight:800;font-size:34px;line-height:1">${esc(state.pal)}</div>
         <div style="display:flex;gap:6px;margin:8px 0">${(sp.types || []).map((t) => `<span class="el">${esc(t)}</span>`).join('')}${sp.power != null ? `<span class="el">Power ${sp.power}</span>` : ''}</div>
         <div class="bsts">${stat('Base HP', sp.base_hp)}${stat('Attack', sp.base_atk)}${stat('Defence', sp.base_def)}</div></div>

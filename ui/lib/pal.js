@@ -13,6 +13,12 @@ export function orb(pal, slug, cls, size, crown) {
   return orbFor(pal, slug && ['pal_image', { slug }], cls, size, crown);
 }
 
+// A pal's art faded into what holds it, rather than a round icon: no initials, nothing until the art is cached. The
+// holder is position: relative, clips it, and puts it first so what follows draws over it
+export function art(pal, slug, cls = '') {
+  return orb(pal, slug, `art ${cls}`, 0);
+}
+
 export function face(name, cls, size) {
   return orbFor(name, name && ['player_image', { name }], cls, size);
 }

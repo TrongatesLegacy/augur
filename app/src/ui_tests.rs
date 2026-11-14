@@ -343,7 +343,8 @@ pub fn fixture_data() -> Value {
         // what Live and the popover show between duels (swapped in by the "offair" page and the off-air tray test)
         "off_air": views::off_air(&conn, &StakeSettings::default()).unwrap(),
         "backfill_progress": augur_engine::backfill::Progress { phase: "duels".into(), done: 1200, total: 4702, ..Default::default() },
-        "pal_image": null,
+        // a made-up stand-in for a pal's art (the real art is never bundled), so the screenshots show it swapped in
+        "pal_image": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMDAgMTAwIj48ZGVmcz48cmFkaWFsR3JhZGllbnQgaWQ9ImciIGN4PSIuNCIgY3k9Ii4zNSIgcj0iLjciPjxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iI2Q5Y2NmZiIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzhmN2JkNiIvPjwvcmFkaWFsR3JhZGllbnQ+PC9kZWZzPjxwYXRoIGQ9Ik0yMiA0MCBMMzAgOCBMNDYgMzAgWiBNNzggNDAgTDcwIDggTDU0IDMwIFoiIGZpbGw9IiM5ZDhhZTAiLz48ZWxsaXBzZSBjeD0iNTAiIGN5PSI2MCIgcng9IjM2IiByeT0iMzIiIGZpbGw9InVybCgjZykiLz48ZWxsaXBzZSBjeD0iMzciIGN5PSI1NiIgcng9IjQuNSIgcnk9IjYiIGZpbGw9IiM0YjNmN2EiLz48ZWxsaXBzZSBjeD0iNjMiIGN5PSI1NiIgcng9IjQuNSIgcnk9IjYiIGZpbGw9IiM0YjNmN2EiLz48ZWxsaXBzZSBjeD0iMzAiIGN5PSI2OCIgcng9IjYiIHJ5PSIzLjUiIGZpbGw9IiNmMmE3YzgiIG9wYWNpdHk9Ii43Ii8+PGVsbGlwc2UgY3g9IjcwIiBjeT0iNjgiIHJ4PSI2IiByeT0iMy41IiBmaWxsPSIjZjJhN2M4IiBvcGFjaXR5PSIuNyIvPjxwYXRoIGQ9Ik00NSA3MCBRNTAgNzQgNTUgNzAiIHN0cm9rZT0iIzRiM2Y3YSIgc3Ryb2tlLXdpZHRoPSIyIiBmaWxsPSJub25lIiBzdHJva2UtbGluZWNhcD0icm91bmQiLz48L3N2Zz4=",
         // a stand-in Kick picture, so the screenshots show faces swapped in
         "learned_settings": model::Settings::default(),
         "learn_now": null,
@@ -451,7 +452,10 @@ const MAIN_DRIVER: &str = r#"
       .map((el) => `${el.tagName.toLowerCase()}.${[...el.classList].join('.')} (${el.clientWidth}px, needs ${el.scrollWidth}px): ${el.textContent.trim().replace(/\s+/g, ' ').slice(0, 50)}`);
   if (!window.augur) window.__errors.push('the page never started (a module failed to load)');
   else {
-    for (const tab of only ? [only] : ['live', 'liveedge', 'history', 'call', 'bets', 'pals', 'players', 'you', 'titles', 'titlesone', 'mypals', 'mypalsone', 'mypalsroll', 'mypalsbusy', 'mypalskept', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'changelog', 'updates', 'offair']) {
+    for (const tab of only ? [only] : ['live', 'liveedge', 'history', 'call', 'bets', 'pals', 'players', 'playersfew', 'you', 'titles', 'titlesone', 'mypals', 'mypalsone', 'mypalsroll', 'mypalsbusy', 'mypalskept', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'changelog', 'updates', 'offair']) {
+      // "playersfew" is Players with only 4 pals in the box: room enough to stack the cards' rolls
+      DATA.player_all ||= DATA.player;
+      DATA.player = tab === 'playersfew' ? { ...DATA.player_all, roster: DATA.player_all.roster.slice(0, 4) } : DATA.player_all;
       // "ownmodel" is Settings › Model with self-tuning off and your own values
       const own = DATA.get_settings;
       if (tab === 'ownmodel') DATA.get_settings = { ...own, model_auto: false };
@@ -485,7 +489,7 @@ const MAIN_DRIVER: &str = r#"
       } else window.augur.state.live = DATA.live;
       window.augur.state.settingsPage = ['staking', 'sync', 'updates'].includes(tab) ? tab : tab === 'ownmodel' ? 'model' : tab === 'changelog' ? 'updates' : 'general';
       // "welcome" is the fresh install's overlay, over Live
-      await window.augur.show(['bets', 'call'].includes(tab) ? 'history' : ['staking', 'sync', 'changelog', 'updates', 'ownmodel'].includes(tab) ? 'settings' : ['welcome', 'offair', 'liveedge'].includes(tab) ? 'live' : ['titles', 'titlesone'].includes(tab) || tab.startsWith('mypals') ? 'you' : tab);
+      await window.augur.show(['bets', 'call'].includes(tab) ? 'history' : ['staking', 'sync', 'changelog', 'updates', 'ownmodel'].includes(tab) ? 'settings' : ['welcome', 'offair', 'liveedge'].includes(tab) ? 'live' : ['titles', 'titlesone'].includes(tab) || tab.startsWith('mypals') ? 'you' : tab === 'playersfew' ? 'players' : tab);
       await sleep(300);
       // the page and every box in it that scrolls (its panel's title, and how much it holds against what shows)
       const scrolling = () =>
@@ -493,7 +497,31 @@ const MAIN_DRIVER: &str = r#"
           .filter((el) => /auto|scroll/.test(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight + 2)
           .map((el) => `${el.closest('.panel')?.querySelector('h3')?.textContent || el.className}: ${el.clientHeight} of ${el.scrollHeight}px`);
       out.scrollers ||= {};
+      // the headline's two sides keep their text inside the stage and clear of the middle (the art behind them can't push them)
+      const stageFits = () => {
+        const st = document.querySelector('#main .stage');
+        if (!st) return null;
+        const [b, mid] = [st.getBoundingClientRect(), st.querySelector('.cmid').getBoundingClientRect()];
+        return [...st.querySelectorAll(':scope > .fx :is(.nm, .ow > span, .ctags, .els)')].every((el) => {
+          const r = el.getBoundingClientRect();
+          return r.left >= b.left - 1 && r.right <= b.right + 1 && (r.right <= mid.left + 1 || r.left >= mid.right - 1);
+        });
+      };
       out.scrollers[tab] = scrolling();
+      // a pal box's cards line up: in each row of cards, the talent rolls start at the same height
+      if (['players', 'playersfew', 'mypals'].includes(tab)) {
+        const rows = {};
+        for (const c of document.querySelectorAll('.bxp')) (rows[Math.round(c.getBoundingClientRect().top)] ||= []).push(Math.round(c.querySelector('.bxi').getBoundingClientRect().top - c.getBoundingClientRect().top));
+        out[tab + 'Stacked'] = !!document.querySelector('.bxbox.roomy');
+        out[tab + 'BoxRows'] = Object.values(rows).map((tops) => Math.max(...tops) - Math.min(...tops));
+        // the art behind a card is decoration: the cards and the box are the same size without it
+        const sizes = () => JSON.stringify([...document.querySelectorAll('.bxbox, .bxp')].map((el) => [el.offsetWidth, el.offsetHeight, el.scrollHeight]));
+        const arts = [...document.querySelectorAll('.bxart')];
+        const withArt = sizes();
+        arts.forEach((a) => (a.style.display = 'none'));
+        out[tab + 'BoxArt'] = { shown: arts.filter((a) => a.querySelector('img')).length, cards: document.querySelectorAll('.bxp').length, same: sizes() === withArt };
+        arts.forEach((a) => (a.style.display = ''));
+      }
       if (tab === 'bets') out.betRows = document.querySelectorAll('#main tr[data-call]').length;
       // Updates' panels don't run into each other, and their text stays inside them (the changelog scrolls in its own)
       if (tab === 'updates' || tab === 'changelog') {
@@ -515,6 +543,7 @@ const MAIN_DRIVER: &str = r#"
           return !r.height || (r.bottom <= b.bottom + 1 && r.right <= b.right + 1);
         });
         const ends = [...document.querySelectorAll('.hr .re')].map((e) => e.getBoundingClientRect());
+        out[tab + 'Stage'] = stageFits();
         out[tab + 'Panels'] = {
           h2h: inside(document.querySelector('.hh')),
           race: inside(document.querySelector('.hr')),
@@ -529,6 +558,7 @@ const MAIN_DRIVER: &str = r#"
       if (tab === 'call') {
         document.querySelector('#main tr[data-call]')?.click();
         await sleep(400);
+        out.callStage = stageFits();
         out.chart = { lines: document.querySelectorAll('.hpc path.line').length, proj: document.querySelectorAll('.hpc path.proj').length, hits: document.querySelectorAll('.hpc circle').length, ko: !!document.querySelector('.hpc .ko') };
         out.fits = document.getElementById('main').scrollHeight <= document.getElementById('main').clientHeight + 1;
         out.scrollers[tab] = scrolling();
@@ -814,6 +844,37 @@ fn big_numbers_fit() {
     assert!(spills.is_empty(), "text spills out of its box with big numbers:\n{}", spills.join("\n"));
 }
 
+/// Long names fit: the longest pal names and 25-character owners (Kick's longest) stay inside the headline on Live
+/// and in a call's breakdown, clear of the middle, and spill nowhere.
+#[test]
+fn long_names_fit() {
+    if !have_chrome() {
+        return;
+    }
+    let mut data = fixture_data();
+    for call in ["/live/detail/call", "/call_detail/call"] {
+        let call = data.pointer_mut(call).expect("a call in the fixture");
+        call["home_pal"] = json!("Jormuntide Ignis");
+        call["away_pal"] = json!("Bellanoir Libero");
+        call["home_owner"] = json!("player-with-a-long-name-1");
+        call["away_owner"] = json!("player-with-a-long-name-2");
+    }
+    let port = serve("index.html", &data, MAIN_DRIVER);
+    let r = render_at(port, "main", None, (1280, 720));
+    assert_eq!(r["errors"], json!([]), "script errors: {}", r["errors"]);
+    for tab in ["live", "call"] {
+        assert_eq!(r[format!("{tab}Stage")], true, "{tab}: long names run into the middle or out of the headline");
+        assert_eq!(r["spills"][tab], json!([]), "{tab}: long names spill: {}", r["spills"][tab]);
+    }
+    if let Some(folder) = std::env::var_os("AUGUR_UI_SHOTS").map(PathBuf::from) {
+        let folder = folder.join("long");
+        std::fs::create_dir_all(&folder).unwrap();
+        for tab in ["live", "call"] {
+            render(port, tab, Some((&folder, tab)));
+        }
+    }
+}
+
 #[test]
 fn every_tab_renders_headless() {
     if !have_chrome() {
@@ -885,6 +946,9 @@ fn every_tab_renders_headless() {
         text("liveedge")
     );
     assert_eq!((&r["liveFits"], &r["liveedgeFits"]), (&json!(true), &json!(true)), "Live fits the window without scrolling");
+    for tab in ["liveStage", "liveedgeStage", "callStage"] {
+        assert_eq!(r[tab], true, "{tab}: the headline's text runs into the middle or out of the stage");
+    }
     for tab in ["livePanels", "liveedgePanels"] {
         let f = &r[tab];
         assert_eq!((&f["h2h"], &f["race"]), (&json!(true), &json!(true)), "{tab}: nothing spills out of the panels: {f}");
@@ -1053,6 +1117,15 @@ fn every_tab_renders_headless() {
         text("pals")
     );
     assert!(text("players").contains("nyafia primo"), "Players: {}", text("players"));
+    assert_eq!(r["playersfewStacked"], true, "a box with room to spare stacks its cards' rolls");
+    assert_eq!(r["playersStacked"], false, "a full box keeps its cards' rolls side by side");
+    for tab in ["players", "playersfew", "mypals"] {
+        let rows = r[format!("{tab}BoxRows")].as_array().unwrap_or_else(|| panic!("{tab}: no pal box cards"));
+        assert!(!rows.is_empty() && rows.iter().all(|d| d.as_i64() == Some(0)), "{tab}: the box cards' rows don't line up: {rows:?}");
+        let art = &r[format!("{tab}BoxArt")];
+        assert_eq!(art["shown"], art["cards"], "{tab}: every card shows its pal's art: {art}");
+        assert_eq!(art["same"], true, "{tab}: the art changes the size of the box or its cards");
+    }
     assert!(
         text("model").contains("history test")
             && text("model").contains("learned from your duels")
@@ -1119,6 +1192,7 @@ fn every_tab_renders_headless() {
             "bets",
             "pals",
             "players",
+            "playersfew",
             "you",
             "titles",
             "titlesone",

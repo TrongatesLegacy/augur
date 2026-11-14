@@ -2,7 +2,10 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.12 (current)
+## 0.1.13 (current)
+- Pal box cards line up, and pal art across the app
+
+## 0.1.12
 - You › Pals: see what a reroll would do for each of your pals, and reroll from Augur
 
 ## 0.1.11

@@ -2,7 +2,10 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.15 (current)
+## 0.1.16 (current)
+- Augur can place its bet itself: sign in to Kick in Settings › Auto bet, and it bets once per fight in the stream's chat, with Cancel
+
+## 0.1.15
 - Augur can stay open on two computers: each duel counts once, and a call is never stored twice
 - The model re-learns from its starting settings after every result, so small chance wins don't pile up and make calls overconfident
 

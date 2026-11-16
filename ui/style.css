@@ -1236,3 +1236,4 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 .wpanel .ph .dot { display: inline-block; margin-right: 5px; vertical-align: 1px; }
 .wsvg [hidden] { display: none; }
 .wprojt { fill: var(--gold); font: 700 8.5px var(--sans); letter-spacing: .05em; opacity: .8; }
+.wt i.muted { background: rgba(255,255,255,.18); }

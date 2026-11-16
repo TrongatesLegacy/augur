@@ -495,9 +495,11 @@ pub struct MoveDamage {
 #[derive(Clone, Debug, Serialize)]
 pub struct ModelCall {
     pub factors: Vec<Factor>,
-    /// the factors added up (log-odds toward home), and as a chance
+    /// the factors added up (log-odds toward home), and as a chance (after `doubt`)
     pub total: f64,
     pub p_home: f64,
+    /// the total was divided by this for moves the site doesn't list (1: not at all)
+    pub doubt: f64,
     /// the model re-run on the call's fighters with its settings (None without fighters or records)
     pub score: Option<model::Score>,
     /// the factors came from that re-run, not the call as stored (older calls didn't keep them)
@@ -908,10 +910,11 @@ fn model_call(c: &db::CallRecord, s: &model::Settings) -> Option<ModelCall> {
         let w = s.pal_rank_weight;
         factors.push(Factor { key: "rank".into(), p_home: sc.p_rank, weight: w, logit: w * model::logit(sc.p_rank) });
     }
-    let total = factors.iter().map(|f| f.logit).sum();
+    let total = factors.iter().map(|f| f.logit).sum::<f64>();
+    let doubt = c.fighters.as_ref().map_or(1.0, |(h, a)| model::doubt(&h.fighter, &a.fighter));
     let parts = c.fighters.as_ref().map(|(h, a)| stats_parts(s, &h.fighter, &a.fighter)).unwrap_or_default();
     let summary = summary(c, &parts, &factors);
-    Some(ModelCall { factors, total, p_home: model::sigmoid(total), score, rescored, parts, summary })
+    Some(ModelCall { factors, total, p_home: model::sigmoid(total / doubt), doubt, score, rescored, parts, summary })
 }
 
 fn side_detail(s: &model::Settings, me: &model::Fighter, them: &model::Fighter) -> SideDetail {

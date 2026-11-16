@@ -762,6 +762,14 @@ const MAIN_DRIVER: &str = r#"
         await sleep(300);
         out.callBare = document.getElementById('main').innerText;
         out.spills.callBare = spills();
+        // a call where a side leaned on unlisted moves: its sum is divided down, shown as its own step
+        DATA.call_detail = { ...full, model: { ...full.model, doubt: 1.6, p_home: 1 / (1 + Math.exp(-full.model.total / 1.6)) } };
+        window.augur.state.call = null;
+        await window.augur.show('history');
+        await sleep(200);
+        document.querySelector('#main tr[data-call]')?.click();
+        await sleep(300);
+        out.callDoubt = document.getElementById('main').innerText;
         DATA.call_detail = full;
         // Back: the list again, in the same range and view
         document.getElementById('back')?.click();
@@ -1162,6 +1170,9 @@ fn every_tab_renders_headless() {
         "an old call without a tape or fighters still opens: {bare}"
     );
     assert!(r["callBack"].as_str().unwrap().to_lowercase().contains("calibration"), "Back returns to the calls");
+    let doubt = r["callDoubt"].as_str().unwrap().to_lowercase();
+    assert!(doubt.contains("less sure ÷1.60") && doubt.contains("unlisted moves"), "a call made less sure says so in its sum: {doubt}");
+    assert!(!call.contains("less sure"), "and one that wasn't doesn't: {call}");
     assert_eq!(r["callBackRange"], json!("today"), "in the range it was in");
     // everything fits at 1280x720 without a box scrolling inside it, even in the report's shorter window: only the
     // lists that grow without end (History's calls and your bets) scroll

@@ -127,8 +127,16 @@ export function waterfall(d, footer = modelFooter(d), tabbed = false) {
     })
     .join('');
   const fav = m.p_home >= 0.5 ? 'home' : 'away';
-  const total = `<div class="wf total"><div class="wl"><b>Together</b><small>log-odds ${signedLogit(m.total)}</small></div>
-    <div class="wt"><i class="gold" style="left:${Math.min(50, at(m.total))}%;width:${Math.abs(at(m.total) - 50)}%"></i></div>
+  // a side leaning on moves the site doesn't list makes the call less sure: the sum is divided down toward 50%
+  const sure = m.doubt > 1.005 ? m.total / m.doubt : m.total;
+  const doubt =
+    m.doubt > 1.005
+      ? `<div class="wf"><div class="wl"><b>Less sure <em>÷${m.doubt.toFixed(2)}</em></b><small>unlisted moves are harder to call</small></div>
+    <div class="wt"><i class="muted" style="left:${Math.min(at(sure), at(m.total))}%;width:${Math.abs(at(m.total) - at(sure))}%"></i><s style="left:${at(sure)}%"></s></div>
+    <div class="wv"><b>${signedLogit(sure)}</b><small>log-odds</small></div></div>`
+      : '';
+  const total = `${doubt}<div class="wf total"><div class="wl"><b>Together</b><small>log-odds ${signedLogit(sure)}</small></div>
+    <div class="wt"><i class="gold" style="left:${Math.min(50, at(sure))}%;width:${Math.abs(at(sure) - 50)}%"></i></div>
     <div class="wv"><b class="gold">${pct(fav === 'home' ? m.p_home : 1 - m.p_home)}</b><small>${esc(pal(c, fav))}</small></div></div>`;
   const sum = `${m.summary ? `<p class="csum">${esc(m.summary)}</p>` : ''}${rows}${total}
     ${m.rescored ? '<div class="small">Re-run on the fighters it saw with its settings: the call didn’t keep its factors.</div>' : ''}`;

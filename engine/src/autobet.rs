@@ -49,7 +49,7 @@ impl Default for AutoBetSettings {
             enabled: false,
             channel: String::new(),
             test_mode: true,
-            min_chance: 0.6,
+            min_chance: 0.65,
             max_bets_per_day: 40,
             max_credits_per_day: 100_000,
             skip_hidden_stats: true,

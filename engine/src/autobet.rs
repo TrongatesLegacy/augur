@@ -52,7 +52,8 @@ impl Default for AutoBetSettings {
             skip_hidden_stats: true,
             hold_secs: 10,
             countdown_secs: 5,
-            latest_secs: 60,
+            // picks stay open about five minutes; three leaves room for a slow call and still beats the lock
+            latest_secs: 180,
         }
     }
 }
@@ -301,6 +302,38 @@ pub fn bot_reply<'a>(lines: &'a [Line], line: &Line) -> Option<&'a Line> {
     })
 }
 
+/// The betting bot taking the bet, found by its reply alone: a reply to your line with the command's text, after
+/// it was sent. The reply keeps what it answers, so this works even when your own line has gone (the stream's AI
+/// moderator deletes some bet commands after the bot has taken them, or the chat moved on).
+pub fn bot_took<'a>(lines: &'a [Line], user: &str, command: &str, sent_at: u64) -> Option<&'a Line> {
+    let user = user.trim().to_lowercase();
+    lines.iter().find(|l| {
+        l.at + SLACK_MS >= sent_at
+            && l.reply_to_user.as_deref() == Some(user.as_str())
+            && l.reply_to_content.as_deref().is_some_and(|c| c.trim().eq_ignore_ascii_case(command.trim()))
+            && {
+                let c = l.content.to_uppercase();
+                c.contains(" ON HOME") || c.contains(" ON AWAY")
+            }
+    })
+}
+
+/// Auto bets that went out unconfirmed but are in your picks list now (a bet of yours matched to them, as History's
+/// Auto label does): confirmed. Returns how many.
+pub fn confirm_from_picks(conn: &Connection, bets: &[Pick], bet_seen_at: &HashMap<u64, u64>, now: u64) -> Result<usize> {
+    let autos = all(conn)?;
+    let via = via(bets, &autos, bet_seen_at);
+    let mut n = 0;
+    for a in autos.iter().filter(|a| a.device.is_none() && !a.test && matches!(a.status.as_str(), "unconfirmed" | "sent" | "seen")) {
+        let theirs = |b: &&Pick| b.home_owner == a.home_owner && b.away_owner == a.away_owner && b.backed == a.side;
+        if bets.iter().filter(theirs).any(|b| via.get(&b.seq).is_some_and(|v| v.via == "auto")) {
+            update(conn, a.id, "confirmed", Some("in your picks list"), now)?;
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
 /// Kick's chat times are to the second, and its clock and this computer's differ a little.
 const SLACK_MS: u64 = 5_000;
 
@@ -434,7 +467,7 @@ mod tests {
         // these rule the fight out
         assert!(skip(Moment { already_bet: true, ..moment() }), "you bet yourself");
         assert!(skip(Moment { signed_in: false, ..moment() }));
-        assert!(skip(Moment { open_ms: 61_000, ..moment() }), "too late");
+        assert!(skip(Moment { open_ms: 181_000, ..moment() }), "too late");
         assert!(skip(Moment { today: (40, 0), ..moment() }), "bets a day");
         assert!(skip(Moment { today: (3, 98_000), ..moment() }), "credits a day");
         assert_eq!(
@@ -529,6 +562,34 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "");
         assert_eq!(spent_since(&pc, 0).unwrap(), (0, 0), "another computer's bets don't count against this one's limits");
         let _ = std::fs::remove_file(file);
+    }
+
+    /// The bot's reply alone confirms the bet: your line can be gone (the AI moderator deletes some bet commands
+    /// after the bot has taken them).
+    #[test]
+    fn the_bots_reply_confirms_it_even_without_your_line() {
+        let mut lines =
+            kick::parse_history(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/pages/kick-history.json")).unwrap())
+                .unwrap();
+        let at = lines.iter().find(|l| l.content == "!h 2300").unwrap().at;
+        lines.retain(|l| l.content != "!h 2300");
+        assert!(sent_line(&lines, "player-01", "!h 2300", at).is_none(), "the line itself is gone");
+        assert!(bot_took(&lines, "Player-01", "!H 2300", at - 1_000).is_some_and(|r| r.content.starts_with("2300 on HOME")));
+        assert!(bot_took(&lines, "player-02", "!h 2300", at).is_none(), "someone else's bet isn't yours");
+        assert!(bot_took(&lines, "player-01", "!h 2300", at + 60_000).is_none(), "an older reply isn't this bet");
+    }
+
+    /// An auto bet the chat couldn't confirm is confirmed once your picks list shows it.
+    #[test]
+    fn the_picks_list_confirms_an_unconfirmed_bet() {
+        let conn = crate::db::open_memory().unwrap();
+        let id = claim(&conn, &AutoBet { claimed_at: 1_000_000, ..bet(1) }).unwrap().unwrap();
+        update(&conn, id, "unconfirmed", Some("not seen in the chat"), 1_030_000).unwrap();
+        let seen = HashMap::from([(9, 1_200_000)]);
+        assert_eq!(confirm_from_picks(&conn, &[pick(9, None, "away", 2300)], &seen, 2_000_000).unwrap(), 0, "the other side isn't it");
+        assert_eq!(confirm_from_picks(&conn, &[pick(9, None, "home", 2300)], &seen, 2_000_000).unwrap(), 1);
+        let b = for_call(&conn, 1).unwrap().unwrap();
+        assert_eq!((b.status.as_str(), b.reason.as_deref()), ("confirmed", Some("in your picks list")));
     }
 
     fn pick(seq: u64, duel: Option<u64>, side: &str, stake: u64) -> Pick {

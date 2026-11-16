@@ -32,6 +32,9 @@ pub struct Line {
     /// for a reply: the id of the line it answers, and who sent that line (lowercase)
     pub reply_to: Option<String>,
     pub reply_to_user: Option<String>,
+    /// what the line it answers said (kept in the reply, so it's known even after that line is deleted)
+    #[serde(default)]
+    pub reply_to_content: Option<String>,
 }
 
 pub fn channel_url(slug: &str) -> String {
@@ -89,6 +92,7 @@ pub fn parse_history(body: &str) -> Result<Vec<Line>> {
                 content: m["content"].as_str().unwrap_or_default().to_string(),
                 reply_to: original["id"].as_str().map(str::to_string),
                 reply_to_user: original["sender"]["username"].as_str().map(str::to_lowercase),
+                reply_to_content: original["content"].as_str().map(str::to_string),
             })
         })
         .collect();

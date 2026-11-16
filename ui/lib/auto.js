@@ -64,6 +64,17 @@ export function placeChat() {
   return invoke('chat_place', { spot }).catch(() => {});
 }
 
+// Live's and the popover's Copy beside an armed auto bet: its status, and whether Copy is dimmed (an auto bet on this
+// fight has gone out, so copying would bet twice). Copy stays usable either way: after a Cancel, a skip or a failed
+// send the bet is yours to type. Test mode bets into your own chat, so it changes nothing here.
+export const WENT_OUT = ['sending', 'sent', 'seen', 'confirmed', 'unconfirmed'];
+export function besideCopy(a) {
+  if (!a?.enabled || !a.armed || a.test) return { note: '', dim: false };
+  const out = !!a.bet && WENT_OUT.includes(a.bet.status);
+  const chip = a.bet ? statusChip(a.bet.status) : a.phase === 'countdown' ? '<span class="ast gold">Soon</span>' : '<span class="ast">Armed</span>';
+  return { note: `<span class="anote" title="Auto bet: ${esc(a.message || 'armed')}">${chip}</span>`, dim: out };
+}
+
 // Hides the chat webview (another tab is showing)
 export const hideChat = () => invoke('chat_place', { spot: { x: 0, y: 0, w: 0, h: 0, visible: false } }).catch(() => {});
 

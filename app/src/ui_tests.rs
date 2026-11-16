@@ -1449,16 +1449,16 @@ fn tray_popover_says_when_the_feed_cant_be_read() {
     assert!(t.contains("can’t read palduels") && !t.contains("can’t reach"), "{t}");
 }
 
-/// Armed but unable to bet: the popover says why, with Fix; armed and working, just a quiet line; and the auto bet
-/// stands in for Copy bet.
+/// Armed but unable to bet: the popover says why, with Fix; and with an auto bet already in on the fight, Copy bet
+/// stays but dims beside its status.
 const TRAY_AUTO_DRIVER: &str = r#"
-DATA.auto_view = { ...DATA.auto_on, phase: 'waiting', problem: 'Signed out of Kick', blocking: true };
+DATA.auto_view = { ...DATA.auto_on, phase: 'done', problem: 'Signed out of Kick', blocking: true, bet: { status: 'confirmed', command: '!a 3900' } };
 (async () => {
   document.body.style.width = '340px';
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   for (let i = 0; i < 60 && !window.augur; i++) await sleep(100);
   await sleep(200);
-  document.getElementById('report').textContent = JSON.stringify({ tray: document.getElementById('pop').innerText, fix: !!document.getElementById('afix'), copy: !!document.getElementById('cb'), errors: window.__errors });
+  document.getElementById('report').textContent = JSON.stringify({ tray: document.getElementById('pop').innerText, fix: !!document.getElementById('afix'), copy: !!document.getElementById('cb'), dim: !!document.querySelector('#cb.dim'), errors: window.__errors });
 })();
 "#;
 
@@ -1471,5 +1471,8 @@ fn tray_popover_warns_when_auto_bet_cant_bet() {
     assert_eq!(r["errors"], json!([]), "script errors: {}", r["errors"]);
     let t = r["tray"].as_str().unwrap().to_lowercase();
     assert!(t.contains("auto bet can't bet: signed out of kick") && r["fix"] == json!(true), "{t}");
-    assert_eq!(r["copy"], json!(false), "armed, the auto bet stands in for Copy bet: {t}");
+    assert!(
+        r["copy"] == json!(true) && r["dim"] == json!(true) && t.contains("confirmed"),
+        "an auto bet already in: Copy bet stays, dimmed, beside its status: {t}"
+    );
 }

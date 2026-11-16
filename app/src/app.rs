@@ -76,6 +76,9 @@ pub struct Shared {
     /// betting can bet (just armed)
     pub chat_shown: AtomicBool,
     pub auto_check: AtomicBool,
+    /// the channel the chat was last pointed at: it's sent somewhere new only when this changes (going by its
+    /// address while it loads sent it again and again)
+    pub chat_channel: Mutex<String>,
     pub kick: Mutex<crate::autobet::KickLogin>,
     /// the tray menu's Arm auto bet item
     pub arm_item: Mutex<Option<MenuItem<tauri::Wry>>>,
@@ -439,6 +442,18 @@ fn bets_loop(app: AppHandle, shared: Arc<Shared>) {
             let ctl = backfill::Control { stop: &shared.stop, busy: &busy, progress: &progress };
             let mut page = |n: u32, p: &mut Progress| pacer.get(&format!("{}/u/{user}?bp={n}", site::BASE), |b| b.to_string(), &ctl, p);
             let outcome = bets::import(&conn, &mut page, &ctl, now_ms());
+            // an auto bet the chat couldn't confirm is confirmed once your picks list shows it
+            if outcome.is_ok() {
+                let seen: std::collections::HashMap<u64, u64> = conn
+                    .prepare("SELECT seq, COALESCE(seen_at, 0) FROM bets")
+                    .and_then(|mut st| st.query_map([], |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)?.max(0) as u64)))?.collect())
+                    .unwrap_or_default();
+                if let Ok(all) = db::bets(&conn) {
+                    if augur_engine::autobet::confirm_from_picks(&conn, &all, &seen, now_ms()).unwrap_or(0) > 0 {
+                        crate::autobet::refresh(&app, &shared);
+                    }
+                }
+            }
             // your pet and Hall: two more pages, at most every 30 minutes
             let last: u64 = db::meta_get(&conn, "pet_page_at").ok().flatten().and_then(|v| v.parse().ok()).unwrap_or(0);
             if outcome.is_ok() && now_ms().saturating_sub(last) > 30 * 60_000 {
@@ -466,14 +481,25 @@ fn bets_loop(app: AppHandle, shared: Arc<Shared>) {
     }
 }
 
+/// The main window and its page. Looked up as a window and a webview, never as a "webview window": with the Kick chat
+/// in it (auto betting) the window holds two webviews, and Tauri no longer finds it that way.
+pub(crate) fn main_window(app: &AppHandle) -> Option<tauri::Window> {
+    app.get_window("main")
+}
+
+fn main_page(app: &AppHandle) -> Option<tauri::Webview> {
+    app.get_webview("main")
+}
+
 /// The pages are laid out for 1280x720. A bigger or smaller window zooms them to fit, so they look the same at any
 /// size instead of stretching (or crowding) the layout.
-fn fit_zoom(w: &tauri::WebviewWindow) {
+fn fit_zoom(app: &AppHandle) {
+    let (Some(w), Some(page)) = (main_window(app), main_page(app)) else { return };
     let (Ok(size), Ok(scale)) = (w.inner_size(), w.scale_factor()) else { return };
     let size = size.to_logical::<f64>(scale);
     let zoom = (size.width / 1280.0).min(size.height / 720.0).clamp(0.8, 2.0);
-    let _ = w.set_zoom(zoom);
-    *w.app_handle().state::<Arc<Shared>>().zoom.lock().unwrap() = zoom;
+    let _ = page.set_zoom(zoom);
+    *app.state::<Arc<Shared>>().zoom.lock().unwrap() = zoom;
 }
 
 /// What each staking choice would suggest at a spread of chances, for Settings › Staking.
@@ -552,12 +578,12 @@ pub fn remember_window(app: &AppHandle) {
 
 pub fn open_main(app: &AppHandle, tab: Option<&str>) {
     in_dock(app, true);
-    if let Some(w) = app.get_webview_window("main") {
+    if let Some(w) = main_window(app) {
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
         if let Some(t) = tab {
-            let _ = w.emit("navigate", t);
+            let _ = app.emit_to("main", "navigate", t);
         }
     }
     if let Some(t) = app.get_webview_window("tray") {
@@ -1017,6 +1043,7 @@ pub fn run() {
         cancel: Mutex::new(false),
         chat_shown: AtomicBool::new(false),
         auto_check: AtomicBool::new(false),
+        chat_channel: Mutex::new(String::new()),
         kick: Mutex::new(Default::default()),
         arm_item: Mutex::new(None),
         zoom: Mutex::new(1.0),
@@ -1031,15 +1058,18 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         // the main window opens at the size and place it was last left (the popover and sign-in place themselves)
-        .plugin(tauri_plugin_window_state::Builder::default().with_state_flags(WINDOW_STATE).with_denylist(&["tray", "signin"]).build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(WINDOW_STATE)
+                .with_denylist(&["tray", "signin", "kicksignin", "kickchat"])
+                .build(),
+        )
         .manage(shared.clone())
         // WebView2 resets the zoom when a page loads, and the restored size may arrive before the resize handler is
         // set, so zoom again once the page is in
         .on_page_load(|page, load| {
             if load.event() == PageLoadEvent::Finished && page.label() == "main" {
-                if let Some(w) = page.app_handle().get_webview_window("main") {
-                    fit_zoom(&w);
-                }
+                fit_zoom(page.app_handle());
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -1145,19 +1175,20 @@ pub fn run() {
                     }
                 });
             }
-            if let Some(w) = app.get_webview_window("main") {
+            if let Some(w) = main_window(app.handle()) {
                 let w2 = w.clone();
                 w.on_window_event(move |e| match e {
                     WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
                         remember_window(w2.app_handle());
                         let _ = w2.hide();
+                        crate::autobet::hide_chat(w2.app_handle());
                         in_dock(w2.app_handle(), false);
                     }
-                    WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => fit_zoom(&w2),
+                    WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => fit_zoom(w2.app_handle()),
                     _ => {}
                 });
-                fit_zoom(&w);
+                fit_zoom(app.handle());
             }
             // first launch: settings saved, and Live shown
             let first = !shared.dir.join("settings.json").exists();

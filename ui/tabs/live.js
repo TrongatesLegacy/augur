@@ -1,7 +1,7 @@
 // Live: the duel that's up, built from the same pieces as a call's breakdown in History (the headline, how Augur is
 // calling it and the tale of the tape), plus what only Live has: the bet to copy, the projected HP race (the "before"
 // of the breakdown's How it went), the head to head, what's next and the chat line.
-import { column, statusChip, wireColumn } from '../lib/auto.js';
+import { besideCopy, column, wireColumn } from '../lib/auto.js';
 import { headline, tape, waterfall } from '../lib/callparts.js';
 import { copyText } from '../lib/clipboard.js';
 import { esc, feedProblem, fmt, pct, short } from '../lib/format.js';
@@ -30,12 +30,13 @@ function upNext(live, compact) {
 
 // what Augur says to bet, under its pick in the headline: the command with a copy button, the credits, and why
 function bet(p, stake, command, auto) {
-  // armed, auto betting places this bet: its status stands in for Copy, so it isn't bet twice
-  const copy = auto?.armed
-    ? `<span class="anote" title="${esc(auto.message || '')}">${auto.bet ? statusChip(auto.bet.status) : '<span class="ast">Armed</span>'} Auto</span>`
-    : command
-      ? `<button class="btn sm" id="cmd" title="Copy ${esc(command)} for chat">Copy</button>`
-      : '';
+  // armed, the auto bet's status sits beside Copy; Copy dims once an auto bet on this fight has gone out
+  const { note, dim } = besideCopy(auto);
+  const copy =
+    note +
+    (command
+      ? `<button class="btn sm${dim ? ' dim' : ''}" id="cmd" title="${dim ? 'Auto bet already in for this fight: copying would bet it twice' : `Copy ${esc(command)} for chat`}">Copy</button>`
+      : '');
   if (!stake) return { verdict: `<div class="lbet"><b>${esc(command)}</b>${copy}</div>`, line: esc(whyLine(p)) };
   if (!stake.amount) return { verdict: `<div class="lbet off"><b>No bet</b>${copy}</div>`, line: esc(stake.why) };
   return { verdict: `<div class="lbet"><b>${esc(stake.command)}</b><span>${fmt(stake.amount)} credits</span>${copy}</div>`, line: esc(stake.why) };

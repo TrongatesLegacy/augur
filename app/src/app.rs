@@ -76,6 +76,8 @@ pub struct Shared {
     /// betting can bet (just armed)
     pub chat_shown: AtomicBool,
     pub auto_check: AtomicBool,
+    /// where Live's chat panel is on the page, so the chat window can follow the main one
+    pub chat_spot: Mutex<Option<crate::autobet::Spot>>,
     pub kick: Mutex<crate::autobet::KickLogin>,
     /// the tray menu's Arm auto bet item
     pub arm_item: Mutex<Option<MenuItem<tauri::Wry>>>,
@@ -1017,6 +1019,7 @@ pub fn run() {
         cancel: Mutex::new(false),
         chat_shown: AtomicBool::new(false),
         auto_check: AtomicBool::new(false),
+        chat_spot: Mutex::new(None),
         kick: Mutex::new(Default::default()),
         arm_item: Mutex::new(None),
         zoom: Mutex::new(1.0),
@@ -1031,7 +1034,12 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
         // the main window opens at the size and place it was last left (the popover and sign-in place themselves)
-        .plugin(tauri_plugin_window_state::Builder::default().with_state_flags(WINDOW_STATE).with_denylist(&["tray", "signin"]).build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(WINDOW_STATE)
+                .with_denylist(&["tray", "signin", "kicksignin", "kickchat"])
+                .build(),
+        )
         .manage(shared.clone())
         // WebView2 resets the zoom when a page loads, and the restored size may arrive before the resize handler is
         // set, so zoom again once the page is in
@@ -1152,9 +1160,14 @@ pub fn run() {
                         api.prevent_close();
                         remember_window(w2.app_handle());
                         let _ = w2.hide();
+                        crate::autobet::hide_chat(w2.app_handle());
                         in_dock(w2.app_handle(), false);
                     }
-                    WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => fit_zoom(&w2),
+                    WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
+                        fit_zoom(&w2);
+                        crate::autobet::follow(w2.app_handle());
+                    }
+                    WindowEvent::Moved(_) => crate::autobet::follow(w2.app_handle()),
                     _ => {}
                 });
                 fit_zoom(&w);

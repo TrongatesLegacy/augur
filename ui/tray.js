@@ -104,7 +104,8 @@ function autoStrip(a) {
 
 // with auto betting armed, what it's doing on this fight stands in for Copy bet, so you don't bet it twice
 function autoNote(a) {
-  if (!a?.enabled || !a.armed) return '';
+  // test mode bets into your own chat, so the real bet is still yours to copy
+  if (!a?.enabled || !a.armed || a.test) return '';
   if (a.bet && ['sending', 'sent', 'seen', 'confirmed', 'unconfirmed'].includes(a.bet.status)) return `<span class="anote" title="${esc(a.message || '')}">${statusChip(a.bet.status)} Auto bet</span>`;
   if (a.phase === 'countdown') return '<span class="anote"><span class="ast gold">Soon</span> Auto bet</span>';
   return '<span class="anote"><span class="ast">Armed</span> Auto bet</span>';

@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tauri::webview::{PageLoadEvent, WebviewBuilder};
-use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::webview::PageLoadEvent;
+use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use crate::app::{notify, now_ms, Shared};
 use augur_engine::autobet::{self, AutoBet, AutoBetSettings, Decision, Moment};
@@ -98,7 +98,7 @@ fn has_session(cookies: &[tauri::webview::Cookie<'static>]) -> bool {
 /// WebView2.
 fn kick_cookies(app: &AppHandle) -> Vec<tauri::webview::Cookie<'static>> {
     let url = tauri::Url::parse(KICK).unwrap();
-    app.webviews().values().next().and_then(|w| w.cookies_for_url(url).ok()).unwrap_or_default()
+    app.webview_windows().values().next().and_then(|w| w.cookies_for_url(url).ok()).unwrap_or_default()
 }
 
 /// Whether this computer is signed in to Kick, checked at most every 30 seconds.
@@ -117,7 +117,7 @@ pub fn signed_in(app: &AppHandle, shared: &Shared) -> bool {
 }
 
 /// Runs a script in a webview and waits for what it returns (as JSON), up to `wait`.
-fn eval(w: &tauri::Webview, js: String, wait: Duration) -> Option<serde_json::Value> {
+fn eval(w: &WebviewWindow, js: String, wait: Duration) -> Option<serde_json::Value> {
     let (tx, rx) = mpsc::channel();
     w.eval_with_callback(js, move |out| {
         let _ = tx.send(out);
@@ -127,7 +127,7 @@ fn eval(w: &tauri::Webview, js: String, wait: Duration) -> Option<serde_json::Va
 }
 
 /// Your Kick name, asked from inside a kick.com page with its own sign-in (so Kick sees its own site asking).
-fn who_am_i(w: &tauri::Webview, cookies: &[tauri::webview::Cookie<'static>]) -> Option<String> {
+fn who_am_i(w: &WebviewWindow, cookies: &[tauri::webview::Cookie<'static>]) -> Option<String> {
     let get = |n: &str| cookies.iter().find(|c| c.name() == n).map(|c| c.value().to_string()).unwrap_or_default();
     let (token, xsrf) = (serde_json::to_string(&get("session_token")).ok()?, serde_json::to_string(&get("XSRF-TOKEN")).ok()?);
     let start = format!(
@@ -182,8 +182,7 @@ pub async fn kick_sign_in(app: AppHandle) -> Cmd<()> {
             if !has_session(&cookies) {
                 continue;
             }
-            let wv = win.as_ref().clone();
-            let name = who_am_i(&wv, &cookies);
+            let name = who_am_i(&win, &cookies);
             let shared = handle.state::<Arc<Shared>>();
             *shared.kick.lock().unwrap() = KickLogin { signed_in: true, user: name.clone(), checked: Some(Instant::now()) };
             if let (Ok(conn), Some(n)) = (shared.db(), &name) {
@@ -204,12 +203,12 @@ pub async fn kick_sign_in(app: AppHandle) -> Cmd<()> {
 pub async fn kick_sign_out(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>) -> Cmd<()> {
     let handle = app.clone();
     std::thread::spawn(move || {
-        if let Some(w) = handle.webviews().values().next() {
+        if let Some(w) = handle.webview_windows().values().next() {
             for c in kick_cookies(&handle) {
                 let _ = w.delete_cookie(c);
             }
         }
-        if let Some(chat) = handle.get_webview(CHAT) {
+        if let Some(chat) = handle.get_webview_window(CHAT) {
             let _ = chat.close();
         }
     })
@@ -233,16 +232,17 @@ pub async fn kick_sign_out(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>
 pub async fn chat_place(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>, spot: Spot) -> Cmd<()> {
     let view = shared.auto.lock().unwrap().clone();
     let show = spot.visible && view.enabled && view.signed_in && !view.channel.is_empty() && spot.w > 40.0 && spot.h > 40.0;
-    let existing = app.get_webview(CHAT);
+    let existing = app.get_webview_window(CHAT);
     if !show {
         if let Some(w) = existing {
             let _ = w.hide();
         }
         shared.chat_shown.store(false, Ordering::Relaxed);
+        *shared.chat_spot.lock().unwrap() = None;
         return Ok(());
     }
-    let zoom = *shared.zoom.lock().unwrap();
-    let (pos, size) = (LogicalPosition::new(spot.x * zoom, spot.y * zoom), LogicalSize::new(spot.w * zoom, spot.h * zoom));
+    *shared.chat_spot.lock().unwrap() = Some(spot.clone());
+    let (pos, size) = over_live(&app, &shared, &spot).ok_or("no main window")?;
     let url = tauri::Url::parse(&kick::popout_url(&view.channel)).map_err(|e| e.to_string())?;
     match existing {
         Some(w) => {
@@ -254,30 +254,80 @@ pub async fn chat_place(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>, s
             let _ = w.show();
         }
         None => {
-            make_chat(&app, url, pos, size)?;
+            make_chat(&app, url, pos, size, true)?;
         }
     }
     shared.chat_shown.store(true, Ordering::Relaxed);
     Ok(())
 }
 
-/// Kick's popout chat as a webview inside the main window.
-fn make_chat(app: &AppHandle, url: tauri::Url, pos: LogicalPosition<f64>, size: LogicalSize<f64>) -> Result<tauri::Webview, String> {
-    let window = app.get_window("main").ok_or("no main window")?;
-    let builder = WebviewBuilder::new(CHAT, WebviewUrl::External(url)).on_page_load(|w, p| {
-        // a page that isn't Kick's chat (a link clicked in it) goes back to the chat
-        if p.event() == PageLoadEvent::Finished && p.url().host_str().is_some_and(|h| h != "kick.com" && !h.ends_with(".kick.com")) {
-            let _ = w.eval("history.back()");
-        }
-    });
-    window.add_child(builder, pos, size).map_err(|e| e.to_string())
+/// Where on screen Live's chat panel is: the main window's inside, plus the panel's spot on the page at its zoom.
+fn over_live(app: &AppHandle, shared: &Shared, spot: &Spot) -> Option<(LogicalPosition<f64>, LogicalSize<f64>)> {
+    let main = app.get_webview_window("main")?;
+    let inner = main.inner_position().ok()?.to_logical::<f64>(main.scale_factor().ok()?);
+    let zoom = *shared.zoom.lock().unwrap();
+    Some((LogicalPosition::new(inner.x + spot.x * zoom, inner.y + spot.y * zoom), LogicalSize::new(spot.w * zoom, spot.h * zoom)))
 }
 
-/// While armed, the chat is kept ready even when Live isn't showing (Augur in the tray): made off screen and hidden,
-/// on the right channel. Returns whether it was just made (it needs a moment to load).
+/// The main window moved or changed size: the chat goes with it.
+pub fn follow(app: &AppHandle) {
+    let shared = app.state::<Arc<Shared>>();
+    let spot = shared.chat_spot.lock().unwrap().clone();
+    if let (Some(spot), Some(w)) = (spot, app.get_webview_window(CHAT)) {
+        if let Some((pos, size)) = over_live(app, &shared, &spot) {
+            let _ = w.set_position(pos);
+            let _ = w.set_size(size);
+        }
+    }
+}
+
+/// The main window closed to the tray: the chat hides with it (it stays loaded, so auto betting carries on).
+pub fn hide_chat(app: &AppHandle) {
+    let shared = app.state::<Arc<Shared>>();
+    shared.chat_shown.store(false, Ordering::Relaxed);
+    *shared.chat_spot.lock().unwrap() = None;
+    if let Some(w) = app.get_webview_window(CHAT) {
+        let _ = w.hide();
+    }
+}
+
+/// Kick's popout chat as its own small borderless window, attached to the main one so it sits over Live's chat panel
+/// and goes where it goes. Not a second webview inside the main window: Tauri stops treating a window with two
+/// webviews as a webview window, and then Open Augur (and remembering the window's size) can't find it.
+fn make_chat(
+    app: &AppHandle,
+    url: tauri::Url,
+    pos: LogicalPosition<f64>,
+    size: LogicalSize<f64>,
+    visible: bool,
+) -> Result<WebviewWindow, String> {
+    let main = app.get_webview_window("main").ok_or("no main window")?;
+    WebviewWindowBuilder::new(app, CHAT, WebviewUrl::External(url))
+        .title("Kick chat")
+        .decorations(false)
+        .resizable(false)
+        .skip_taskbar(true)
+        .shadow(false)
+        .visible(visible)
+        .inner_size(size.width, size.height)
+        .position(pos.x, pos.y)
+        .parent(&main)
+        .map_err(|e| e.to_string())?
+        .on_page_load(|w, p| {
+            // a page that isn't Kick's chat (a link clicked in it) goes back to the chat
+            if p.event() == PageLoadEvent::Finished && p.url().host_str().is_some_and(|h| h != "kick.com" && !h.ends_with(".kick.com")) {
+                let _ = w.eval("history.back()");
+            }
+        })
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+/// While armed, the chat is kept ready even when Live isn't showing (Augur in the tray): made hidden, on the right
+/// channel. Returns whether it was just made (it needs a moment to load).
 fn ensure_chat(app: &AppHandle, channel: &str) -> bool {
     let Ok(url) = tauri::Url::parse(&kick::popout_url(channel)) else { return false };
-    match app.get_webview(CHAT) {
+    match app.get_webview_window(CHAT) {
         Some(w) => {
             if w.url().map(|u| u.path().to_lowercase()).ok() != Some(url.path().to_lowercase()) {
                 let _ = w.navigate(url);
@@ -286,9 +336,7 @@ fn ensure_chat(app: &AppHandle, channel: &str) -> bool {
             false
         }
         None => {
-            if let Ok(w) = make_chat(app, url, LogicalPosition::new(-4000.0, -4000.0), LogicalSize::new(320.0, 600.0)) {
-                let _ = w.hide();
-            }
+            let _ = make_chat(app, url, LogicalPosition::new(0.0, 0.0), LogicalSize::new(320.0, 600.0), false);
             true
         }
     }
@@ -346,7 +394,7 @@ const AFTER: &str = r#"(function (text) {
 /// Types the command into the chat and presses Enter, once. Never presses again: if Kick doesn't take it, the
 /// command is cleared from the box (so it can't go in later by accident) and the bet is marked not sent.
 fn type_bet(app: &AppHandle, channel: &str, command: &str) -> Typed {
-    let Some(w) = app.get_webview(CHAT) else { return Typed::NotSent("the chat isn't ready".into()) };
+    let Some(w) = app.get_webview_window(CHAT) else { return Typed::NotSent("the chat isn't ready".into()) };
     let want = kick::popout_url(channel);
     if w.url().map(|u| u.as_str().trim_end_matches('/').to_lowercase()).ok() != Some(want.to_lowercase()) {
         return Typed::NotSent(format!("the chat on Live isn't {channel}'s"));
@@ -403,7 +451,7 @@ const SEND_POLL: &str = r#"(function (key) { var s = window.__augurSend || {}; r
 /// hidden chat page sends it with Kick's own request instead. Once, never again: an answer that doesn't come counts
 /// as maybe sent, and the chat decides.
 fn api_send(app: &AppHandle, room: u64, command: &str, key: i64) -> Typed {
-    let Some(w) = app.get_webview(CHAT) else { return Typed::NotSent("the chat isn't ready".into()) };
+    let Some(w) = app.get_webview_window(CHAT) else { return Typed::NotSent("the chat isn't ready".into()) };
     let cookies = kick_cookies(app);
     let get = |n: &str| {
         serde_json::to_string(&cookies.iter().find(|c| c.name() == n).map(|c| c.value().to_string()).unwrap_or_default())
@@ -479,7 +527,7 @@ fn health(app: &AppHandle, shared: &Shared, v: &AutoView, signed: bool, chat_sin
         return Some(("Can't read the Kick chat, so it can't check you haven't bet".into(), true));
     }
     let loading = chat_since.elapsed() < Duration::from_secs(30);
-    match app.get_webview(CHAT).and_then(|w| eval(&w, PROBE.to_string(), Duration::from_secs(3))) {
+    match app.get_webview_window(CHAT).and_then(|w| eval(&w, PROBE.to_string(), Duration::from_secs(3))) {
         Some(serde_json::Value::String(s)) if s == "ok" => {}
         Some(serde_json::Value::String(s)) if s == "off" => {
             return Some(("The chat box is off (slow mode, followers or subscribers only?)".into(), true));

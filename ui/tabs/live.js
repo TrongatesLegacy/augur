@@ -30,8 +30,9 @@ function upNext(live, compact) {
 
 // what Augur says to bet, under its pick in the headline: the command with a copy button, the credits, and why
 function bet(p, stake, command, auto) {
-  // armed, auto betting places this bet: its status stands in for Copy, so it isn't bet twice
-  const copy = auto?.armed
+  // armed, auto betting places this bet: its status stands in for Copy, so it isn't bet twice. Not in test mode,
+  // which bets into your own chat: then the real bet is still yours to type
+  const copy = auto?.armed && !auto.test
     ? `<span class="anote" title="${esc(auto.message || '')}">${auto.bet ? statusChip(auto.bet.status) : '<span class="ast">Armed</span>'} Auto</span>`
     : command
       ? `<button class="btn sm" id="cmd" title="Copy ${esc(command)} for chat">Copy</button>`

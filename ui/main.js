@@ -91,6 +91,9 @@ const bf = document.getElementById('bf');
 const busy = { fetch: null, bets: null, sync: null, flash: null };
 let flashTimer;
 let tickTimer;
+// how wide the sidebar ring's number may be: the room inside the 34px ring, less a margin
+const ROOM = 19;
+
 function showActivity() {
   const a = activity(busy);
   bf.hidden = !a;
@@ -102,6 +105,10 @@ function showActivity() {
   bf.dataset.go = a.go;
   bf.className = `bf ${a.kind}${a.warn ? ' warn' : ''}`;
   bf.innerHTML = activityHtml(a);
+  // the number keeps clear of the ring in whatever font draws it (Windows falls back to a wider one): shrink it until
+  // it fits the room inside the ring
+  const sp = bf.querySelector('.bfr span');
+  for (let fs = parseFloat(sp.style.fontSize); sp.getBoundingClientRect().width > ROOM && fs > 7; fs -= 0.5) sp.style.fontSize = `${fs - 0.5}px`;
 }
 bf.onclick = () => {
   const go = bf.dataset.go;

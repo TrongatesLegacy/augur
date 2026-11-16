@@ -615,9 +615,10 @@ const MAIN_DRIVER: &str = r#"
           const fs = parseFloat(getComputedStyle(b).fontSize);
           const inner = svg.width * (r.classList.contains('ring') ? 23.5 / 60 : r.id === 'bf' ? 13.25 / 36 : 46 / 120);
           const [cx, cy, tx, ty] = [svg.left + svg.width / 2, svg.top + svg.height / 2, t.left + t.width / 2, t.top + t.height / 2];
+          r.dataset.fit = `${r.querySelector('b, span').textContent} off centre ${(tx - cx).toFixed(1)},${(ty - cy).toFixed(1)}, ${t.width.toFixed(1)}x${t.height.toFixed(1)} at ${fs}px, ring ${svg.width.toFixed(1)}x${svg.height.toFixed(1)}, room ${(inner - 2).toFixed(1)}`;
           return Math.hypot(Math.abs(tx - cx) + t.width / 2, Math.abs(ty - cy) + fs * 0.36) > inner - 2;
         })
-        .map((r) => r.querySelector('b, span').textContent);
+        .map((r) => r.dataset.fit);
       // a pal box's cards line up: in each row of cards, the talent rolls start at the same height
       if (['players', 'playersfew', 'mypals'].includes(tab)) {
         const rows = {};

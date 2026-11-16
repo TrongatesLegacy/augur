@@ -63,8 +63,8 @@ cd app && cargo tauri build        # on a Mac -> target/release/bundle/dmg/Augur
 
 | Path | What it is |
 |---|---|
-| `engine/` | Everything that isn't the desktop app (`augur-engine`): fetching and parsing palduels.com (`site`), the model (`model`), the SQLite store (`db`), a whole prediction (`predict`), the background backfill (`backfill`), the chat voices (`voices`), the calls file (`calls`), what the history says (`history`), the stake to suggest (`stake`), your bets and how following Augur compares (`bets`), sync across computers (`sync`) and the test seed (`seed`). |
-| `app/` | The desktop app and command line (`augur`): tray, windows, sync loop, encrypted sign-in (`secure.rs`), settings, what each page is sent (`views.rs`), headless UI tests (`ui_tests.rs`). |
+| `engine/` | Everything that isn't the desktop app (`augur-engine`): fetching and parsing palduels.com (`site`), the model (`model`), the SQLite store (`db`), a whole prediction (`predict`), the background backfill (`backfill`), the chat voices (`voices`), the calls file (`calls`), what the history says (`history`), the stake to suggest (`stake`), your bets and how following Augur compares (`bets`), auto betting's record and rules (`autobet`), reading a Kick channel and its chat (`kick`), sync across computers (`sync`) and the test seed (`seed`). |
+| `app/` | The desktop app and command line (`augur`): tray, windows, sync loop, encrypted sign-in (`secure.rs`), auto betting (`autobet.rs`: the Kick sign-in, the chat on Live and the betting loop), settings, what each page is sent (`views.rs`), headless UI tests (`ui_tests.rs`). |
 | `ui/` | The pages, as ES modules with no build step: `index.html` + `main.js` (main window), `tray.html` + `tray.js` (popover), `lib/` (shared pieces), `tabs/` (one file per tab), `style.css`. |
 | `fixtures/calls.jsonl` | 19 made-up calls (real species, invented fighters, owners and results) in the calls-file format, with the model's expected numbers. Test data only: your own calls stay in your data folder. |
 | `engine/tests/pages/` | Saved palduels.com pages the tests parse, with placeholder players. The picks pages are made-up bets in the signed-in picks list's markup. |
@@ -90,9 +90,9 @@ Augur updates itself from this repository's GitHub releases:
 
 **Settings › Sync & data › Sync** works the way Stream Multiview's does:
 - **The folder:** you pick a folder a sync app already moves. Augur finds OneDrive, iCloud Drive, Dropbox and Google Drive, or you can choose another folder. It creates `Augur Sync/` inside it.
-- **No clashes:** each computer writes only its own files there (`devices/<id>.json` and `calls/<id>.jsonl`) and reads the others' every minute, and within seconds of the sync app bringing a change in. Nothing needs a lock, and the sync app never makes "conflicted copies".
+- **No clashes:** each computer writes only its own files there (`devices/<id>.json`, `calls/<id>.jsonl` and `autobets/<id>.jsonl`) and reads the others' every minute, and within seconds of the sync app bringing a change in. Nothing needs a lock, and the sync app never makes "conflicted copies".
 - **What syncs:** your settings (the latest change to each one wins) and Augur's calls (merged, never duplicated).
-- **What stays on each computer:** the sign-in (it's encrypted for that computer), launch at login, start in the tray and background fetching. Duels, species and your bets come from the site on each computer.
+- **What stays on each computer:** the sign-ins (PalDuels' is encrypted for that computer; Kick's is in its browser storage), launch at login, start in the tray, background fetching and auto betting (only one computer can have it on). Duels, species and your bets come from the site on each computer.
 
 **Back up… and Import…** cover setting up a new computer:
 - **Back up…** saves a complete copy of the store (calls, duels, tapes, species, bets) wherever you choose, such as OneDrive.
@@ -134,7 +134,7 @@ When the site hides a fighter's stats until the bell ("stats known at the bell")
 
 ## Bets
 
-Augur never bets for you: it suggests a stake and the chat command, and you type it. Settings > Staking picks how:
+Augur doesn't bet for you unless you turn on auto betting (below): it suggests a stake and the chat command, and you type it. Settings > Staking picks how:
 
 - **Scale with chance** (the default): the default bet (a bare `!h`) below 55%, rising steadily to the max (`!h all`) at 85% and above. Both chances are settings.
 - **Fixed amount** on every call.
@@ -143,6 +143,17 @@ Augur never bets for you: it suggests a stake and the chat command, and you type
 The limits (100 to 5,000, 500 for a bare command) are settings because the site doesn't publish them. "Type the max as all" keeps `!h all` right if the stream changes the max.
 
 Signed in, Augur reads your picks list (only shown to you, 5 bets a page): all of it once, a page at a time and paused while a duel is up, then just what's new every few minutes. History > Your bets lines your bets up with Augur's calls: **Followed** (you backed Augur's pick, at any stake), **Deviated** (the other side, or a bet when Augur said sit out), **Missed** (no bet on a call Augur would have bet on: kept out of the comparison and totalled on their own) and **No call**. "Augur's way" uses the stake Augur suggested at the time: on the side you backed it's your real payout scaled to that stake; a win on the other side is an estimate at your usual payout.
+
+### Auto bet
+
+**Settings › Auto bet** lets Augur type its bet into the stream's Kick chat by itself. It's off until you turn it on, it stays on each computer (it never syncs) and it's armed one session at a time: on Live or from the tray menu, until Augur quits.
+- **Sign in to Kick** opens kick.com in its own window. Once you're signed in, Live shows the stream's chat (Kick's popout chat) beside the call. Augur never sees your password and keeps no copy of the sign-in: the chat uses the same browser storage.
+- **When a fight is up** and the call has held for a few seconds (the pick and stake unchanged, the chance over your minimum and, by default, no stats still hidden), Live counts down with **Cancel**, then Augur types the command into that chat and presses Enter once, the way you would.
+- **It never bets twice.** The fight is claimed before anything is typed, so a restart or a second look can't bet it again. Nothing is ever retried: if Kick doesn't take the Enter, the command is cleared from the box and the bet is marked not sent. It stands down for the fight when you've bet on it yourself (your own `!h`/`!a` in chat, or a pending bet in your picks list), when you're typing in the chat, after the latest point you set in the picks window, at the day's limits, and when another computer has auto betting on.
+- **It checks the bet landed** by reading the chat (Kick's own chat history, read only): its line, then the betting bot's reply to that line ("2300 on HOME …"). A bet the bot never answers is marked unconfirmed, and still isn't sent again.
+- **Test mode** (on to start) types into your own channel's chat instead, so everything runs and nothing is bet.
+- **History › Your bets** marks each bet **Auto** or **Manual** (×2 when you and Augur both bet on a fight), with a filter, and lists what auto betting did on each fight and why. A call's breakdown shows its auto bet. Each computer's auto bets travel through sync (`autobets/<id>.jsonl`), so both label your bets the same way.
+- Augur notes when picks close on each call, so Settings › Auto bet can say how long picks usually stay open.
 
 ## Tests
 

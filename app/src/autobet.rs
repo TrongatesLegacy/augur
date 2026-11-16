@@ -471,6 +471,11 @@ pub fn auto_loop(app: AppHandle, shared: Arc<Shared>) {
             *shared.cancel.lock().unwrap() = false;
             continue;
         }
+        // another computer turned it on after this one was armed: neither should bet twice, so this one stands down
+        if let Some(other) = &view.other {
+            set_phase(&app, &shared, "waiting", &format!("{other} has auto betting on"), "", None, None);
+            continue;
+        }
         let Ok(conn) = shared.db() else { continue };
         let settings = shared.settings.lock().unwrap().clone();
         let s = settings.auto_bet.clone();

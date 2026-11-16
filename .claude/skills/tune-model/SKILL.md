@@ -5,7 +5,7 @@ description: Re-test Augur's model settings against the real calls and the backf
 
 # Tune the model
 
-The app tunes itself (`engine/src/learn.rs`): it re-fits each setting on new results and keeps a change only when the held-back newest quarter of the duels (or calls) agrees. `Settings::default()` in `engine/src/model.rs` is only where it starts, so change a default only to give new installs a better start; to change how the learning works, edit `learn.rs` (each setting's evidence and grid, the margins, the minimum calls). `cargo run -q --release -p augur -- learn --dry-run` runs it now and prints what it would change.
+The app tunes itself (`engine/src/learn.rs`): after each result it re-fits every setting afresh from `Settings::default()` (not from the last run's values) and keeps a move only when the held-back newest quarter of the duels (or calls) agrees. `Settings::default()` in `engine/src/model.rs` is only where it starts, so change a default only to give new installs a better start; to change how the learning works, edit `learn.rs` (each setting's evidence and grid, the margins, the minimum calls). `cargo run -q --release -p augur -- learn --dry-run` runs it now and prints what it would change.
 
 ## Re-test
 
@@ -33,6 +33,8 @@ Then edit `engine/src/model.rs` (value and comment: why, on how many fights), re
 Something the model can't see (a passive, an unlisted move, an owner's rating) goes in `model::score()` or a helper next to it, with its raw value saved on the call (`fighters` or `predictions` in `engine/src/db.rs`) so later re-scores are fair. New effects start damped (for example `.powf(0.5)`) until tapes or results confirm them.
 
 ## Known open questions
+
+- **Testing the learner itself:** a one-off `tune` or `learn --dry-run` scores settings on calls they were fitted to. To judge a change to `learn.rs`, replay it call by call instead: before each call, learn only from the calls and past duels before it, then score that call. On 16 Nov that replay over the 108 calls of 13-15 Nov gave: the learner building on its last run, log loss 0.615 (73 right); never learning, 0.579 (73); starting afresh each run, 0.581 (75); stricter margins (40 held-back calls, 0.01 on calls, 0.005 on duels), 0.583 (74). Most of the difference came from Saturday's misses at 89-95%. The drift was `STATS_STEEPNESS` 3 → 5 on 15 held-back calls, `TYPE_BONUS` 1.25 and a 0.1 pal-rank weight.
 
 - **Type edge:** 1.5x. The 4,702-duel history test prefers 1.25-1.5x; per-hit tapes show about 1.1x; when only one side's *species* types beat the other's, that side won 48% of 1,292 duels. The first 19 live calls prefer 2x by a hair.
 - **Resisted moves** don't hit softer per hit, yet `type_resist` 1.5 still scores best in both tests.

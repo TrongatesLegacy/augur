@@ -129,7 +129,7 @@ td.num, .num { font: 600 15px var(--cond); letter-spacing: .03em; }
 .els { display: flex; gap: 5px; margin-top: 8px; flex-wrap: wrap; } .fx.r .els { justify-content: flex-end; }
 .center { text-align: center; display: grid; justify-items: center; }
 .dialw { position: relative; display: grid; place-items: center; }
-.dialw b { position: absolute; font: 800 36px var(--cond); color: var(--gold); text-shadow: 0 0 18px rgba(255,207,107,.5); }
+.dialw b { position: absolute; font: 800 calc(var(--s) * var(--f, .31)) var(--cond); color: var(--gold); text-shadow: 0 0 18px rgba(255,207,107,.5); }
 .r5 { display: grid; grid-template-columns: 56px 1fr 64px 1fr 56px; align-items: center; gap: 8px; margin: 8px 0; font-size: 13px; }
 .r5 .k { text-align: center; font: 600 10px var(--sans); letter-spacing: .14em; color: var(--t3); }
 .bar { height: 6px; border-radius: 4px; background: rgba(255,255,255,.06); position: relative; overflow: hidden; }
@@ -234,12 +234,14 @@ td .two small b { color: var(--gold); font-weight: 700; }
 .panel.note { border-color: rgba(61,220,151,.35); background: rgba(61,220,151,.08); color: var(--t1); }
 .bf { margin-top: auto; width: 48px; display: grid; justify-items: center; gap: 1px; padding: 6px 0; border: 0; border-radius: 12px; background: none; color: var(--t2); cursor: pointer; }
 .bf:hover { background: rgba(255,255,255,.04); }
-.bf svg { width: 28px; height: 28px; transform: rotate(-90deg); }
+/* the ring with its number centred over it, whatever the font's line metrics (Windows' differ) */
+.bfr { position: relative; width: 34px; height: 34px; }
+.bfr svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
 .bf circle { fill: none; stroke-width: 3.5; }
 .bf .t { stroke: rgba(255,255,255,.08); }
 .bf .f { stroke: var(--gold); stroke-linecap: round; transition: stroke-dasharray .4s; }
-.bf span { font: 700 11px var(--cond); letter-spacing: .02em; margin-top: -23px; height: 18px; }
-.bf small { font: 600 8px var(--sans); letter-spacing: .04em; color: var(--t3); margin-top: 7px; text-transform: uppercase; }
+.bfr span { position: absolute; inset: 0; display: grid; place-items: center; font: 700 11px/1 var(--cond); letter-spacing: .02em; width: max-content; margin: auto; height: max-content; }
+.bf small { font: 600 8px var(--sans); letter-spacing: .04em; color: var(--t3); margin-top: 3px; text-transform: uppercase; }
 .bf.warn .f { stroke: var(--bad); }
 .bf.sync .f { stroke: var(--ok); } .bf.sync span { color: var(--ok); }
 .bf.bets .f { stroke: var(--home); }
@@ -469,7 +471,6 @@ body.pop { padding: 7px 9px 12px; box-sizing: border-box; }
 .pop .who { font: 800 30px/.95 var(--cond); letter-spacing: .04em; text-transform: uppercase; }
 .pop .vs { font-size: 12.5px; color: var(--t2); margin-top: 6px; }
 .pop .why { font-size: 12.5px; color: var(--t2); margin-top: 8px; line-height: 1.4; }
-.pop .dialw b { font-size: 26px; }
 .pop .stats { padding: 4px 14px 10px; border-top: 1px solid var(--line); }
 .pop .r5 { grid-template-columns: 44px 1fr 54px 1fr 44px; gap: 6px; font-size: 12px; }
 .pop .say { padding: 10px 14px 12px; border-top: 1px solid var(--line); }
@@ -490,7 +491,7 @@ body.pop { padding: 7px 9px 12px; box-sizing: border-box; }
 .ring .f { stroke: var(--c); stroke-linecap: round; filter: drop-shadow(0 0 4px color-mix(in srgb, var(--c) 45%, transparent)); }
 .ring > div { position: relative; display: grid; justify-items: center; line-height: 1; }
 .ring b { white-space: nowrap; font: 800 calc(var(--s) * var(--f, .27)) / 1 var(--cond); letter-spacing: .02em; color: var(--t1); }
-.ring small { white-space: nowrap; font-size: calc(var(--s) * .12); color: var(--t3); margin-top: 3px; letter-spacing: .04em; }
+.ring small { white-space: nowrap; font-size: calc(var(--s) * .11); color: var(--t3); margin-top: 3px; letter-spacing: .04em; }
 .sb { display: flex; gap: 2px; height: 10px; border-radius: 5px; overflow: hidden; background: rgba(255,255,255,.06); }
 .sb i { display: block; min-width: 3px; }
 .sb i:first-child { border-radius: 5px 0 0 5px; } .sb i:last-child { border-radius: 0 5px 5px 0; } .sb i:only-child { border-radius: 5px; }
@@ -862,7 +863,6 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 .cstage { grid-template-columns: 1fr 430px 1fr; padding: 10px 24px; }
 .cmid { display: grid; justify-items: center; gap: 4px; min-width: 0; }
 .cverdict { display: flex; align-items: center; gap: 16px; }
-.cverdict .dialw b { font-size: 28px; }
 .cwon { color: var(--t2); font-size: 13px; }
 .ledger { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, auto); justify-content: space-evenly; width: 100%; padding-top: 7px; margin-top: 2px; border-top: 1px solid var(--line); }
 .lc { display: grid; justify-items: center; align-content: start; gap: 4px; padding: 0 8px; min-width: 0; }
@@ -1134,6 +1134,7 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 .cgrid .wf.total { padding-top: 5px; }
 /* a shorter headline on Live; factor rows on one line, head to head rows a little tighter */
 .lhead.cstage { padding: 8px 22px; }
+.lhead .cverdict .dialw { --s: 70px !important; }
 .lhead .cverdict .dialw svg { width: 70px; height: 70px; }
 .cgrid .wf { grid-template-columns: 172px 1fr 60px; }
 .cgrid .wl { display: flex; align-items: baseline; gap: 6px; }

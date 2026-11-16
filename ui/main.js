@@ -1,6 +1,7 @@
 // The main window: the sidebar, the shared state the tabs read, and the events from the Rust side.
 import { activity, activityHtml, FLASH_MS } from './lib/activity.js';
 import { hideChat, placeChat } from './lib/auto.js';
+import { keepRingsFitted } from './lib/viz.js';
 import { invoke, listen } from './lib/bridge.js';
 import { esc } from './lib/format.js';
 import * as history from './tabs/history.js';
@@ -91,6 +92,7 @@ const bf = document.getElementById('bf');
 const busy = { fetch: null, bets: null, sync: null, flash: null };
 let flashTimer;
 let tickTimer;
+
 function showActivity() {
   const a = activity(busy);
   bf.hidden = !a;
@@ -207,5 +209,7 @@ showWelcome(app.state.live);
 showYou((await invoke('account')).signed_in);
 showUpdate(await invoke('update_view'));
 await app.show('live');
+// numbers in rings keep clear of the ring in whatever font draws them
+keepRingsFitted();
 // for the headless UI tests
 window.augur = Object.assign(app, { showWelcome, showUpdate });

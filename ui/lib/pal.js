@@ -45,7 +45,9 @@ async function loadArt([cmd, args], id) {
 export function dial(p, size) {
   const r = 50;
   const c = 2 * Math.PI * r;
-  return `<div class="dialw" style="width:${size}px;height:${size}px"><svg width="${size}" height="${size}" viewBox="0 0 120 120" aria-label="${pct(p)} chance"><circle cx="60" cy="60" r="${r}" fill="none" stroke="rgba(255,92,168,.22)" stroke-width="8"/><circle cx="60" cy="60" r="${r}" fill="none" stroke="#ffcf6b" stroke-width="8" stroke-linecap="round" stroke-dasharray="${(c * p).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 60 60)"/></svg><b>${pct(p)}</b></div>`;
+  // the chance sized to the dial, smaller for 100%, so it keeps clear of the ring
+  const fit = Math.min(0.31, 0.95 / pct(p).length).toFixed(3);
+  return `<div class="dialw" style="width:${size}px;height:${size}px;--s:${size}px;--f:${fit}"><svg width="${size}" height="${size}" viewBox="0 0 120 120" aria-label="${pct(p)} chance"><circle cx="60" cy="60" r="${r}" fill="none" stroke="rgba(255,92,168,.22)" stroke-width="8"/><circle cx="60" cy="60" r="${r}" fill="none" stroke="#ffcf6b" stroke-width="8" stroke-linecap="round" stroke-dasharray="${(c * p).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 60 60)"/></svg><b>${pct(p)}</b></div>`;
 }
 
 // The tale of the tape rows: home value, bar, label, bar, away value.

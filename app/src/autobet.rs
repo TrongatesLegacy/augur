@@ -57,6 +57,8 @@ pub struct AutoView {
     /// it stops auto betting until it's fixed. The tray, the popover and Live all say so.
     pub problem: Option<String>,
     pub blocking: bool,
+    /// the channel is streaming, as Kick said at the last check (None before the first)
+    pub stream_live: Option<bool>,
 }
 
 /// Kick, as this computer is signed in to it.
@@ -505,6 +507,12 @@ fn health(app: &AppHandle, shared: &Shared, v: &AutoView, signed: bool, chat_sin
         Err(augur_engine::error::Error::Http(404)) => return Some((format!("{} isn't a Kick channel", v.channel), true)),
         Err(_) => return Some(("Can't reach Kick".into(), true)),
     };
+    // off air, Kick tightens the chat (it greys out) and there's nothing to bet on: only the problems above, which want
+    // fixing before the stream, count until it's back
+    shared.auto.lock().unwrap().stream_live = Some(chan.live);
+    if !chan.live {
+        return None;
+    }
     if kick::history(chan.id).is_err() {
         return Some(("Can't read the Kick chat, so it can't check you haven't bet".into(), true));
     }
@@ -721,9 +729,11 @@ pub fn auto_loop(app: AppHandle, shared: Arc<Shared>) {
                 (v.problem, v.blocking) = found.clone().map_or((None, false), |(p, b)| (Some(p), b));
                 let _ = app.emit("autobet", &*v);
             }
+            // a problem cleared because the stream ended isn't "working again"
+            let on_air = shared.auto.lock().unwrap().stream_live != Some(false);
             match (&before, &found) {
                 (None, Some((p, _))) => notify(&app, "Auto bet can't bet", p),
-                (Some(_), None) => notify(&app, "Auto bet is working again", &format!("into {}'s chat", view.channel)),
+                (Some(_), None) if on_air => notify(&app, "Auto bet is working again", &format!("into {}'s chat", view.channel)),
                 _ => {}
             }
             crate::app::update_tray(&app, &shared);

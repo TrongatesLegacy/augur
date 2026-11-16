@@ -1187,9 +1187,6 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 .seg.sm button { padding: 3px 9px; font-size: 11.5px; }
 .anote { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--t2); white-space: nowrap; }
 .lwrap .lchat .ph { flex-wrap: wrap; row-gap: 6px; }
-.astrip { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -4px 0 8px; padding: 6px 10px; border-radius: 9px; font-size: 11.5px; color: var(--t3); background: rgba(255,255,255,.04); border: 1px solid var(--line); }
-.astrip.bad { color: var(--bad); background: rgba(255,95,109,.1); border-color: rgba(255,95,109,.3); }
-.astrip button { font: 700 11px var(--sans); padding: 3px 9px; border-radius: 7px; border: 0; background: rgba(255,95,109,.2); color: var(--t1); }
 .btn.dim { opacity: .45; }
 .btn.dim:hover { opacity: .8; }
 
@@ -1237,3 +1234,13 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 .wsvg [hidden] { display: none; }
 .wprojt { fill: var(--gold); font: 700 8.5px var(--sans); letter-spacing: .05em; opacity: .8; }
 .wt i.muted { background: rgba(255,255,255,.18); }
+/* the popover's auto bet card: armed and waiting (quiet), or why it can't bet (red, with Fix) */
+.pop .acard { display: flex; align-items: center; gap: 10px; margin: 2px 14px 10px; padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.035); border: 1px solid var(--line); }
+.pop .acard > div { display: grid; gap: 2px; min-width: 0; }
+.pop .acard b { font: 700 12.5px/1.2 var(--sans); color: var(--t1); }
+.pop .acard small { font-size: 11.5px; line-height: 1.35; color: var(--t2); }
+.pop .acard .ai { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+.pop .acard.bad { background: linear-gradient(160deg, rgba(255,95,109,.13), rgba(255,95,109,.04)); border-color: rgba(255,95,109,.32); }
+.pop .acard.bad .ai { width: auto; height: auto; border-radius: 0; background: none; box-shadow: none; color: var(--bad); font-size: 15px; }
+.pop .acard button { flex: none; margin-left: auto; border: 0; border-radius: 8px; padding: 6px 12px; font: 700 12px var(--sans); color: var(--t1); background: rgba(255,95,109,.22); }
+.pop .acard button:hover { background: rgba(255,95,109,.32); }

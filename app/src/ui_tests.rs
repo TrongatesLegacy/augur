@@ -1524,12 +1524,42 @@ fn tray_popover_warns_when_auto_bet_cant_bet() {
     if !have_chrome() {
         return;
     }
-    let r = render(serve("tray.html", &fixture_data(), TRAY_AUTO_DRIVER), "tray-auto", None);
+    let shots = std::env::var_os("AUGUR_UI_SHOTS").map(PathBuf::from);
+    let r = render(serve("tray.html", &fixture_data(), TRAY_AUTO_DRIVER), "tray-auto", shots.as_deref().map(|f| (f, "tray-auto")));
     assert_eq!(r["errors"], json!([]), "script errors: {}", r["errors"]);
     let t = r["tray"].as_str().unwrap().to_lowercase();
-    assert!(t.contains("auto bet can't bet: signed out of kick") && r["fix"] == json!(true), "{t}");
+    assert!(t.contains("auto bet can't bet\nsigned out of kick") && r["fix"] == json!(true), "{t}");
     assert!(
         r["copy"] == json!(true) && r["dim"] == json!(true) && t.contains("confirmed"),
         "an auto bet already in: Copy bet stays, dimmed, beside its status: {t}"
     );
+}
+
+/// Armed with the stream off air: a quiet card saying it's waiting, no warning (Kick greys the chat out off air).
+const TRAY_AUTO_OFF_AIR_DRIVER: &str = r#"
+DATA.auto_view = { ...DATA.auto_on, phase: 'idle', stream_live: false, problem: null };
+DATA.live = { ...DATA.live, prediction: null, queue: [], off_air: DATA.off_air, title: 'Last duel' };
+(async () => {
+  document.body.style.width = '340px';
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  for (let i = 0; i < 60 && !window.augur; i++) await sleep(100);
+  await sleep(200);
+  document.getElementById('report').textContent = JSON.stringify({ tray: document.getElementById('pop').innerText, fix: !!document.getElementById('afix'), errors: window.__errors });
+})();
+"#;
+
+#[test]
+fn tray_popover_is_quiet_about_auto_bet_off_air() {
+    if !have_chrome() {
+        return;
+    }
+    let shots = std::env::var_os("AUGUR_UI_SHOTS").map(PathBuf::from);
+    let r = render(
+        serve("tray.html", &fixture_data(), TRAY_AUTO_OFF_AIR_DRIVER),
+        "tray-auto-off-air",
+        shots.as_deref().map(|f| (f, "tray-auto-off-air")),
+    );
+    assert_eq!(r["errors"], json!([]), "script errors: {}", r["errors"]);
+    let t = r["tray"].as_str().unwrap().to_lowercase();
+    assert!(t.contains("auto bet armed\nwaiting for the stream") && !t.contains("can't bet") && r["fix"] == json!(false), "{t}");
 }

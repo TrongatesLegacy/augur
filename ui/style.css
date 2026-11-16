@@ -895,16 +895,7 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 .cgrid .stackc > .panel { min-height: 0; }
 .cgrid .stackc > .panel.col > .fillin, .cgrid > .panel.col > .fillin { flex: 1 1 0; min-height: 0; overflow: auto; }
 .cgrid > .panel.col > .fillin { flex: 1 1 0; min-height: 0; overflow: auto; }
-.hpc { display: block; width: 100%; height: auto; }
-.hpc .grid line { stroke: rgba(255,255,255,.06); }
-.hpc .grid text, .hpc .kot { fill: var(--t3); font: 600 10.5px var(--sans); }
-.hpc .ko { stroke: rgba(255,207,107,.55); stroke-width: 1.2; stroke-dasharray: 3 3; }
-.hpc .kot { fill: var(--gold); }
-.hpc .line { fill: none; stroke-width: 2; stroke-linejoin: round; }
-.hpc .line.home { stroke: var(--home); } .hpc .line.away { stroke: var(--away); }
-.hpc .area { stroke: none; opacity: .09; } .hpc .area.home { fill: var(--home); } .hpc .area.away { fill: var(--away); }
-.hpc circle { stroke: #15122a; stroke-width: 1.5; } .hpc circle.home { fill: var(--home); } .hpc circle.away { fill: var(--away); }
-.hpc circle.big { stroke: var(--gold); stroke-width: 2; }
+
 .chart .ph .lg { margin: 0; flex-wrap: nowrap; min-width: 0; } .chart .ph .lg span { min-width: 0; }
 .crow.chips { margin-top: 6px; align-items: center; gap: 5px; }
 .crow .chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px; font-size: 11.5px; white-space: nowrap; }
@@ -1039,8 +1030,6 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 .lgrid .fillin.more { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent); }
 
 /* the breakdown's HP chart: Augur's projected race, faint behind the real one */
-.hpc .proj { fill: none; stroke-width: 1.8; stroke-dasharray: 2 4; stroke-linecap: round; opacity: .7; }
-.hpc .proj.home { stroke: var(--home); } .hpc .proj.away { stroke: var(--away); }
 .lg .lgp i { width: 13px; height: 2px; border-radius: 1px; background: repeating-linear-gradient(90deg, var(--t3) 0 2px, transparent 2px 5px); }
 
 /* Settings › Updates: the changelog as a timeline, this version marked */
@@ -1203,3 +1192,47 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 .astrip button { font: 700 11px var(--sans); padding: 3px 9px; border-radius: 7px; border: 0; background: rgba(255,95,109,.2); color: var(--t1); }
 .btn.dim { opacity: .45; }
 .btn.dim:hover { opacity: .8; }
+
+/* "Who's ahead": the HP gap over the fight (lib/worm.js), on Live and in a call's breakdown */
+.worm { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.worm .h { color: var(--home); } .worm .a { color: var(--away); }
+.wh { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--t2); min-width: 0; }
+.wsub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.wlead { font: 800 19px/1 var(--cond); letter-spacing: .02em; white-space: nowrap; color: var(--t2); }
+.wlead.h { color: var(--home); } .wlead.a { color: var(--away); }
+.wbox { position: relative; }
+.wsvg { display: block; width: 100%; height: auto; overflow: visible; }
+.wg line { stroke: rgba(255,255,255,.06); stroke-dasharray: 3 4; }
+.wg .wmid { stroke: rgba(255,255,255,.2); stroke-dasharray: none; }
+.wside { font: 700 9px var(--sans); letter-spacing: .08em; text-transform: uppercase; opacity: .65; }
+.wside.h { fill: var(--home); } .wside.a { fill: var(--away); }
+.wt text { fill: var(--t3); font: 600 10px var(--sans); }
+.wf { stroke: none; opacity: .14; } .wf.h { fill: var(--home); } .wf.a { fill: var(--away); }
+.wline { fill: none; stroke-width: 2.2; stroke-linejoin: round; }
+.wline.h { stroke: var(--home); filter: drop-shadow(0 0 4px rgba(79,227,255,.45)); }
+.wline.a { stroke: var(--away); filter: drop-shadow(0 0 4px rgba(255,92,168,.45)); }
+.ws { stroke-width: 1.2; opacity: .5; } .ws.home { stroke: var(--home); } .ws.away { stroke: var(--away); }
+.wl circle { fill: #15122a; stroke-width: 1.5; } .wl.home circle { stroke: var(--home); } .wl.away circle { stroke: var(--away); }
+.wl text { fill: var(--t1); font: 700 8.5px var(--sans); }
+.wko { stroke: rgba(255,207,107,.6); stroke-width: 1.2; stroke-dasharray: 3 3; }
+.wkot { fill: var(--gold); font: 700 9.5px var(--sans); }
+.wproj { fill: none; stroke: var(--gold); stroke-width: 1.5; stroke-dasharray: 4 4; opacity: .65; }
+.wnow { stroke: #15122a; stroke-width: 2; } .wnow.h { fill: var(--home); } .wnow.a { fill: var(--away); }
+.wx { stroke: rgba(255,255,255,.4); stroke-dasharray: 2 3; }
+.wdot { fill: #fff; stroke-width: 2.5; } .wdot.h { stroke: var(--home); } .wdot.a { stroke: var(--away); }
+.whit { fill: transparent; cursor: crosshair; }
+.wtip { position: absolute; top: 4px; z-index: 3; pointer-events: none; min-width: 150px; padding: 8px 10px; border-radius: 10px; font-size: 11.5px;
+  background: rgba(8,7,16,.95); border: 1px solid var(--line); box-shadow: 0 8px 22px rgba(0,0,0,.45); }
+.wtip > b { font: 800 15px/1 var(--cond); }
+.wtv { display: flex; gap: 10px; margin: 4px 0 2px; font-weight: 600; }
+.wtr { margin-top: 3px; white-space: nowrap; color: var(--t2); }
+.wtr b { color: var(--t1); }
+.wtr i { font: 700 8.5px var(--sans); font-style: normal; letter-spacing: .06em; text-transform: uppercase; color: var(--gold); border: 1px solid rgba(255,207,107,.5); border-radius: 5px; padding: 1px 5px; margin-left: 5px; }
+.wadv { display: flex; align-items: center; gap: 8px; font: 700 9px var(--sans); letter-spacing: .06em; text-transform: uppercase; }
+.wadv span { max-width: 28%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wbar { position: relative; flex: 1; height: 6px; border-radius: 6px; background: rgba(255,255,255,.06); }
+.wbar i { position: absolute; top: 0; bottom: 0; border-radius: 6px; } .wbar i.h { background: var(--home); } .wbar i.a { background: var(--away); }
+.wbar::after { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: rgba(255,255,255,.3); }
+.wpanel .ph .dot { display: inline-block; margin-right: 5px; vertical-align: 1px; }
+.wsvg [hidden] { display: none; }
+.wprojt { fill: var(--gold); font: 700 8.5px var(--sans); letter-spacing: .05em; opacity: .8; }

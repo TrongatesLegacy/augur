@@ -51,6 +51,8 @@ pub struct LiveView {
     pub detail: Option<CallDetail>,
     /// the site's clock at the last check (ms), to tell how long picks have been open
     pub site_now: Option<u64>,
+    /// the fight that's on (or just finished): its hits so far, for the "who's ahead" chart
+    pub fight: Option<site::LiveFight>,
 }
 
 /// What the popover and Live show when no duel is up.

@@ -845,7 +845,7 @@ fn about(shared: tauri::State<'_, Arc<Shared>>) -> Cmd<About> {
         version: env!("CARGO_PKG_VERSION").into(),
         data_dir: shared.dir.display().to_string(),
         counts: [
-            count("SELECT COUNT(*) FROM predictions WHERE status = 'settled'"),
+            count("SELECT COUNT(DISTINCT duel_id) FROM predictions WHERE status = 'settled'"),
             count("SELECT COUNT(*) FROM duels"),
             count("SELECT COUNT(DISTINCT duel_id) FROM hits"),
             count("SELECT COUNT(*) FROM species"),
@@ -971,6 +971,9 @@ pub fn run() {
         tray_rect: Mutex::new(None),
     });
     tauri::Builder::default()
+        // one Augur per computer: two copies importing the same calls file at once once stored a call twice. Opening
+        // it again opens the one that's running. First, so a second copy stops before anything else starts.
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| open_main(app, None)))
         .plugin(tauri_plugin_positioner::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())

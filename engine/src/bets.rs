@@ -147,6 +147,12 @@ pub struct Fight {
     pub augur_result: Option<i64>,
     /// Augur's result is an estimate: a win on a side the developer didn't back, at their usual payout
     pub estimated: bool,
+    /// the bet's place in the picks list
+    #[serde(default)]
+    pub seq: Option<u64>,
+    /// whether Augur placed the bet (auto betting) or you did
+    #[serde(default)]
+    pub via: Option<crate::autobet::Via>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -244,6 +250,8 @@ pub fn compare(calls: &[CallRecord], bets: &[Pick], s: &StakeSettings, odds: &Od
             augur_command: stake::command(&call.pick, amount, s),
             augur_result,
             estimated: estimated && label != Label::Pending,
+            seq: bet.map(|b| b.seq),
+            via: None,
         });
     }
     for b in bets.iter().filter(|b| !used.contains(&b.seq) && b.result.is_some()) {
@@ -265,6 +273,8 @@ pub fn compare(calls: &[CallRecord], bets: &[Pick], s: &StakeSettings, odds: &Od
             augur_command: String::new(),
             augur_result: None,
             estimated: false,
+            seq: Some(b.seq),
+            via: None,
         });
     }
     // newest first: by duel number where both have one, calls (made live) ahead of old unlinked bets

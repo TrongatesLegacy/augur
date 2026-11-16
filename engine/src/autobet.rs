@@ -302,6 +302,71 @@ pub fn bot_reply<'a>(lines: &'a [Line], line: &Line) -> Option<&'a Line> {
 /// Kick's chat times are to the second, and its clock and this computer's differ a little.
 const SLACK_MS: u64 = 5_000;
 
+// --- sync: each computer's auto bets, so every computer can tell its bets apart ---
+
+/// Writes this computer's own auto bets (not those synced in) to `path`, one JSON line each. Returns a mark of what was
+/// written: the file only needs writing again when it changes.
+pub fn export(conn: &Connection, path: &std::path::Path) -> Result<String> {
+    let mine: Vec<AutoBet> = all(conn)?.into_iter().filter(|b| b.device.is_none()).collect();
+    let mut out = String::new();
+    for b in &mine {
+        out.push_str(&serde_json::to_string(b)?);
+        out.push('\n');
+    }
+    std::fs::write(path, out)?;
+    Ok(mark(&mine))
+}
+
+/// What this computer's auto bets are now, to tell whether its file needs writing again.
+pub fn mark_now(conn: &Connection) -> Result<String> {
+    Ok(mark(&all(conn)?.into_iter().filter(|b| b.device.is_none()).collect::<Vec<_>>()))
+}
+
+fn mark(bets: &[AutoBet]) -> String {
+    bets.iter().map(|b| format!("{}:{}:{}", b.id, b.status, b.duel_id.unwrap_or(0))).collect::<Vec<_>>().join(",")
+}
+
+/// Brings in another computer's auto bets from its file, updating the ones already here. Returns how many changed.
+pub fn import(conn: &Connection, path: &std::path::Path, device: &str) -> Result<usize> {
+    let text = std::fs::read_to_string(path)?;
+    let mut changed = 0;
+    for raw in text.lines().filter(|l| !l.trim().is_empty()) {
+        let Ok(b) = serde_json::from_str::<AutoBet>(raw) else { continue };
+        changed += conn.execute(
+            "INSERT INTO auto_bets (device, remote_id, home_owner, away_owner, home_pal, away_pal, side, amount, command, prob, channel,
+                                    test, status, reason, claimed_at, sent_at, done_at, line_id, reply, duel_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+             ON CONFLICT (device, remote_id) DO UPDATE SET status = excluded.status, reason = excluded.reason,
+                 sent_at = excluded.sent_at, done_at = excluded.done_at, line_id = excluded.line_id, reply = excluded.reply,
+                 duel_id = excluded.duel_id
+             WHERE status IS NOT excluded.status OR duel_id IS NOT excluded.duel_id OR reply IS NOT excluded.reply",
+            params![
+                device,
+                b.id,
+                b.home_owner,
+                b.away_owner,
+                b.home_pal,
+                b.away_pal,
+                b.side,
+                b.amount as i64,
+                b.command,
+                b.prob,
+                b.channel,
+                b.test,
+                b.status,
+                b.reason,
+                b.claimed_at as i64,
+                b.sent_at.map(|v| v as i64),
+                b.done_at.map(|v| v as i64),
+                b.line_id,
+                b.reply,
+                b.duel_id.map(|v| v as i64)
+            ],
+        )?;
+    }
+    Ok(changed)
+}
+
 // --- which of your bets Augur placed ---
 
 /// How one of your bets was placed.
@@ -431,6 +496,29 @@ mod tests {
         assert_eq!(own_bet(&lines, "player-02", at - 30_000, None).map(|l| l.content.as_str()), Some("!a"));
         assert!(own_bet(&lines, "player-01", at - 30_000, Some(&line.id)).is_none(), "Augur's own line isn't yours");
         assert!(own_bet(&lines, "player-03", 0, None).is_none(), "gg isn't a bet");
+    }
+
+    /// The other computer gets this one's auto bets, and their later changes, without doubling them.
+    #[test]
+    fn auto_bets_travel_to_the_other_computer() {
+        let (mac, pc) = (crate::db::open_memory().unwrap(), crate::db::open_memory().unwrap());
+        let id = claim(&mac, &bet(1)).unwrap().unwrap();
+        let file = std::env::temp_dir().join(format!("augur-autobets-{}.jsonl", std::process::id()));
+        let first = export(&mac, &file).unwrap();
+        assert_eq!(import(&pc, &file, "mac").unwrap(), 1);
+        assert_eq!(import(&pc, &file, "mac").unwrap(), 0, "nothing new");
+        update(&mac, id, "confirmed", None, 5_000).unwrap();
+        assert_ne!(mark_now(&mac).unwrap(), first, "a change needs the file written again");
+        export(&mac, &file).unwrap();
+        assert_eq!(import(&pc, &file, "mac").unwrap(), 1);
+        let theirs = all(&pc).unwrap();
+        assert_eq!(theirs.len(), 1);
+        assert_eq!((theirs[0].status.as_str(), theirs[0].device.as_deref(), theirs[0].prediction_id), ("confirmed", Some("mac"), None));
+        // the PC writes only its own: none
+        export(&pc, &file).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "");
+        assert_eq!(spent_since(&pc, 0).unwrap(), (0, 0), "another computer's bets don't count against this one's limits");
+        let _ = std::fs::remove_file(file);
     }
 
     fn pick(seq: u64, duel: Option<u64>, side: &str, stake: u64) -> Pick {

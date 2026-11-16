@@ -188,9 +188,10 @@ pub fn bets_view(conn: &Connection, s: &StakeSettings, range: &str, now_secs: u6
     let synced_at = db::meta_get(conn, "bets_synced_at")?.and_then(|v| v.parse().ok());
     let balance = bets::balance(conn);
     let mut comparison = bets::compare(&calls, &bets, s, &bets::odds(conn)?, synced_at.unwrap_or(0));
-    comparison.fights.truncate(200);
     let autos = autobet::all(conn)?;
     label_bets(conn, &mut comparison.fights, &autos)?;
+    comparison.staking = bets::staking_periods(&comparison.fights);
+    comparison.fights.truncate(200);
     let stored = conn.query_row("SELECT COUNT(*) FROM bets", [], |r| r.get::<_, i64>(0))? as usize;
     Ok(BetsView { comparison, balance, synced_at, stored, import, auto_bets: autos.into_iter().take(40).collect() })
 }
@@ -783,6 +784,7 @@ pub fn live_detail(p: &Prediction, stake: Option<&Stake>) -> CallDetail {
         model: serde_json::to_string(s).unwrap_or_default(),
         // a call that's up hasn't been overwritten
         damaged: false,
+        staking: None,
     };
     let sides = call.fighters.as_ref().map(|(h, a)| vec![side_detail(s, &h.fighter, &a.fighter), side_detail(s, &a.fighter, &h.fighter)]);
     let slug = |side: &predict::Side| if side.slug.is_empty() { site::slug_for(&side.pal) } else { side.slug.clone() };

@@ -162,7 +162,7 @@ pub fn restake(app: &AppHandle, shared: &Shared) {
     if let Some(p) = live.prediction.clone() {
         let st = stake_for(&conn, &settings, &p.pick, p.prob);
         if let Ok(Some(id)) = db::open_call(&conn, &p.home.owner, &p.away.owner) {
-            let _ = db::set_call_stake(&conn, id, st.amount, &st.command);
+            let _ = db::set_call_stake(&conn, id, st.amount, &st.command, Some(&settings.staking));
         }
         live.stake = Some(st);
     }
@@ -287,7 +287,7 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
                         let stake = p.as_ref().map(|p| stake_for(&conn, &settings, &p.pick, p.prob));
                         if let (Some(p), Some(st)) = (&p, &stake) {
                             if let Ok(id) = db::add_call(&conn, &p.to_call()) {
-                                let _ = db::set_call_stake(&conn, id, st.amount, &st.command);
+                                let _ = db::set_call_stake(&conn, id, st.amount, &st.command, Some(&settings.staking));
                             }
                             if settings.notify_new_pick && !last_key.starts_with(&format!("{}|{}|", p.home.owner, p.away.owner)) {
                                 let bet = if st.command.is_empty() { String::new() } else { format!(" · {}", st.command) };

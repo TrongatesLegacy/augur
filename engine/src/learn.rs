@@ -339,6 +339,7 @@ mod tests {
             version: String::new(),
             model: String::new(),
             damaged: false,
+            staking: None,
         }
     }
 

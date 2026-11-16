@@ -342,6 +342,14 @@ pub fn fixture_data() -> Value {
         augur_engine::autobet::claim(&auto_conn, &b).unwrap();
     }
     let bets_auto = views::bets_view(&auto_conn, &StakeSettings::default(), "all", 0, Default::default()).unwrap();
+    // the staking settings saved with the calls: the defaults, then a switch to the max from 70% for the newest few
+    {
+        let max = StakeSettings { strategy: stake::Strategy::DefaultOrMax, skip_below: Some(0.65), ..Default::default() };
+        let [old, new] = [StakeSettings::default(), max].map(|s| serde_json::to_string(&s).unwrap());
+        conn.execute("UPDATE predictions SET staking = ?1", [&old]).unwrap();
+        conn.execute("UPDATE predictions SET staking = ?1 WHERE id IN (SELECT id FROM predictions ORDER BY seen_at DESC LIMIT 4)", [&new])
+            .unwrap();
+    }
     let mut data = json!({
         "live": live,
         "history": history,
@@ -1318,6 +1326,13 @@ fn every_tab_renders_headless() {
     );
     let b = &data["bets_view"]["comparison"];
     assert!(text("bets").contains("following augur") && text("bets").contains("deviated"), "Your bets: {}", text("bets"));
+    assert!(
+        text("bets").contains("by staking")
+            && text("bets").contains("default or max: 5,000 from 70%, 500 below, sitting out under 65%")
+            && text("bets").contains("scaled: 500 at 55% up to 5,000 at 85%"),
+        "Your bets splits the calls by the staking settings they were staked with: {}",
+        text("bets")
+    );
     assert!(
         text("bets").contains(&format!("{} left on the table", signed(b["missed_augur"].as_i64().unwrap()))),
         "Your bets totals missed fights apart: {}",

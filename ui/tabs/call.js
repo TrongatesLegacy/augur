@@ -45,7 +45,8 @@ function ledger(d) {
     trouble = `<span class="ast ${tone}" title="Auto bet ${esc(word.toLowerCase())}${why ? `: ${esc(why)}` : ''}">${esc(word)}</span>`;
   }
   if (b) {
-    cols.push(col('Augur’s bet', b.augur_stake ? `<b>${esc(b.augur_command)}</b>${made(b.augur_result, b.estimated)}` : '<small>sat out</small>'));
+    const how = b.staking ? ` title="${esc(b.staking)}"` : '';
+    cols.push(col('Augur’s bet', b.augur_stake ? `<b${how}>${esc(b.augur_command)}</b>${made(b.augur_result, b.estimated)}` : `<small${how}>sat out</small>`));
     if (d.bets_read) {
       const you = b.backed ? `<b title="${fmt(b.stake)} on ${esc(pal(c, b.backed))}">${cmd(b.backed, b.stake)}</b>${made(b.result)}` : '<small>no bet</small>';
       const tag = placed ? viaChip(b.via) : trouble || `<span class="lab ${b.label}">${BET_LABELS[b.label]}</span>${b.via?.double ? viaChip(b.via) : ''}`;

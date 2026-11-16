@@ -2,7 +2,15 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.16 (current)
+## 0.1.17 (current)
+- Open Augur works again with auto betting on; the Kick chat stops reloading, slow mode doesn't stop bets, and bets confirm more reliably
+- Auto betting can arm itself when Augur starts (Settings › Auto bet › Arm when Augur starts)
+- Numbers inside rings no longer touch the ring
+- Who's ahead: a chart of the fight, hit by hit with hover, live on Live and in each call's breakdown
+- Calls are less sure when a pal leans on moves the site doesn't list, and auto betting starts at 65%
+- Auto bet doesn't warn while the stream is off air, and its popover card is tidier
+
+## 0.1.16
 - Augur can place its bet itself: sign in to Kick in Settings › Auto bet, and it bets once per fight in the stream's chat, with Cancel
 
 ## 0.1.15

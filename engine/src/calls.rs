@@ -1,14 +1,15 @@
 //! The calls file: Augur's calls as JSON Lines, one call per line with its fighters as seen before the bell.
 //! `fixtures/calls.jsonl` (made-up test calls) uses this format, plus the model's "expected" numbers, which import ignores.
 
+use std::collections::HashMap;
+use std::path::Path;
+
+use rusqlite::{Connection, Transaction, TransactionBehavior};
+use serde::{Deserialize, Serialize};
+
 use crate::db::{self, CallFighter, NewCall};
 use crate::error::Error;
 use crate::model::Settings;
-use crate::site::{Duel, Recent};
-use rusqlite::Connection;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Line {
@@ -79,15 +80,19 @@ pub fn import(conn: &Connection, path: &Path) -> crate::Result<usize> {
 /// already here keeps what it has and only fills its blanks, such as pal ranks read on another computer.
 pub fn import_all(conn: &Connection, path: &Path) -> crate::Result<db::Merged> {
     let text = std::fs::read_to_string(path)?;
+    // one write at a time: two copies of Augur importing the same file at once could each find a call missing and
+    // both store it
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    let m = import_lines(&tx, &text)?;
+    tx.commit()?;
+    Ok(m)
+}
+
+fn import_lines(conn: &Connection, text: &str) -> crate::Result<db::Merged> {
     let (mut added, mut filled) = (0, 0);
     for (i, raw) in text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
         let l: Line = serde_json::from_str(raw).map_err(|e| Error::Parse(format!("line {} of the calls file: {e}", i + 1)))?;
-        let exists: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM predictions WHERE home_owner = ?1 AND away_owner = ?2 AND seen_at = ?3",
-            rusqlite::params![l.home_owner, l.away_owner, l.seen_at],
-            |r| r.get(0),
-        )?;
-        if exists > 0 {
+        if db::call_at(conn, &l.home_owner, &l.away_owner, l.seen_at)?.is_some() {
             // a call already here: the damaged mark carries over (it's only ever set, never cleared), and its
             // fighters' blanks are filled
             if l.damaged {
@@ -125,7 +130,7 @@ pub fn import_all(conn: &Connection, path: &Path) -> crate::Result<db::Merged> {
             stats_from: String::new(),
             version: String::new(),
         };
-        let id = db::add_call(conn, &call)?;
+        let id = db::insert_call(conn, &call)?;
         if l.damaged {
             conn.execute("UPDATE predictions SET damaged = 1 WHERE id = ?", [id])?;
         }
@@ -133,9 +138,7 @@ pub fn import_all(conn: &Connection, path: &Path) -> crate::Result<db::Merged> {
             db::set_call_stake(conn, id, amount, l.stake_cmd.as_deref().unwrap_or(""))?;
         }
         if let (Some(duel), Some(winner)) = (l.duel, l.winner) {
-            let recent = [Recent { id: duel, home: l.home_owner, away: l.away_owner, win: winner.clone(), at: l.seen_at.max(0) as u64 }];
-            db::settle(conn, &recent, |_| Some(Duel { winner: Some(winner.clone()), ..Default::default() }))?;
-            let _ = id;
+            db::settle_call(conn, id, duel, &l.home_owner, &l.away_owner, &winner)?;
         }
         added += 1;
     }
@@ -206,6 +209,52 @@ mod tests {
         let fresh = db::open_memory().unwrap();
         import(&fresh, &out).unwrap();
         assert_eq!(damaged(&fresh), 1, "a call it didn't have arrives marked");
+        let _ = std::fs::remove_file(out);
+    }
+
+    /// Another computer's call on the fight that's up here arrives while this computer's own call is still open:
+    /// it's stored as its own call, and the open one stays as it is.
+    #[test]
+    fn a_synced_call_leaves_the_open_call_alone() {
+        let fixture = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/calls.jsonl"));
+        let mac = db::open_memory().unwrap();
+        import(&mac, fixture).unwrap();
+        let theirs = db::settled(&mac).unwrap().pop().unwrap();
+        let out = std::env::temp_dir().join(format!("augur-open-{}.jsonl", std::process::id()));
+        export(&mac, &out).unwrap();
+        // the PC has the same fight up, read a little later, still open, picked the other way
+        let pc = db::open_memory().unwrap();
+        let (home, away) = db::settled_call(&mac, theirs.id).unwrap().unwrap().fighters.unwrap();
+        let ours = NewCall {
+            seen_at: theirs.seen_at as u64 + 5_000,
+            home_owner: theirs.home_owner.clone(),
+            away_owner: theirs.away_owner.clone(),
+            home_pal: theirs.home_pal.clone(),
+            away_pal: theirs.away_pal.clone(),
+            pick: if theirs.pick == "home" { "away".into() } else { "home".into() },
+            prob: 0.55,
+            p_stats: 0.5,
+            p_species: 0.5,
+            p_h2h: 0.5,
+            estimated: false,
+            species_rec: [[1.0, 1.0], [1.0, 1.0]],
+            pal_h2h: [0.0, 0.0],
+            model: Settings::default(),
+            home,
+            away,
+            picks_open: true,
+            stats_from: String::new(),
+            version: String::new(),
+        };
+        let open = db::add_call(&pc, &ours).unwrap();
+        let n = import(&pc, &out).unwrap();
+        assert_eq!(import(&pc, &out).unwrap(), 0, "importing twice adds nothing");
+        let (status, pick): (String, String) =
+            pc.query_row("SELECT status, pick FROM predictions WHERE id = ?", [open], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((status.as_str(), pick), ("open", ours.pick.clone()), "the open call is untouched");
+        let done = db::settled(&pc).unwrap();
+        assert_eq!(done.len(), n, "every synced call arrived, the one on the open fight too");
+        assert!(done.iter().any(|c| c.seen_at == theirs.seen_at && c.pick == theirs.pick));
         let _ = std::fs::remove_file(out);
     }
 }

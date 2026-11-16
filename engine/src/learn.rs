@@ -279,7 +279,7 @@ pub fn due(conn: &Connection, last: Option<&Learned>) -> bool {
     let Some(l) = last else { return true };
     let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0) as usize;
     let duels = count("SELECT COUNT(*) FROM duels WHERE winner IS NOT NULL");
-    let calls = count("SELECT COUNT(*) FROM predictions WHERE status = 'settled'");
+    let calls = count("SELECT COUNT(DISTINCT duel_id) FROM predictions WHERE status = 'settled'");
     duels >= l.past_duels + 25 || calls > l.live_calls
 }
 

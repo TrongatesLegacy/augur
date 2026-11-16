@@ -66,8 +66,8 @@ pub struct SyncState {
     pub error: Option<String>,
     /// how many calls this computer last wrote to its calls file
     pub calls_written: usize,
-    /// what the calls file last held: settled calls and how many are marked damaged. A new result or mark (or an
-    /// update that adds something to the file, which starts this empty) writes the file again
+    /// what the calls file last held: which settled calls and how many are marked damaged or ranked. A new result
+    /// or mark (or an update that adds something to the file, which starts this empty) writes the file again
     pub calls_mark: String,
 }
 
@@ -177,9 +177,11 @@ impl SyncState {
     fn write_own(&mut self, conn: &Connection, dir: &Path, os: &str, app: &str, now: u64) -> crate::Result<()> {
         let calls_file = dir.join("calls").join(format!("{}.jsonl", self.device));
         let settled = db::settled(conn)?;
-        // written again when a call is added, marked damaged or gains its pal ranks (the others fill them in)
+        // written again when a call is added, marked damaged or gains its pal ranks (the others fill them in), or
+        // another computer's earlier call on a duel takes over from this one's (the same count, different calls)
         let ranked = settled.iter().filter(|c| c.fighters.as_ref().is_some_and(|(h, _)| h.fighter.pal_rank.is_some())).count();
-        let mark = format!("{}:{}:{ranked}", settled.len(), settled.iter().filter(|c| c.damaged).count());
+        let ids: Vec<i64> = settled.iter().map(|c| c.id).collect();
+        let mark = format!("{}:{}:{ranked}:{:x}", settled.len(), settled.iter().filter(|c| c.damaged).count(), fingerprint(&ids));
         if self.what.calls && (mark != self.calls_mark || !calls_file.exists()) {
             std::fs::create_dir_all(calls_file.parent().unwrap())?;
             self.calls_written = calls::export(conn, &calls_file)?;
@@ -351,6 +353,14 @@ pub fn synced_folders(home: &Path, env: &dyn Fn(&str) -> Option<String>, windows
     out
 }
 
+/// Stable across runs (the mark is saved), for telling one list of calls from another.
+fn fingerprint(v: &impl std::hash::Hash) -> u64 {
+    use std::hash::Hasher;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    v.hash(&mut h);
+    h.finish()
+}
+
 fn new_id() -> String {
     use std::hash::{BuildHasher, Hasher};
     let mut h = std::collections::hash_map::RandomState::new().build_hasher();
@@ -417,6 +427,53 @@ mod tests {
         let got = mac.sync(&mac_db, &mac_vals, "macOS", "0.1.0", 5_000);
         assert_eq!(got.settings, BTreeMap::from([("default_voice".into(), json!("Gollum"))]));
         assert_eq!(got.calls, 0, "calls already there aren't added twice");
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    /// Both computers left open call the same fight, a moment apart and the other way round: after syncing both
+    /// ways, each counts the duel once, and the same call (the first made). Only the call that counts is shared.
+    #[test]
+    fn both_computers_calling_a_duel_agree_on_one_call() {
+        let folder = temp("both");
+        let (mac_db, pc_db) = (crate::seed::store(), db::open_memory().unwrap());
+        let (mut mac, mut pc) = (computer("Mac", &folder), computer("PC", &folder));
+        let none = BTreeMap::new();
+        mac.sync(&mac_db, &none, "macOS", "0.1.0", 1_000);
+        pc.sync(&pc_db, &none, "Windows", "0.1.0", 2_000);
+        // the PC's own call on the Mac's newest duel, read a moment earlier
+        let c = db::settled(&mac_db).unwrap().pop().unwrap();
+        let (home, away) = c.fighters.clone().unwrap();
+        let theirs = db::NewCall {
+            seen_at: c.seen_at as u64 - 5_000,
+            home_owner: c.home_owner.clone(),
+            away_owner: c.away_owner.clone(),
+            home_pal: c.home_pal.clone(),
+            away_pal: c.away_pal.clone(),
+            pick: if c.pick == "home" { "away".into() } else { "home".into() },
+            prob: 0.55,
+            p_stats: 0.5,
+            p_species: 0.5,
+            p_h2h: 0.5,
+            estimated: false,
+            species_rec: c.species_rec.unwrap(),
+            pal_h2h: c.pal_h2h,
+            model: Default::default(),
+            home,
+            away,
+            picks_open: true,
+            stats_from: String::new(),
+            version: String::new(),
+        };
+        let id = db::insert_call(&pc_db, &theirs).unwrap();
+        db::settle_call(&pc_db, id, c.duel_id.unwrap(), &c.home_owner, &c.away_owner, c.winner.as_deref().unwrap()).unwrap();
+        pc.sync(&pc_db, &none, "Windows", "0.1.0", 3_000);
+        assert_eq!(mac.sync(&mac_db, &none, "macOS", "0.1.0", 4_000).calls, 1, "the Mac stores the PC's call");
+        pc.sync(&pc_db, &none, "Windows", "0.1.0", 5_000);
+        let counted =
+            |conn: &Connection| db::settled(conn).unwrap().into_iter().map(|c| (c.duel_id, c.seen_at, c.pick)).collect::<Vec<_>>();
+        assert_eq!(counted(&mac_db).len(), 19, "the duel counts once");
+        assert_eq!(counted(&mac_db), counted(&pc_db), "the same calls on both");
+        assert_eq!(counted(&mac_db).last().unwrap().2, theirs.pick, "the first made: the PC's");
         let _ = std::fs::remove_dir_all(folder);
     }
 

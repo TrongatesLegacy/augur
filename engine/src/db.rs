@@ -129,6 +129,19 @@ fn migrate(conn: &Connection) -> Result<()> {
             conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind}"))?;
         }
     }
+    let indexed: i64 = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'one_call'", [], |r| r.get(0))?;
+    if indexed == 0 {
+        // two copies of Augur importing the same calls file at once could each store a call: keep the first.
+        // Calls from before seen_at was recorded (0) can be different fights between the same owners.
+        let repeat = "SELECT p.id FROM predictions p WHERE p.seen_at > 0 AND p.id > (SELECT MIN(q.id) FROM predictions q
+                      WHERE q.home_owner = p.home_owner AND q.away_owner = p.away_owner AND q.seen_at = p.seen_at)";
+        let tx = conn.unchecked_transaction()?;
+        // fighters by hand: a connection without foreign keys on (open_memory) doesn't cascade
+        tx.execute(&format!("DELETE FROM fighters WHERE prediction_id IN ({repeat})"), [])?;
+        tx.execute(&format!("DELETE FROM predictions WHERE id IN ({repeat})"), [])?;
+        tx.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS one_call ON predictions (home_owner, away_owner, seen_at) WHERE seen_at > 0")?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -386,6 +399,34 @@ fn yes() -> bool {
     true
 }
 
+/// The columns `call_values` fills, in its order.
+const CALL_COLS: &str = "seen_at, home_owner, away_owner, home_pal, away_pal, pick, prob, p_stats, p_species, p_h2h, estimated, \
+                         home_species_w, home_species_l, away_species_w, away_species_l, pal_h2h_home, pal_h2h_away, model";
+
+fn call_values(c: &NewCall) -> Vec<rusqlite::types::Value> {
+    let n = |v: f64| rusqlite::types::Value::Integer(v as i64);
+    vec![
+        (c.seen_at as i64).into(),
+        c.home_owner.clone().into(),
+        c.away_owner.clone().into(),
+        c.home_pal.clone().into(),
+        c.away_pal.clone().into(),
+        c.pick.clone().into(),
+        c.prob.into(),
+        c.p_stats.into(),
+        c.p_species.into(),
+        c.p_h2h.into(),
+        (c.estimated as i64).into(),
+        n(c.species_rec[0][0]),
+        n(c.species_rec[0][1]),
+        n(c.species_rec[1][0]),
+        n(c.species_rec[1][1]),
+        n(c.pal_h2h[0]),
+        n(c.pal_h2h[1]),
+        serde_json::to_string(&c.model).unwrap().into(),
+    ]
+}
+
 /// Record a call. Re-running the same open fight while picks are open updates it in place. Once picks have closed
 /// the call stands as it was: a re-call (stats shown at the bell) only updates the fighters, so the model learns from
 /// the real stats, and is kept as the "after the bell" pick. A fight first seen after picks closed is logged as late.
@@ -407,52 +448,64 @@ pub fn add_call(conn: &Connection, c: &NewCall) -> Result<i64> {
         save_fighters(conn, id, c)?;
         return Ok(id);
     }
-    let model = serde_json::to_string(&c.model).unwrap();
-    let vals = params![
-        c.seen_at as i64,
-        c.home_owner,
-        c.away_owner,
-        c.home_pal,
-        c.away_pal,
-        c.pick,
-        c.prob,
-        c.p_stats,
-        c.p_species,
-        c.p_h2h,
-        c.estimated as i64,
-        c.species_rec[0][0] as i64,
-        c.species_rec[0][1] as i64,
-        c.species_rec[1][0] as i64,
-        c.species_rec[1][1] as i64,
-        c.pal_h2h[0] as i64,
-        c.pal_h2h[1] as i64,
-        model
-    ];
-    let cols = "seen_at, home_owner, away_owner, home_pal, away_pal, pick, prob, p_stats, p_species, p_h2h, estimated, \
-                home_species_w, home_species_l, away_species_w, away_species_l, pal_h2h_home, pal_h2h_away, model";
-    let id = match existing {
-        Some(id) => {
-            let sets = cols.split(", ").skip(1).enumerate().map(|(i, c)| format!("{c} = ?{}", i + 2)).collect::<Vec<_>>().join(", ");
-            conn.execute(&format!("UPDATE predictions SET {sets} WHERE id = ?19"), {
-                let mut v: Vec<&dyn rusqlite::ToSql> = vals.to_vec();
-                v.push(&id);
-                rusqlite::params_from_iter(v)
-            })?;
-            conn.execute("DELETE FROM fighters WHERE prediction_id = ?", [id])?;
-            id
+    if let Some(id) = existing {
+        let sets = CALL_COLS.split(", ").skip(1).enumerate().map(|(i, c)| format!("{c} = ?{}", i + 2)).collect::<Vec<_>>().join(", ");
+        let mut vals = call_values(c);
+        vals.push(id.into());
+        conn.execute(&format!("UPDATE predictions SET {sets} WHERE id = ?19"), rusqlite::params_from_iter(vals))?;
+        conn.execute("DELETE FROM fighters WHERE prediction_id = ?", [id])?;
+        conn.execute("UPDATE predictions SET stats_from = ?1, app_version = ?2 WHERE id = ?3", params![c.stats_from, c.version, id])?;
+        save_fighters(conn, id, c)?;
+        return Ok(id);
+    }
+    // the same fight seen at the same moment is already here (synced in from another computer that read the same
+    // site clock): it's the same call
+    if c.seen_at > 0 {
+        if let Some(id) = call_at(conn, &c.home_owner, &c.away_owner, c.seen_at as i64)? {
+            return Ok(id);
         }
-        None => {
-            conn.execute(&format!("INSERT INTO predictions ({cols}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)"), vals)?;
-            let id = conn.last_insert_rowid();
-            if !c.picks_open {
-                conn.execute("UPDATE predictions SET closed = 1, late_only = 1 WHERE id = ?", [id])?;
-            }
-            id
-        }
-    };
+    }
+    insert_call(conn, c)
+}
+
+/// Stores a call as a new row, with none of `add_call`'s matching against the fight that's up: a call synced in
+/// from another computer is its own call, even when one for the same fight is open here.
+pub fn insert_call(conn: &Connection, c: &NewCall) -> Result<i64> {
+    let places = (1..=18).map(|i| format!("?{i}")).collect::<Vec<_>>().join(", ");
+    conn.execute(&format!("INSERT INTO predictions ({CALL_COLS}) VALUES ({places})"), rusqlite::params_from_iter(call_values(c)))?;
+    let id = conn.last_insert_rowid();
+    if !c.picks_open {
+        conn.execute("UPDATE predictions SET closed = 1, late_only = 1 WHERE id = ?", [id])?;
+    }
     conn.execute("UPDATE predictions SET stats_from = ?1, app_version = ?2 WHERE id = ?3", params![c.stats_from, c.version, id])?;
     save_fighters(conn, id, c)?;
     Ok(id)
+}
+
+/// The call for this fight seen at this moment, if it's here. What makes two calls the same call.
+pub fn call_at(conn: &Connection, home_owner: &str, away_owner: &str, seen_at: i64) -> Result<Option<i64>> {
+    Ok(conn.query_row(
+        "SELECT MIN(id) FROM predictions WHERE home_owner = ?1 AND away_owner = ?2 AND seen_at = ?3",
+        params![home_owner, away_owner, seen_at],
+        |r| r.get(0),
+    )?)
+}
+
+/// Settles one call from a result recorded elsewhere (another computer's calls file), storing the duel's winner
+/// when it isn't here yet. Unlike `settle`, it never touches another call with the same owners, such as a rematch
+/// that's up now.
+pub fn settle_call(conn: &Connection, id: i64, duel: u64, home_owner: &str, away_owner: &str, winner: &str) -> Result<()> {
+    if get_duel(conn, duel)?.is_none_or(|d| d.winner.is_none()) {
+        let d = Duel {
+            winner: Some(winner.into()),
+            home_owner: Some(home_owner.into()),
+            away_owner: Some(away_owner.into()),
+            ..Default::default()
+        };
+        save_duel(conn, duel, &d)?;
+    }
+    conn.execute("UPDATE predictions SET status = 'settled', duel_id = ?1 WHERE id = ?2", params![duel as i64, id])?;
+    Ok(())
 }
 
 /// Picks have closed on the fight up: its open call stands as it is now.
@@ -658,23 +711,30 @@ pub fn settled(conn: &Connection) -> Result<Vec<CallRecord>> {
     Ok(settled_all(conn)?.into_iter().filter(|c| !c.late_only).collect())
 }
 
-/// Every finished call, including ones first made after picks closed: what the model learns from.
+/// Every finished call, including ones first made after picks closed: what the model learns from. One per duel:
+/// two computers left open both call the fight that's up, and each keeps both calls once they've synced.
 pub fn settled_all(conn: &Connection) -> Result<Vec<CallRecord>> {
-    settled_where(conn, "", [])
+    settled_where(conn, "AND p.nth = 1", [])
 }
 
-/// One finished call, by its id (late-only calls too), for its breakdown.
+/// One finished call, by its id (late-only calls too, and a duel's other calls), for its breakdown.
 pub fn settled_call(conn: &Connection, id: i64) -> Result<Option<CallRecord>> {
     Ok(settled_where(conn, "AND p.id = ?1", [id])?.pop())
 }
 
+/// Which of a duel's calls counts when there's more than one (`nth` = 1). Only what every computer has the same
+/// goes in the order, so they all pick the same call: one made while picks were open, then the first made. Calls
+/// that agree on all of it count the same whichever is kept.
+const FIRST_CALL: &str = "ROW_NUMBER() OVER (PARTITION BY duel_id ORDER BY COALESCE(late_only, 0), COALESCE(seen_at, 0), pick, prob, id)";
+
 fn settled_where(conn: &Connection, and: &str, args: impl rusqlite::Params) -> Result<Vec<CallRecord>> {
     let mut st = conn.prepare(&format!(
-        "SELECT p.id, COALESCE(p.seen_at, 0), p.home_owner, p.away_owner, p.home_pal, p.away_pal, p.pick, p.prob, p.p_stats, p.p_species,
+        "WITH p AS (SELECT *, {FIRST_CALL} AS nth FROM predictions WHERE status = 'settled')
+         SELECT p.id, COALESCE(p.seen_at, 0), p.home_owner, p.away_owner, p.home_pal, p.away_pal, p.pick, p.prob, p.p_stats, p.p_species,
                 p.p_h2h, p.home_species_w, p.home_species_l, p.away_species_w, p.away_species_l, p.pal_h2h_home, p.pal_h2h_away,
                 p.duel_id, d.winner, d.fought_at, d.ko, d.winner_hp_left, p.stake, p.late_pick, p.late_prob, COALESCE(p.late_only, 0),
                 COALESCE(p.app_version, ''), COALESCE(p.model, ''), COALESCE(p.damaged, 0)
-         FROM predictions p LEFT JOIN duels d ON d.id = p.duel_id WHERE p.status = 'settled' AND d.winner IS NOT NULL {and} ORDER BY p.duel_id, p.id"
+         FROM p LEFT JOIN duels d ON d.id = p.duel_id WHERE d.winner IS NOT NULL {and} ORDER BY p.duel_id, p.id"
     ))?;
     let calls: Vec<CallRecord> = st
         .query_map(args, |r| {
@@ -886,7 +946,14 @@ fn merge_attached(conn: &Connection) -> Result<Merged> {
         .query_map([], |r| r.get(0))?
         .collect::<Rq<_>>()?;
     for old in new {
-        tx.execute(&format!("INSERT INTO predictions ({pcols}{extra}) SELECT {pcols}{extra} FROM other.predictions WHERE id = ?"), [old])?;
+        // a backup can hold the same call twice (made before stores refused repeats): the first one counts
+        if tx.execute(
+            &format!("INSERT OR IGNORE INTO predictions ({pcols}{extra}) SELECT {pcols}{extra} FROM other.predictions WHERE id = ?"),
+            [old],
+        )? == 0
+        {
+            continue;
+        }
         let id = tx.last_insert_rowid();
         tx.execute(
             &format!(
@@ -1155,5 +1222,58 @@ mod tests {
         let mut moves = vec![Move { name: "Big".into(), el: "neutral".into(), power: 100.0, lv: 1, hit: 1.0 }];
         with_hit_sizes(&mut moves, &before);
         assert_eq!(moves[0].hit, 1.1);
+    }
+
+    /// Two computers left open both call the fight that's up, a moment apart: once synced, each has both calls, and
+    /// the duel counts once, the same call on each.
+    #[test]
+    fn a_duel_called_twice_counts_once() {
+        let conn = open_memory().unwrap();
+        let first = insert_call(&conn, &NewCall { seen_at: 1_000, ..call("x", "y") }).unwrap();
+        let later = insert_call(&conn, &NewCall { seen_at: 1_400, pick: "away".into(), ..call("x", "y") }).unwrap();
+        for id in [later, first] {
+            settle_call(&conn, id, 7, "x", "y", "home").unwrap();
+        }
+        let done = settled(&conn).unwrap();
+        assert_eq!(done.iter().map(|c| c.id).collect::<Vec<_>>(), [first], "the first call made counts");
+        assert!(settled_call(&conn, later).unwrap().is_some(), "the other is still there for its breakdown");
+        // a call made after picks closed never beats one made while they were open, even when it came first
+        let late = insert_call(&conn, &NewCall { seen_at: 900, picks_open: false, ..call("x", "y") }).unwrap();
+        settle_call(&conn, late, 7, "x", "y", "home").unwrap();
+        assert_eq!(settled_all(&conn).unwrap().iter().map(|c| c.id).collect::<Vec<_>>(), [first]);
+    }
+
+    #[test]
+    fn the_same_call_is_stored_once() {
+        let conn = open_memory().unwrap();
+        let id = insert_call(&conn, &call("x", "y")).unwrap();
+        assert!(insert_call(&conn, &call("x", "y")).is_err(), "the store refuses a repeat");
+        settle_call(&conn, id, 7, "x", "y", "home").unwrap();
+        // a fight read at the same site moment as a call synced in from another computer is that call
+        assert_eq!(add_call(&conn, &call("x", "y")).unwrap(), id);
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM predictions", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+    }
+
+    /// A store from before repeats were refused loses its repeats, but keeps calls from before seen_at was recorded:
+    /// those can be different fights between the same owners.
+    #[test]
+    fn upgrading_drops_repeated_calls() {
+        let conn = open_memory().unwrap();
+        conn.execute_batch("DROP INDEX one_call").unwrap();
+        let first = insert_call(&conn, &call("x", "y")).unwrap();
+        let repeat = insert_call(&conn, &call("x", "y")).unwrap();
+        let untimed: Vec<i64> = (0..2).map(|_| insert_call(&conn, &NewCall { seen_at: 0, ..call("x", "y") }).unwrap()).collect();
+        migrate(&conn).unwrap();
+        let ids: Vec<i64> = conn
+            .prepare("SELECT id FROM predictions ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Rq<_>>()
+            .unwrap();
+        assert_eq!(ids, [first, untimed[0], untimed[1]]);
+        let orphans: i64 = conn.query_row("SELECT COUNT(*) FROM fighters WHERE prediction_id = ?", [repeat], |r| r.get(0)).unwrap();
+        assert_eq!(orphans, 0, "the repeat's fighters went with it");
+        assert!(insert_call(&conn, &call("x", "y")).is_err(), "and repeats are refused from now on");
     }
 }

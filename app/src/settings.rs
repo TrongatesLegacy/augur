@@ -1,5 +1,6 @@
 //! The app's settings, kept as JSON next to the database, and where everything lives.
 
+use augur_engine::autobet::AutoBetSettings;
 use augur_engine::model::Settings as ModelSettings;
 use augur_engine::stake::StakeSettings;
 use serde::{Deserialize, Serialize};
@@ -54,6 +55,8 @@ pub struct AppSettings {
     pub model_auto: bool,
     /// your own model settings, used only while `model_auto` is off
     pub model: ModelSettings,
+    /// Settings › Auto bet (kept on each computer: only one should bet)
+    pub auto_bet: AutoBetSettings,
 }
 
 impl Default for AppSettings {
@@ -80,6 +83,7 @@ impl Default for AppSettings {
             staking: StakeSettings::default(),
             model_auto: true,
             model: ModelSettings::default(),
+            auto_bet: AutoBetSettings::default(),
         }
     }
 }

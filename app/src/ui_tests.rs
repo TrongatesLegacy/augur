@@ -308,6 +308,7 @@ pub fn fixture_data() -> Value {
                 at: recent,
                 settings: Default::default(),
                 calls: 19,
+                auto_bet: false,
             }],
             folders: vec![augur_engine::sync::Folder {
                 id: "onedrive".into(),

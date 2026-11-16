@@ -540,16 +540,16 @@ mod tests {
         let auto = AutoBet { id: 1, status: "confirmed".into(), duel_id: Some(50), claimed_at: 1_000_000, ..bet(1) };
         let seen: HashMap<u64, u64> = HashMap::new();
         // one bet on the fight, Augur's
-        let v = via(&[pick(1, Some(50), "home", 2300), pick(2, Some(49), "home", 500)], &[auto.clone()], &seen);
+        let v = via(&[pick(1, Some(50), "home", 2300), pick(2, Some(49), "home", 500)], std::slice::from_ref(&auto), &seen);
         assert_eq!((v[&1].via.as_str(), v[&1].double, v[&2].via.as_str()), ("auto", false, "manual"));
         assert_eq!(v[&1].status.as_deref(), Some("confirmed"));
         // you bet on the same fight too: the one with Augur's stake is Augur's, and both are a double bet
-        let v = via(&[pick(3, Some(50), "home", 500), pick(4, Some(50), "home", 2300)], &[auto.clone()], &seen);
+        let v = via(&[pick(3, Some(50), "home", 500), pick(4, Some(50), "home", 2300)], std::slice::from_ref(&auto), &seen);
         assert_eq!((v[&4].via.as_str(), v[&4].double, v[&3].via.as_str(), v[&3].double), ("auto", true, "manual", true));
         // an older bet with no duel link: matched by the fight, read after the claim
         let seen = HashMap::from([(5, 1_010_000), (6, 100_000)]);
         let unlinked = AutoBet { duel_id: None, ..auto.clone() };
-        let v = via(&[pick(5, None, "home", 2300)], &[unlinked.clone()], &seen);
+        let v = via(&[pick(5, None, "home", 2300)], std::slice::from_ref(&unlinked), &seen);
         assert_eq!(v[&5].via, "auto");
         assert_eq!(via(&[pick(6, None, "home", 2300)], &[unlinked], &seen)[&6].via, "manual", "read long before Augur bet");
         // a test bet, or one that never went out, places nothing

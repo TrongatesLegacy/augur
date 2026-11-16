@@ -68,10 +68,19 @@ pub struct Shared {
     pub tray: Mutex<Option<TrayIcon>>,
     /// where the tray icon is on screen (physical pixels: x, y, width, height), from its last click
     pub tray_rect: Mutex<Option<[f64; 4]>>,
+    /// auto betting: what Live shows, armed for this session, Cancel pressed, and Kick's sign-in here
+    pub auto: Mutex<crate::autobet::AutoView>,
+    pub armed: AtomicBool,
+    pub cancel: Mutex<bool>,
+    pub kick: Mutex<crate::autobet::KickLogin>,
+    /// the tray menu's Arm auto bet item
+    pub arm_item: Mutex<Option<MenuItem<tauri::Wry>>>,
+    /// the main window's page zoom, to place the chat on Live
+    pub zoom: Mutex<f64>,
 }
 
 impl Shared {
-    fn db(&self) -> Result<rusqlite::Connection, String> {
+    pub(crate) fn db(&self) -> Result<rusqlite::Connection, String> {
         db::open(&settings::db_path(&self.dir)).map_err(|e| e.to_string())
     }
 
@@ -178,7 +187,7 @@ fn update_tray(app: &AppHandle, shared: &Shared) {
     let _ = app;
 }
 
-fn notify(app: &AppHandle, title: &str, body: &str) {
+pub(crate) fn notify(app: &AppHandle, title: &str, body: &str) {
     let _ = app.notification().builder().title(title).body(body).show();
 }
 
@@ -280,6 +289,7 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
                 live.title = state.title.clone();
                 live.live = state.live;
                 live.picks_open = state.picks_open();
+                live.site_now = state.now;
                 live.queue = state.upcoming().into_iter().take(4).collect();
                 live.synced_at = now_ms();
                 live.error = None;
@@ -438,7 +448,9 @@ fn bets_loop(app: AppHandle, shared: Arc<Shared>) {
 fn fit_zoom(w: &tauri::WebviewWindow) {
     let (Ok(size), Ok(scale)) = (w.inner_size(), w.scale_factor()) else { return };
     let size = size.to_logical::<f64>(scale);
-    let _ = w.set_zoom((size.width / 1280.0).min(size.height / 720.0).clamp(0.8, 2.0));
+    let zoom = (size.width / 1280.0).min(size.height / 720.0).clamp(0.8, 2.0);
+    let _ = w.set_zoom(zoom);
+    *w.app_handle().state::<Arc<Shared>>().zoom.lock().unwrap() = zoom;
 }
 
 /// What each staking choice would suggest at a spread of chances, for Settings › Staking.
@@ -741,6 +753,13 @@ fn get_settings(shared: tauri::State<'_, Arc<Shared>>) -> AppSettings {
 #[tauri::command]
 fn save_settings(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>, settings: AppSettings) -> Cmd<()> {
     use tauri_plugin_autostart::ManagerExt;
+    let was = shared.settings.lock().unwrap().auto_bet.enabled;
+    if settings.auto_bet.enabled && !was {
+        let now = now_ms();
+        if let Some(o) = shared.others.lock().unwrap().iter().find(|o| o.auto_bet && now.saturating_sub(o.at) < 10 * 60_000) {
+            return Err(format!("{} has auto betting on: turn it off there first, so only one computer bets.", o.name));
+        }
+    }
     settings.save(&shared.dir)?;
     let autostart = app.autolaunch();
     let _ = if settings.launch_at_login { autostart.enable() } else { autostart.disable() };
@@ -748,6 +767,7 @@ fn save_settings(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>, settings
     *shared.settings.lock().unwrap() = settings;
     // the staking settings may have changed: re-work the stake for the call that's up
     restake(&app, &shared);
+    crate::autobet::refresh(&app, &shared);
     shared.sync_now.store(true, Ordering::Relaxed);
     Ok(())
 }
@@ -969,6 +989,12 @@ pub fn run() {
         pending: Mutex::new(Default::default()),
         tray: Mutex::new(None),
         tray_rect: Mutex::new(None),
+        auto: Mutex::new(Default::default()),
+        armed: AtomicBool::new(false),
+        cancel: Mutex::new(false),
+        kick: Mutex::new(Default::default()),
+        arm_item: Mutex::new(None),
+        zoom: Mutex::new(1.0),
     });
     tauri::Builder::default()
         // one Augur per computer: two copies importing the same calls file at once once stored a call twice. Opening
@@ -1030,14 +1056,22 @@ pub fn run() {
             crate::updates::update_view,
             crate::updates::update_check,
             crate::updates::update_install,
-            crate::updates::update_seen
+            crate::updates::update_seen,
+            crate::autobet::kick_sign_in,
+            crate::autobet::kick_sign_out,
+            crate::autobet::chat_place,
+            crate::autobet::auto_arm,
+            crate::autobet::auto_cancel,
+            crate::autobet::auto_view
         ])
         .setup(move |app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             let open = MenuItem::with_id(app, "open", "Open Augur", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Augur", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &quit])?;
+            let arm = MenuItem::with_id(app, "autobet", "Arm auto bet", shared.settings.lock().unwrap().auto_bet.enabled, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&open, &arm, &quit])?;
+            *shared.arm_item.lock().unwrap() = Some(arm);
             let icon = if cfg!(target_os = "macos") {
                 Image::from_bytes(include_bytes!("../icons/tray-template.png"))?
             } else {
@@ -1051,6 +1085,14 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, e| match e.id.as_ref() {
                     "open" => open_main(app, None),
+                    "autobet" => {
+                        let shared = app.state::<Arc<Shared>>();
+                        let on = !shared.armed.load(Ordering::Relaxed);
+                        if let Err(e) = crate::autobet::auto_arm(app.clone(), shared.clone(), on) {
+                            notify(app, "Auto bet not armed", &e);
+                            open_main(app, Some("settings"));
+                        }
+                    }
                     "quit" => {
                         app.state::<Arc<Shared>>().stop.store(true, Ordering::Relaxed);
                         remember_window(app);
@@ -1107,6 +1149,8 @@ pub fn run() {
             std::thread::spawn(move || crate::sync::sync_loop(h4, s4));
             let (h6, s6) = (app.handle().clone(), shared.clone());
             std::thread::spawn(move || learn_loop(h6, s6));
+            let (h7, s7) = (app.handle().clone(), shared.clone());
+            std::thread::spawn(move || crate::autobet::auto_loop(h7, s7));
             let started = crate::updates::UpdateView::at_start(&shared);
             if let Some(from) = &started.updated_from {
                 notify(

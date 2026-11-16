@@ -14,7 +14,7 @@ use tauri::{AppHandle, Emitter};
 use tauri_plugin_dialog::DialogExt;
 
 /// Settings each computer keeps for itself.
-pub const LOCAL: &[&str] = &["launch_at_login", "start_in_tray", "backfill"];
+pub const LOCAL: &[&str] = &["launch_at_login", "start_in_tray", "backfill", "auto_bet"];
 
 const OS: &str = if cfg!(target_os = "macos") {
     "macOS"
@@ -77,6 +77,8 @@ fn run_once(app: &AppHandle, shared: &Shared) {
     let Ok(conn) = db::open(&settings::db_path(&shared.dir)) else { return };
     let current = shared.settings.lock().unwrap().clone();
     let mut st = shared.sync.lock().unwrap().clone();
+    // said in this computer's file, so another computer won't turn auto betting on too
+    st.auto_bet = current.auto_bet.enabled;
     let got = st.sync(&conn, &values(&current), OS, env!("CARGO_PKG_VERSION"), now_ms());
     if !got.settings.is_empty() {
         let mut v = serde_json::to_value(&current).unwrap_or_default();

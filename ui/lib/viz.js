@@ -17,6 +17,35 @@ export function ring(frac, { size = 72, tone = 'gold', label, sub = '', title = 
     <div><b>${text}</b>${sub ? `<small>${sub}</small>` : ''}</div></div>`;
 }
 
+// Every number in a ring (a rate ring, the chance dial, the sidebar's activity ring) kept clear of the ring in whatever
+// font draws it: Augur's condensed font isn't on every computer (Windows usually falls back to a much wider one), so
+// each number shrinks until its glyphs (its width, about three quarters of its height) sit 3px inside the ring.
+const INNER = { ring: 23.5 / 60, dialw: 46 / 120, bfr: 13.25 / 36 };
+export function fitRings(root = document) {
+  root.querySelectorAll('.ring, .dialw, .bfr').forEach((r) => {
+    const svg = r.querySelector('svg');
+    const t = r.querySelector(':scope > div > b, :scope > b, :scope > span');
+    if (!svg || !t) return;
+    const ratio = INNER[['ring', 'dialw', 'bfr'].find((k) => r.classList.contains(k))];
+    const fits = () => {
+      const [s, b] = [svg.getBoundingClientRect(), t.getBoundingClientRect()];
+      if (!s.width || !b.width) return true; // not laid out (a hidden window): nothing to measure
+      const fs = parseFloat(getComputedStyle(t).fontSize);
+      const dx = Math.abs(b.left + b.width / 2 - (s.left + s.width / 2)) + b.width / 2;
+      const dy = Math.abs(b.top + b.height / 2 - (s.top + s.height / 2)) + fs * 0.36;
+      return Math.hypot(dx, dy) <= s.width * ratio - 3;
+    };
+    for (let fs = parseFloat(getComputedStyle(t).fontSize); !fits() && fs > 7; ) t.style.fontSize = `${(fs -= 0.5)}px`;
+  });
+}
+
+// Fits the rings whenever the page under `root` redraws (only new content is watched, and fitting changes styles, not
+// content, so it doesn't set itself off).
+export function keepRingsFitted(root = document.body) {
+  new MutationObserver(() => fitRings(root)).observe(root, { childList: true, subtree: true });
+  fitRings(root);
+}
+
 // Two counts as one bar (won and lost, followed and deviated), with the counts under each end.
 export function split(a, b, la, lb, ta = 'ok', tb = 'bad') {
   return `<div class="split"><div class="sb" role="img" aria-label="${fmt(a)} ${esc(la)}, ${fmt(b)} ${esc(lb)}">${a ? `<i class="${ta}" style="flex:${a}" title="${fmt(a)} ${esc(la)}"></i>` : ''}${b ? `<i class="${tb}" style="flex:${b}" title="${fmt(b)} ${esc(lb)}"></i>` : ''}</div>

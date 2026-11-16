@@ -1,6 +1,7 @@
 // The main window: the sidebar, the shared state the tabs read, and the events from the Rust side.
 import { activity, activityHtml, FLASH_MS } from './lib/activity.js';
 import { hideChat, placeChat } from './lib/auto.js';
+import { keepRingsFitted } from './lib/viz.js';
 import { invoke, listen } from './lib/bridge.js';
 import { esc } from './lib/format.js';
 import * as history from './tabs/history.js';
@@ -91,8 +92,6 @@ const bf = document.getElementById('bf');
 const busy = { fetch: null, bets: null, sync: null, flash: null };
 let flashTimer;
 let tickTimer;
-// how wide the sidebar ring's number may be: the room inside the 34px ring, less a margin
-const ROOM = 19;
 
 function showActivity() {
   const a = activity(busy);
@@ -105,10 +104,6 @@ function showActivity() {
   bf.dataset.go = a.go;
   bf.className = `bf ${a.kind}${a.warn ? ' warn' : ''}`;
   bf.innerHTML = activityHtml(a);
-  // the number keeps clear of the ring in whatever font draws it (Windows falls back to a wider one): shrink it until
-  // it fits the room inside the ring
-  const sp = bf.querySelector('.bfr span');
-  for (let fs = parseFloat(sp.style.fontSize); sp.getBoundingClientRect().width > ROOM && fs > 7; fs -= 0.5) sp.style.fontSize = `${fs - 0.5}px`;
 }
 bf.onclick = () => {
   const go = bf.dataset.go;
@@ -214,5 +209,7 @@ showWelcome(app.state.live);
 showYou((await invoke('account')).signed_in);
 showUpdate(await invoke('update_view'));
 await app.show('live');
+// numbers in rings keep clear of the ring in whatever font draws them
+keepRingsFitted();
 // for the headless UI tests
 window.augur = Object.assign(app, { showWelcome, showUpdate });

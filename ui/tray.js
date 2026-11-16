@@ -1,6 +1,7 @@
 // The tray popover: only what's useful at a glance, and the copy buttons (the bet and the chat line). Between duels
 // and off air it says how the last stream went. It sizes itself to what it shows.
 import { besideCopy } from './lib/auto.js';
+import { keepRingsFitted } from './lib/viz.js';
 import { invoke, listen } from './lib/bridge.js';
 import { copyText } from './lib/clipboard.js';
 import { esc, feedProblem, fmt, pct, signed } from './lib/format.js';
@@ -128,5 +129,6 @@ state.view = await invoke('live');
 state.update = await invoke('update_view');
 state.auto = await invoke('auto_view').catch(() => null);
 render();
+keepRingsFitted();
 // for the headless UI tests
 window.augur = { rendered: true };

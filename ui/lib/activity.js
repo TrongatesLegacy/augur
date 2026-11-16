@@ -39,5 +39,5 @@ export function activity({ fetch, bets, sync, flash }, now = Date.now()) {
 export function activityHtml(a) {
   // the text keeps clear of the ring: smaller as it gets longer (25%, 100%)
   const size = [12, 12, 10.5, 9, 8][Math.min(4, String(a.short).length)];
-  return `<svg viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="15" class="t"/><circle cx="18" cy="18" r="15" class="f" style="stroke-dasharray:${(a.share * 94.2).toFixed(1)} 94.2"/></svg><span style="font-size:${size}px">${esc(a.short)}</span><small>${esc(a.label)}</small>`;
+  return `<div class="bfr"><svg viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="15" class="t"/><circle cx="18" cy="18" r="15" class="f" style="stroke-dasharray:${(a.share * 94.2).toFixed(1)} 94.2"/></svg><span style="font-size:${size}px">${esc(a.short)}</span></div><small>${esc(a.label)}</small>`;
 }

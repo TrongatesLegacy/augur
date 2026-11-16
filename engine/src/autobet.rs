@@ -38,6 +38,9 @@ pub struct AutoBetSettings {
     pub countdown_secs: u64,
     /// never bet later than this after picks opened, so a slow call doesn't miss the lock
     pub latest_secs: u64,
+    /// arm it each time Augur starts (once it can: signed in, a channel set, no other computer betting), instead of
+    /// on Live or from the tray each session
+    pub arm_at_start: bool,
 }
 
 impl Default for AutoBetSettings {
@@ -54,6 +57,7 @@ impl Default for AutoBetSettings {
             countdown_secs: 5,
             // picks stay open about five minutes; three leaves room for a slow call and still beats the lock
             latest_secs: 180,
+            arm_at_start: false,
         }
     }
 }

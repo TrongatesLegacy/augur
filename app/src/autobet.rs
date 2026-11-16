@@ -535,30 +535,40 @@ fn health(app: &AppHandle, shared: &Shared, v: &AutoView, signed: bool, chat_sin
 #[tauri::command]
 pub fn auto_arm(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>, on: bool) -> Cmd<AutoView> {
     if on {
-        let v = shared.auto.lock().unwrap().clone();
-        if !v.enabled {
-            return Err("Turn on auto betting in Settings › Auto bet first.".into());
-        }
-        if !v.signed_in {
-            return Err("Sign in to Kick in Settings › Auto bet first.".into());
-        }
-        if v.channel.is_empty() {
-            return Err(if v.test {
-                "Set your Kick name (Settings › Account) for test mode."
-            } else {
-                "Set the stream's Kick channel in Settings › Auto bet."
-            }
-            .into());
-        }
-        if let Some(other) = &v.other {
-            return Err(format!("{other} has auto betting on: only one computer should bet."));
-        }
+        can_arm(&shared.auto.lock().unwrap())?;
     }
     shared.armed.store(on, Ordering::Relaxed);
     shared.auto_check.store(true, Ordering::Relaxed);
     refresh(&app, &shared);
     Ok(shared.auto.lock().unwrap().clone())
 }
+
+/// Why auto betting can't be armed now, if it can't.
+fn can_arm(v: &AutoView) -> Result<(), String> {
+    if !v.enabled {
+        return Err("Turn on auto betting in Settings › Auto bet first.".into());
+    }
+    if !v.signed_in {
+        return Err("Sign in to Kick in Settings › Auto bet first.".into());
+    }
+    if v.channel.is_empty() {
+        return Err(if v.test {
+            "Set your Kick name (Settings › Account) for test mode."
+        } else {
+            "Set the stream's Kick channel in Settings › Auto bet."
+        }
+        .into());
+    }
+    if let Some(other) = &v.other {
+        return Err(format!("{other} has auto betting on: only one computer should bet."));
+    }
+    Ok(())
+}
+
+/// Arm when Augur starts: the first wait lets sync hear from the other computers (only one should bet), and it keeps
+/// trying while the sign-in and the chat come up. Given up on, with a notification saying why, after this long.
+const ARM_AT_START_AFTER: Duration = Duration::from_secs(20);
+const ARM_AT_START_UNTIL: Duration = Duration::from_secs(10 * 60);
 
 /// Cancel during the countdown: this fight is ruled out (and can't be bet on later).
 #[tauri::command]
@@ -645,6 +655,9 @@ pub fn auto_loop(app: AppHandle, shared: Arc<Shared>) {
     let mut chat_since = Instant::now();
     // checks in a row that found the chat box greyed out
     let mut box_off = 0u32;
+    // Arm when Augur starts: tried once this session (disarming later keeps it off)
+    let started = Instant::now();
+    let mut arm_at_start = shared.settings.lock().unwrap().auto_bet.arm_at_start;
     // the name you signed in as, from last time
     if let Ok(conn) = shared.db() {
         shared.kick.lock().unwrap().user = db::meta_get(&conn, "kick_user").ok().flatten();
@@ -659,6 +672,31 @@ pub fn auto_loop(app: AppHandle, shared: Arc<Shared>) {
             last_refresh = Instant::now();
         }
         let view = shared.auto.lock().unwrap().clone();
+        if arm_at_start && !view.armed && started.elapsed() >= ARM_AT_START_AFTER {
+            match can_arm(&view) {
+                Ok(()) => {
+                    arm_at_start = false;
+                    shared.armed.store(true, Ordering::Relaxed);
+                    shared.auto_check.store(true, Ordering::Relaxed);
+                    refresh(&app, &shared);
+                    notify(
+                        &app,
+                        "Auto bet armed",
+                        &format!("as Augur started, into {}'s chat{}", view.channel, if view.test { " (test mode)" } else { "" }),
+                    );
+                    continue;
+                }
+                Err(why) if !view.enabled || started.elapsed() >= ARM_AT_START_UNTIL => {
+                    arm_at_start = false;
+                    if view.enabled {
+                        notify(&app, "Auto bet not armed at start", &why);
+                    }
+                }
+                Err(_) => {}
+            }
+        } else if view.armed {
+            arm_at_start = false;
+        }
         if !(view.enabled && view.armed) {
             track = None;
             *shared.cancel.lock().unwrap() = false;

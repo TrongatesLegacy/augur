@@ -770,6 +770,21 @@ const MAIN_DRIVER: &str = r#"
         document.querySelector('#main tr[data-call]')?.click();
         await sleep(300);
         out.callDoubt = document.getElementById('main').innerText;
+        // the money under the dial with auto betting: one that went through is your bet, said once; one that was
+        // skipped isn't news; one that went wrong tags your bet, in a word
+        const ledger = async (detail) => {
+          DATA.call_detail = detail;
+          window.augur.state.call = null;
+          await window.augur.show('history');
+          await sleep(200);
+          document.querySelector('#main tr[data-call]')?.click();
+          await sleep(300);
+          return { text: document.querySelector('.ledger')?.innerText || '', cols: document.querySelectorAll('.ledger .lc').length, spills: spills() };
+        };
+        const reply = '1100 on AWAY - if it wins you get 1320 (1.2x), it was placed before the bell';
+        out.callAuto = await ledger({ ...full, bet: { ...full.bet, via: { via: 'auto', status: 'confirmed' } }, auto_bet: { status: 'confirmed', command: full.bet.augur_command, reply } });
+        out.callSkip = await ledger({ ...full, auto_bet: { status: 'skipped', command: full.bet.augur_command, reason: 'you bet on it yourself' } });
+        out.callFail = await ledger({ ...full, auto_bet: { status: 'unconfirmed', command: full.bet.augur_command, reason: 'the bot never answered it' } });
         DATA.call_detail = full;
         // Back: the list again, in the same range and view
         document.getElementById('back')?.click();
@@ -1173,6 +1188,28 @@ fn every_tab_renders_headless() {
     let doubt = r["callDoubt"].as_str().unwrap().to_lowercase();
     assert!(doubt.contains("less sure ÷1.60") && doubt.contains("unlisted moves"), "a call made less sure says so in its sum: {doubt}");
     assert!(!call.contains("less sure"), "and one that wasn't doesn't: {call}");
+    let auto = &r["callAuto"];
+    let text_of = |v: &Value| v["text"].as_str().unwrap().to_lowercase();
+    assert!(
+        auto["cols"] == json!(3)
+            && text_of(auto).contains("your bet\nauto\n")
+            && !text_of(auto).contains("auto bet")
+            && !text_of(auto).contains("1320"),
+        "an auto bet that went through is your bet, said once, without the bot's reply: {auto}"
+    );
+    assert!(
+        r["callSkip"]["cols"] == json!(3) && !text_of(&r["callSkip"]).contains("auto bet"),
+        "a skipped auto bet isn't news: {}",
+        r["callSkip"]
+    );
+    let fail = &r["callFail"];
+    assert!(
+        fail["cols"] == json!(3) && text_of(fail).contains("your bet\nunconfirmed\n") && !text_of(fail).contains("never answered"),
+        "an auto bet that went wrong says so in a word, the reason on hover: {fail}"
+    );
+    for v in [auto, fail] {
+        assert_eq!(v["spills"], json!([]), "the money under the dial fits: {v}");
+    }
     assert_eq!(r["callBackRange"], json!("today"), "in the range it was in");
     // everything fits at 1280x720 without a box scrolling inside it, even in the report's shorter window: only the
     // lists that grow without end (History's calls and your bets) scroll

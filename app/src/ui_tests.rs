@@ -602,22 +602,22 @@ const MAIN_DRIVER: &str = r#"
         });
       };
       out.scrollers[tab] = scrolling();
-      // every number in a ring (a rate ring or the chance dial) keeps clear of it: its glyphs (the box's width, about
+      // every number in a ring (a rate ring, the chance dial, the sidebar's activity ring) keeps clear of it: its glyphs (the box's width, about
       // three quarters of the font's height) stay 2px inside the ring's inner edge
       out.rings ||= {};
-      out.rings[tab] = [...document.querySelectorAll('#main .ring, #main .dialw')]
+      out.rings[tab] = [...document.querySelectorAll('#main .ring, #main .dialw, #bf:not([hidden])')]
         .filter((r) => {
           const svg = r.querySelector('svg').getBoundingClientRect();
-          const b = r.querySelector('b');
+          const b = r.querySelector('b, span');
           const range = document.createRange();
           range.selectNodeContents(b);
           const t = range.getBoundingClientRect();
           const fs = parseFloat(getComputedStyle(b).fontSize);
-          const inner = svg.width * (r.classList.contains('ring') ? 23.5 / 60 : 46 / 120);
+          const inner = svg.width * (r.classList.contains('ring') ? 23.5 / 60 : r.id === 'bf' ? 13.25 / 36 : 46 / 120);
           const [cx, cy, tx, ty] = [svg.left + svg.width / 2, svg.top + svg.height / 2, t.left + t.width / 2, t.top + t.height / 2];
           return Math.hypot(Math.abs(tx - cx) + t.width / 2, Math.abs(ty - cy) + fs * 0.36) > inner - 2;
         })
-        .map((r) => r.querySelector('b').textContent);
+        .map((r) => r.querySelector('b, span').textContent);
       // a pal box's cards line up: in each row of cards, the talent rolls start at the same height
       if (['players', 'playersfew', 'mypals'].includes(tab)) {
         const rows = {};

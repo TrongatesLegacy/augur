@@ -1,7 +1,8 @@
 //! The model tunes itself. Each setting is re-fitted on the evidence that can see it (past duels for types, move
 //! power and records; real calls for the stat settings, which past duels can't see; every call, a little at a time,
-//! for the two the sources disagree on) and a change is kept only when it
-//! predicts duels it wasn't fitted on better: the newest quarter of each set is held back to check.
+//! for the two the sources disagree on). Every run starts afresh from `Settings::default()`, and a move away from
+//! there is kept only when it predicts duels it wasn't fitted on better: the newest quarter of each set is held back
+//! to check.
 
 use crate::db::{self, CallRecord};
 use crate::error::Result as R;
@@ -147,14 +148,20 @@ fn gradual(key: &str, calls: &[CallRecord], s: &Settings) -> f64 {
     (v * 20.0).round() / 20.0
 }
 
-/// Re-fit the settings, starting from `current`. Changes nothing in the database; `save` keeps the result.
-pub fn learn(conn: &Connection, current: &Settings, now_ms: u64) -> R<Learned> {
+/// Re-fit every setting from where it starts (`Settings::default()`) on all the evidence there is, and report what
+/// moved since the `last` run. Changes nothing in the database; `save` keeps the result. Each run starts afresh rather than from the last one's result: run after every result,
+/// a learner that builds on its last run tests each small move against much the same held-back calls, and the ones
+/// that win by chance pile up. Replayed call by call over the 108 real calls of 13-15 Nov, that drifted to steeper
+/// stats and a pal-rank weight and did worse than never learning (log loss 0.615 against 0.579), while starting
+/// afresh each time did as well (0.581, two more right). Two computers with the same evidence also learn the same.
+pub fn learn(conn: &Connection, last: &Settings, now_ms: u64) -> R<Learned> {
     let past = history::past_duels(conn)?;
     let calls: Vec<CallRecord> = db::settled_all(conn)?.into_iter().filter(|c| c.fighters.is_some() && c.species_rec.is_some()).collect();
-    Ok(learn_on(&past, &calls, current, now_ms))
+    Ok(learn_on(&past, &calls, &Settings::default(), last, now_ms))
 }
 
-pub fn learn_on(past: &[PastDuel], calls: &[CallRecord], current: &Settings, now_ms: u64) -> Learned {
+/// `learn` from `start`, reporting what changed since `last`.
+pub fn learn_on(past: &[PastDuel], calls: &[CallRecord], start: &Settings, last: &Settings, now_ms: u64) -> Learned {
     let (past_fit, past_check) = past.split_at(past.len() * 3 / 4);
     let (calls_fit, calls_check) = calls.split_at(calls.len() * 3 / 4);
     let past_loss = |set: &[PastDuel], s: &Settings| history::score_past(set, s).log_loss;
@@ -170,7 +177,7 @@ pub fn learn_on(past: &[PastDuel], calls: &[CallRecord], current: &Settings, now
     };
 
     // coordinate descent: each setting in turn, a few rounds, on the fitting part only
-    let mut cand = current.clone();
+    let mut cand = start.clone();
     for _ in 0..3 {
         for k in KNOBS.iter().filter(|k| ready(k) && !is_gradual(k.key)) {
             let v = match k.source {
@@ -183,8 +190,8 @@ pub fn learn_on(past: &[PastDuel], calls: &[CallRecord], current: &Settings, now
 
     // keep each group's changes only if they do better on what was held back
     let held = |k: &&Knob| !is_gradual(k.key);
-    let moved = |src: Source| KNOBS.iter().filter(held).any(|k| k.source == src && cand.get(k.key) != current.get(k.key));
-    let mut out = current.clone();
+    let moved = |src: Source| KNOBS.iter().filter(held).any(|k| k.source == src && cand.get(k.key) != start.get(k.key));
+    let mut out = start.clone();
     if moved(Source::PastDuels) {
         let trial = KNOBS
             .iter()
@@ -212,7 +219,7 @@ pub fn learn_on(past: &[PastDuel], calls: &[CallRecord], current: &Settings, now
         }
     }
 
-    let before = history::score_past(past_check, current);
+    let before = history::score_past(past_check, last);
     let after = history::score_past(past_check, &out);
     let check = Check {
         past_n: past_check.len(),
@@ -221,13 +228,13 @@ pub fn learn_on(past: &[PastDuel], calls: &[CallRecord], current: &Settings, now
         past_right_before: before.accuracy,
         past_right_after: after.accuracy,
         live_n: calls_check.len(),
-        live_before: live_loss(calls_check, current),
+        live_before: live_loss(calls_check, last),
         live_after: live_loss(calls_check, &out),
     };
     let knobs = KNOBS
         .iter()
         .map(|k| {
-            let (value, was) = (out.get(k.key).unwrap(), current.get(k.key).unwrap());
+            let (value, was) = (out.get(k.key).unwrap(), last.get(k.key).unwrap());
             let (have, need) = match (k.source, k.key) {
                 (Source::PastDuels, _) => (past.len(), 200),
                 (Source::LiveCalls, key) if is_gradual(key) => (calls.len(), 0),
@@ -349,7 +356,7 @@ mod tests {
             })
             .collect();
         let start = Settings { type_bonus: 1.0, ..Default::default() };
-        let l = learn_on(&past, &[], &start, 1);
+        let l = learn_on(&past, &[], &start, &start, 1);
         assert!(l.settings.type_bonus > 1.2, "{:?}", l.settings);
         assert!(l.check.past_after < l.check.past_before);
         let k = l.knobs.iter().find(|k| k.key == "TYPE_BONUS").unwrap();
@@ -368,14 +375,14 @@ mod tests {
             (0..120i64).map(|i| call(i, pal(6000.0), pal(4000.0), [[10.0, 40.0], [40.0, 10.0]], i % 5 != 0)).collect();
         let start = Settings::default();
         assert_eq!(start.species_on_calls(), start.species_weight, "unset, it follows the species weight");
-        let l = learn_on(&[], &calls, &start, 1);
+        let l = learn_on(&[], &calls, &start, &start, 1);
         assert!(l.settings.species_on_calls() < start.species_weight, "{:?}", l.settings);
         assert_eq!(l.settings.species_weight, start.species_weight, "the past duels' weight is theirs");
         assert!(l.check.live_after < l.check.live_before);
         let k = l.knobs.iter().find(|k| k.key == "SPECIES_LIVE").unwrap();
         assert_eq!((k.status.as_str(), k.source), ("changed", Source::LiveCalls));
         // it learns from every call, a little at a time: 20 calls move it less than 120
-        let few = learn_on(&[], &calls[..20], &start, 1);
+        let few = learn_on(&[], &calls[..20], &start, &start, 1);
         let v = |l: &Learned| l.settings.species_on_calls();
         assert!(v(&few) < start.species_weight && v(&few) > v(&l), "20 calls: {}, 120 calls: {}", v(&few), v(&l));
     }
@@ -391,11 +398,11 @@ mod tests {
         let calls: Vec<CallRecord> = (0..120i64).map(|i| call(i, pal(1.5), pal(0.7), [[0.0; 2]; 2], i % 5 != 0)).collect();
         let start = Settings::default();
         assert_eq!(start.hit_weight, 0.0);
-        let l = learn_on(&[], &calls, &start, 1);
+        let l = learn_on(&[], &calls, &start, &start, 1);
         let k = l.knobs.iter().find(|k| k.key == "HIT_WEIGHT").unwrap();
         assert_eq!((k.status.as_str(), k.source, k.have, k.need), ("changed", Source::LiveCalls, 120, 0));
         assert!(l.check.live_after < l.check.live_before);
-        let few = learn_on(&[], &calls[..20], &start, 1);
+        let few = learn_on(&[], &calls[..20], &start, &start, 1);
         assert!(
             few.settings.hit_weight > 0.0 && few.settings.hit_weight < l.settings.hit_weight,
             "20 calls: {}, 120 calls: {}",
@@ -422,12 +429,12 @@ mod tests {
         let start = Settings::default();
         let rank = |l: &Learned| l.knobs.iter().find(|k| k.key == "PAL_RANK_WEIGHT").unwrap().clone();
         // 120 calls, but from before Augur read the ranks
-        let k = rank(&learn_on(&[], &calls(120, false), &start, 1));
+        let k = rank(&learn_on(&[], &calls(120, false), &start, &start, 1));
         assert_eq!((k.status.as_str(), k.value, k.have, k.need), ("waiting", 0.0, 0, MIN_CALLS));
         let mut some = calls(80, false);
         some.extend(calls(40, true));
-        assert_eq!(rank(&learn_on(&[], &some, &start, 1)).have, 40, "only the calls that read the ranks count");
-        let l = learn_on(&[], &calls(120, true), &start, 1);
+        assert_eq!(rank(&learn_on(&[], &some, &start, &start, 1)).have, 40, "only the calls that read the ranks count");
+        let l = learn_on(&[], &calls(120, true), &start, &start, 1);
         assert!(l.settings.pal_rank_weight > 0.0, "{:?}", l.settings);
         assert_eq!(rank(&l).status, "changed");
     }
@@ -445,7 +452,31 @@ mod tests {
                 home_won: (i * 7919) % 2 == 0,
             })
             .collect();
-        let l = learn_on(&past, &[], &Settings::default(), 1);
+        let l = learn_on(&past, &[], &Settings::default(), &Settings::default(), 1);
         assert!(l.knobs.iter().all(|k| k.status != "changed") || l.check.past_after < l.check.past_before - MARGIN_PAST, "{:?}", l.knobs);
+    }
+
+    /// A run starts from the defaults, not from where the last one ended: settings an earlier run moved on noise
+    /// come back once the evidence doesn't hold them up, and the report says what moved since that run.
+    #[test]
+    fn each_run_starts_afresh() {
+        let past: Vec<PastDuel> = (0..800u64)
+            .map(|i| PastDuel {
+                id: i,
+                home: fighter(&["fire"], "fire"),
+                away: fighter(&["grass"], "grass"),
+                species_rec: [[0.0; 2]; 2],
+                pal_h2h: [0.0; 2],
+                home_won: (i * 7919) % 2 == 0,
+            })
+            .collect();
+        let drifted = Settings { type_bonus: 1.25, stats_steepness: 5.0, pal_rank_weight: 0.1, ..Default::default() };
+        let l = learn_on(&past, &[], &Settings::default(), &drifted, 1);
+        // the stat settings and the pal rank have no real calls to hold them up, so they're back where they start
+        assert_eq!((l.settings.stats_steepness, l.settings.pal_rank_weight), (3.0, 0.0), "{:?}", l.settings);
+        // the type edge is fitted again from its start, and reported against the last run's value
+        let k = l.knobs.iter().find(|k| k.key == "TYPE_BONUS").unwrap();
+        assert_eq!(k.was, 1.25);
+        assert_eq!(k.status, if k.value == k.was { "held" } else { "changed" });
     }
 }

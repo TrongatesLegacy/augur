@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tauri::webview::PageLoadEvent;
-use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::webview::{PageLoadEvent, WebviewBuilder};
+use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::app::{notify, now_ms, Shared};
 use augur_engine::autobet::{self, AutoBet, AutoBetSettings, Decision, Moment};
@@ -98,7 +98,7 @@ fn has_session(cookies: &[tauri::webview::Cookie<'static>]) -> bool {
 /// WebView2.
 fn kick_cookies(app: &AppHandle) -> Vec<tauri::webview::Cookie<'static>> {
     let url = tauri::Url::parse(KICK).unwrap();
-    app.webview_windows().values().next().and_then(|w| w.cookies_for_url(url).ok()).unwrap_or_default()
+    app.webviews().values().next().and_then(|w| w.cookies_for_url(url).ok()).unwrap_or_default()
 }
 
 /// Whether this computer is signed in to Kick, checked at most every 30 seconds.
@@ -117,7 +117,7 @@ pub fn signed_in(app: &AppHandle, shared: &Shared) -> bool {
 }
 
 /// Runs a script in a webview and waits for what it returns (as JSON), up to `wait`.
-fn eval(w: &WebviewWindow, js: String, wait: Duration) -> Option<serde_json::Value> {
+fn eval(w: &tauri::Webview, js: String, wait: Duration) -> Option<serde_json::Value> {
     let (tx, rx) = mpsc::channel();
     w.eval_with_callback(js, move |out| {
         let _ = tx.send(out);
@@ -127,7 +127,7 @@ fn eval(w: &WebviewWindow, js: String, wait: Duration) -> Option<serde_json::Val
 }
 
 /// Your Kick name, asked from inside a kick.com page with its own sign-in (so Kick sees its own site asking).
-fn who_am_i(w: &WebviewWindow, cookies: &[tauri::webview::Cookie<'static>]) -> Option<String> {
+fn who_am_i(w: &tauri::Webview, cookies: &[tauri::webview::Cookie<'static>]) -> Option<String> {
     let get = |n: &str| cookies.iter().find(|c| c.name() == n).map(|c| c.value().to_string()).unwrap_or_default();
     let (token, xsrf) = (serde_json::to_string(&get("session_token")).ok()?, serde_json::to_string(&get("XSRF-TOKEN")).ok()?);
     let start = format!(
@@ -182,7 +182,7 @@ pub async fn kick_sign_in(app: AppHandle) -> Cmd<()> {
             if !has_session(&cookies) {
                 continue;
             }
-            let name = who_am_i(&win, &cookies);
+            let name = who_am_i(win.as_ref(), &cookies);
             let shared = handle.state::<Arc<Shared>>();
             *shared.kick.lock().unwrap() = KickLogin { signed_in: true, user: name.clone(), checked: Some(Instant::now()) };
             if let (Ok(conn), Some(n)) = (shared.db(), &name) {
@@ -203,14 +203,15 @@ pub async fn kick_sign_in(app: AppHandle) -> Cmd<()> {
 pub async fn kick_sign_out(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>) -> Cmd<()> {
     let handle = app.clone();
     std::thread::spawn(move || {
-        if let Some(w) = handle.webview_windows().values().next() {
+        if let Some(w) = handle.webviews().values().next() {
             for c in kick_cookies(&handle) {
                 let _ = w.delete_cookie(c);
             }
         }
-        if let Some(chat) = handle.get_webview_window(CHAT) {
+        if let Some(chat) = handle.get_webview(CHAT) {
             let _ = chat.close();
         }
+        handle.state::<Arc<Shared>>().chat_channel.lock().unwrap().clear();
     })
     .join()
     .map_err(|_| "Couldn't sign out of Kick".to_string())?;
@@ -226,120 +227,82 @@ pub async fn kick_sign_out(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>
 
 // --- the chat on Live ---
 
-/// Live's chat: Kick's popout chat for the channel bets go into, laid over Live's chat panel. Shown only with auto
-/// betting on and Kick signed in; hidden on the other tabs.
+/// Live's chat: Kick's popout chat for the channel bets go into, a webview inside the main window laid over Live's
+/// chat panel (so it moves, hides and comes back with the window). Shown only with auto betting on and Kick signed
+/// in; hidden on the other tabs.
 #[tauri::command]
 pub async fn chat_place(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>, spot: Spot) -> Cmd<()> {
     let view = shared.auto.lock().unwrap().clone();
     let show = spot.visible && view.enabled && view.signed_in && !view.channel.is_empty() && spot.w > 40.0 && spot.h > 40.0;
-    let existing = app.get_webview_window(CHAT);
     if !show {
-        if let Some(w) = existing {
+        if let Some(w) = app.get_webview(CHAT) {
             let _ = w.hide();
         }
         shared.chat_shown.store(false, Ordering::Relaxed);
-        *shared.chat_spot.lock().unwrap() = None;
         return Ok(());
     }
-    *shared.chat_spot.lock().unwrap() = Some(spot.clone());
-    let (pos, size) = over_live(&app, &shared, &spot).ok_or("no main window")?;
-    let url = tauri::Url::parse(&kick::popout_url(&view.channel)).map_err(|e| e.to_string())?;
-    match existing {
-        Some(w) => {
-            if w.url().map(|u| u.path().to_lowercase()).ok() != Some(url.path().to_lowercase()) {
-                let _ = w.navigate(url);
-            }
-            let _ = w.set_position(pos);
-            let _ = w.set_size(size);
-            let _ = w.show();
-        }
-        None => {
-            make_chat(&app, url, pos, size, true)?;
-        }
-    }
+    let zoom = *shared.zoom.lock().unwrap();
+    let (pos, size) = (LogicalPosition::new(spot.x * zoom, spot.y * zoom), LogicalSize::new(spot.w * zoom, spot.h * zoom));
+    let w = point_chat(&app, &shared, &view.channel, pos, size)?;
+    let _ = w.set_position(pos);
+    let _ = w.set_size(size);
+    let _ = w.show();
     shared.chat_shown.store(true, Ordering::Relaxed);
     Ok(())
 }
 
-/// Where on screen Live's chat panel is: the main window's inside, plus the panel's spot on the page at its zoom.
-fn over_live(app: &AppHandle, shared: &Shared, spot: &Spot) -> Option<(LogicalPosition<f64>, LogicalSize<f64>)> {
-    let main = app.get_webview_window("main")?;
-    let inner = main.inner_position().ok()?.to_logical::<f64>(main.scale_factor().ok()?);
-    let zoom = *shared.zoom.lock().unwrap();
-    Some((LogicalPosition::new(inner.x + spot.x * zoom, inner.y + spot.y * zoom), LogicalSize::new(spot.w * zoom, spot.h * zoom)))
-}
-
-/// The main window moved or changed size: the chat goes with it.
-pub fn follow(app: &AppHandle) {
-    let shared = app.state::<Arc<Shared>>();
-    let spot = shared.chat_spot.lock().unwrap().clone();
-    if let (Some(spot), Some(w)) = (spot, app.get_webview_window(CHAT)) {
-        if let Some((pos, size)) = over_live(app, &shared, &spot) {
-            let _ = w.set_position(pos);
-            let _ = w.set_size(size);
+/// The chat, made if it isn't there yet and sent to `channel` if it was last pointed somewhere else. Goes by the
+/// channel it was last pointed at, never by its address: that differs while a page loads, and going by it reloaded
+/// the chat over and over.
+fn point_chat(
+    app: &AppHandle,
+    shared: &Shared,
+    channel: &str,
+    pos: LogicalPosition<f64>,
+    size: LogicalSize<f64>,
+) -> Result<tauri::Webview, String> {
+    let url = tauri::Url::parse(&kick::popout_url(channel)).map_err(|e| e.to_string())?;
+    let mut pointed = shared.chat_channel.lock().unwrap();
+    if let Some(w) = app.get_webview(CHAT) {
+        if *pointed != channel {
+            let _ = w.navigate(url);
+            *pointed = channel.to_string();
         }
+        return Ok(w);
     }
+    let window = crate::app::main_window(app).ok_or("no main window")?;
+    let builder = WebviewBuilder::new(CHAT, WebviewUrl::External(url)).on_page_load(|w, p| {
+        // a page that isn't Kick's chat (a link clicked in it) goes back to the chat
+        if p.event() == PageLoadEvent::Finished && p.url().host_str().is_some_and(|h| h != "kick.com" && !h.ends_with(".kick.com")) {
+            let _ = w.eval("history.back()");
+        }
+    });
+    let w = window.add_child(builder, pos, size).map_err(|e| e.to_string())?;
+    *pointed = channel.to_string();
+    Ok(w)
 }
 
-/// The main window closed to the tray: the chat hides with it (it stays loaded, so auto betting carries on).
+/// The main window closed to the tray: the chat is hidden with it, and bets go in with Kick's own request.
 pub fn hide_chat(app: &AppHandle) {
     let shared = app.state::<Arc<Shared>>();
     shared.chat_shown.store(false, Ordering::Relaxed);
-    *shared.chat_spot.lock().unwrap() = None;
-    if let Some(w) = app.get_webview_window(CHAT) {
+    if let Some(w) = app.get_webview(CHAT) {
         let _ = w.hide();
     }
 }
 
-/// Kick's popout chat as its own small borderless window, attached to the main one so it sits over Live's chat panel
-/// and goes where it goes. Not a second webview inside the main window: Tauri stops treating a window with two
-/// webviews as a webview window, and then Open Augur (and remembering the window's size) can't find it.
-fn make_chat(
-    app: &AppHandle,
-    url: tauri::Url,
-    pos: LogicalPosition<f64>,
-    size: LogicalSize<f64>,
-    visible: bool,
-) -> Result<WebviewWindow, String> {
-    let main = app.get_webview_window("main").ok_or("no main window")?;
-    WebviewWindowBuilder::new(app, CHAT, WebviewUrl::External(url))
-        .title("Kick chat")
-        .decorations(false)
-        .resizable(false)
-        .skip_taskbar(true)
-        .shadow(false)
-        .visible(visible)
-        .inner_size(size.width, size.height)
-        .position(pos.x, pos.y)
-        .parent(&main)
-        .map_err(|e| e.to_string())?
-        .on_page_load(|w, p| {
-            // a page that isn't Kick's chat (a link clicked in it) goes back to the chat
-            if p.event() == PageLoadEvent::Finished && p.url().host_str().is_some_and(|h| h != "kick.com" && !h.ends_with(".kick.com")) {
-                let _ = w.eval("history.back()");
-            }
-        })
-        .build()
-        .map_err(|e| e.to_string())
-}
-
 /// While armed, the chat is kept ready even when Live isn't showing (Augur in the tray): made hidden, on the right
-/// channel. Returns whether it was just made (it needs a moment to load).
-fn ensure_chat(app: &AppHandle, channel: &str) -> bool {
-    let Ok(url) = tauri::Url::parse(&kick::popout_url(channel)) else { return false };
-    match app.get_webview_window(CHAT) {
-        Some(w) => {
-            if w.url().map(|u| u.path().to_lowercase()).ok() != Some(url.path().to_lowercase()) {
-                let _ = w.navigate(url);
-                return true;
+/// channel. Returns whether it was just made or sent somewhere new (it needs a moment to load).
+fn ensure_chat(app: &AppHandle, shared: &Shared, channel: &str) -> bool {
+    let fresh = app.get_webview(CHAT).is_none() || *shared.chat_channel.lock().unwrap() != channel;
+    if fresh {
+        if let Ok(w) = point_chat(app, shared, channel, LogicalPosition::new(0.0, 0.0), LogicalSize::new(10.0, 10.0)) {
+            if !shared.chat_shown.load(Ordering::Relaxed) {
+                let _ = w.hide();
             }
-            false
-        }
-        None => {
-            let _ = make_chat(app, url, LogicalPosition::new(0.0, 0.0), LogicalSize::new(320.0, 600.0), false);
-            true
         }
     }
+    fresh
 }
 
 /// What typing a bet in did.
@@ -356,7 +319,7 @@ const FILL: &str = r#"(function (text) {
     var box = document.querySelector('[data-testid="chat-input"]');
     if (!box) return 'no chat box (signed out, or the chat is still loading)';
     if (box.getAttribute('contenteditable') === 'false' || box.getAttribute('aria-disabled') === 'true' || box.closest('[aria-disabled="true"]'))
-      return 'the chat box is off (slow mode, followers or subscribers only?)';
+      return 'off';
     if ((box.innerText || '').trim()) return 'you were typing in the chat';
     var ed = box.__lexicalEditor;
     if (ed) {
@@ -391,19 +354,34 @@ const AFTER: &str = r#"(function (text) {
   return 'stuck';
 })"#;
 
+/// How long typing waits for a greyed-out chat box (slow mode's few seconds after a message of yours).
+const SLOW_WAIT_SECS: u32 = 6;
+
 /// Types the command into the chat and presses Enter, once. Never presses again: if Kick doesn't take it, the
 /// command is cleared from the box (so it can't go in later by accident) and the bet is marked not sent.
 fn type_bet(app: &AppHandle, channel: &str, command: &str) -> Typed {
-    let Some(w) = app.get_webview_window(CHAT) else { return Typed::NotSent("the chat isn't ready".into()) };
+    let Some(w) = app.get_webview(CHAT) else { return Typed::NotSent("the chat isn't ready".into()) };
     let want = kick::popout_url(channel);
     if w.url().map(|u| u.as_str().trim_end_matches('/').to_lowercase()).ok() != Some(want.to_lowercase()) {
         return Typed::NotSent(format!("the chat on Live isn't {channel}'s"));
     }
     let text = serde_json::to_string(command).unwrap_or_default();
-    match eval(&w, format!("{FILL}({text})"), Duration::from_secs(3)) {
-        Some(serde_json::Value::String(s)) if s == "filled" => {}
-        Some(serde_json::Value::String(s)) => return Typed::NotSent(s),
-        _ => return Typed::NotSent("the chat didn't answer".into()),
+    // slow mode greys the box out for a few seconds after any message of yours: wait for it (only to type: Enter is
+    // still pressed once)
+    let mut tries = 0;
+    loop {
+        match eval(&w, format!("{FILL}({text})"), Duration::from_secs(3)) {
+            Some(serde_json::Value::String(s)) if s == "filled" => break,
+            Some(serde_json::Value::String(s)) if s == "off" && tries < SLOW_WAIT_SECS => {
+                tries += 1;
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            Some(serde_json::Value::String(s)) if s == "off" => {
+                return Typed::NotSent("the chat box stayed greyed out (followers or subscribers only?)".into())
+            }
+            Some(serde_json::Value::String(s)) => return Typed::NotSent(s),
+            _ => return Typed::NotSent("the chat didn't answer".into()),
+        }
     }
     // let the editor draw the text before Enter, as you would see it
     std::thread::sleep(Duration::from_millis(250));
@@ -451,7 +429,7 @@ const SEND_POLL: &str = r#"(function (key) { var s = window.__augurSend || {}; r
 /// hidden chat page sends it with Kick's own request instead. Once, never again: an answer that doesn't come counts
 /// as maybe sent, and the chat decides.
 fn api_send(app: &AppHandle, room: u64, command: &str, key: i64) -> Typed {
-    let Some(w) = app.get_webview_window(CHAT) else { return Typed::NotSent("the chat isn't ready".into()) };
+    let Some(w) = app.get_webview(CHAT) else { return Typed::NotSent("the chat isn't ready".into()) };
     let cookies = kick_cookies(app);
     let get = |n: &str| {
         serde_json::to_string(&cookies.iter().find(|c| c.name() == n).map(|c| c.value().to_string()).unwrap_or_default())
@@ -485,7 +463,7 @@ fn api_send(app: &AppHandle, room: u64, command: &str, key: i64) -> Typed {
 
 /// The bet goes in: typed into the chat when you can see it on Live, sent by the hidden chat page otherwise.
 fn send_bet(app: &AppHandle, shared: &Shared, v: &AutoView, room: Option<u64>, command: &str, id: i64) -> Typed {
-    let main = app.get_webview_window("main");
+    let main = crate::app::main_window(app);
     let on_screen = shared.chat_shown.load(Ordering::Relaxed)
         && main.as_ref().is_some_and(|w| w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(true));
     if on_screen {
@@ -505,6 +483,10 @@ const PROBE: &str = r#"(function () {
   if (box.getAttribute('contenteditable') === 'false' || box.getAttribute('aria-disabled') === 'true' || box.closest('[aria-disabled="true"]')) return 'off';
   return 'ok';
 })()"#;
+
+/// The chat box greyed out. Once is slow mode's few seconds; twice in a row (30 seconds apart) it's followers or
+/// subscribers only, and stops betting.
+const BOX_OFF: &str = "The chat box is greyed out (followers or subscribers only?)";
 
 /// What's stopping auto betting, if anything, and whether it blocks it. `chat_since`: when the chat was made or sent
 /// to a new channel (it gets a moment to load).
@@ -527,11 +509,11 @@ fn health(app: &AppHandle, shared: &Shared, v: &AutoView, signed: bool, chat_sin
         return Some(("Can't read the Kick chat, so it can't check you haven't bet".into(), true));
     }
     let loading = chat_since.elapsed() < Duration::from_secs(30);
-    match app.get_webview_window(CHAT).and_then(|w| eval(&w, PROBE.to_string(), Duration::from_secs(3))) {
+    match app.get_webview(CHAT).and_then(|w| eval(&w, PROBE.to_string(), Duration::from_secs(3))) {
         Some(serde_json::Value::String(s)) if s == "ok" => {}
-        Some(serde_json::Value::String(s)) if s == "off" => {
-            return Some(("The chat box is off (slow mode, followers or subscribers only?)".into(), true));
-        }
+        // slow mode greys it out for a few seconds after any message: only a box still greyed out at the next check
+        // stops betting (the loop decides)
+        Some(serde_json::Value::String(s)) if s == "off" => return Some((BOX_OFF.into(), false)),
         _ if loading => {}
         _ => return Some(("The Kick chat isn't ready (sign in to Kick again?)".into(), true)),
     }
@@ -661,6 +643,8 @@ pub fn auto_loop(app: AppHandle, shared: Arc<Shared>) {
     let mut last_refresh = Instant::now() - Duration::from_secs(60);
     let mut next_check = Instant::now();
     let mut chat_since = Instant::now();
+    // checks in a row that found the chat box greyed out
+    let mut box_off = 0u32;
     // the name you signed in as, from last time
     if let Ok(conn) = shared.db() {
         shared.kick.lock().unwrap().user = db::meta_get(&conn, "kick_user").ok().flatten();
@@ -681,12 +665,18 @@ pub fn auto_loop(app: AppHandle, shared: Arc<Shared>) {
             continue;
         }
         // armed: keep the chat ready, and check every 30 seconds (and straight after arming) that it can bet
-        if signed && !view.channel.is_empty() && ensure_chat(&app, &view.channel) {
+        if signed && !view.channel.is_empty() && ensure_chat(&app, &shared, &view.channel) {
             chat_since = Instant::now();
         }
         if shared.auto_check.swap(false, Ordering::Relaxed) || Instant::now() >= next_check {
             next_check = Instant::now() + Duration::from_secs(30);
-            let found = health(&app, &shared, &view, signed, chat_since);
+            let mut found = health(&app, &shared, &view, signed, chat_since);
+            box_off = if found.as_ref().is_some_and(|(p, _)| p == BOX_OFF) { box_off + 1 } else { 0 };
+            if box_off == 1 {
+                found = None; // slow mode's moment, most likely: look again next time
+            } else if let Some(f) = found.as_mut().filter(|(p, _)| p == BOX_OFF) {
+                f.1 = true;
+            }
             let before = view.problem.clone();
             {
                 let mut v = shared.auto.lock().unwrap();
@@ -942,6 +932,17 @@ fn bet_now(
                     break;
                 }
             }
+        }
+        // the bot took it, found by its reply (even if your line has gone: the AI moderator deletes some commands)
+        if let Some(r) = autobet::bot_took(&lines, &user, command, sent_at).filter(|_| !v.test) {
+            if let Some(lid) = &r.reply_to {
+                let _ = autobet::set_line(conn, id, lid, Some(&r.content));
+            }
+            let _ = autobet::update(conn, id, "confirmed", None, now_ms());
+            notify(app, "Auto bet in ✓", &format!("{what} · {}", r.content.chars().take(80).collect::<String>()));
+            finish(app, shared, conn, id);
+            shared.bets_now.store(true, Ordering::Relaxed);
+            return;
         }
         if let Some(l) = &seen {
             if let Some(r) = autobet::bot_reply(&lines, l) {

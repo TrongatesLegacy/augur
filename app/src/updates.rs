@@ -10,7 +10,7 @@ use serde::Serialize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_updater::{Update, UpdaterExt};
 
@@ -201,7 +201,7 @@ pub async fn update_install(app: AppHandle, shared: tauri::State<'_, Arc<Shared>
     let bytes = shared.pending.lock().unwrap().bytes.clone().ok_or("The update didn't download")?;
     // kept so the next start can show the window again
     if let Ok(conn) = db::open(&settings::db_path(&shared.dir)) {
-        let open = app.get_webview_window("main").is_some_and(|w| w.is_visible().unwrap_or(false));
+        let open = crate::app::main_window(&app).is_some_and(|w| w.is_visible().unwrap_or(false));
         let _ = db::meta_set(&conn, "reopen_main", if open { "1" } else { "0" });
     }
     shared.update.lock().unwrap().installing = true;

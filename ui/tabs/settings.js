@@ -1,6 +1,6 @@
-// Settings, in seven pages: General (checking, the tray and notifications), Staking (with what it would suggest),
-// Chat lines, Model (self-tuning, or your own settings), Account, Sync & data (sync across computers, back up,
-// import) and Updates.
+// Settings, in eight pages: General (checking, the tray and notifications), Staking (with what it would suggest),
+// Chat lines, Model (self-tuning, or your own settings), Account, Auto bet (Kick sign-in, the channel and its limits),
+// Sync & data (sync across computers, back up, import) and Updates.
 import { invoke } from '../lib/bridge.js';
 import { copyText } from '../lib/clipboard.js';
 import { ago, esc, fmt, pct } from '../lib/format.js';
@@ -15,6 +15,7 @@ const PAGES = [
   ['chat', 'Chat lines'],
   ['model', 'Model'],
   ['account', 'Account'],
+  ['autobet', 'Auto bet'],
   ['sync', 'Sync & data'],
   ['updates', 'Updates'],
 ];
@@ -148,10 +149,45 @@ function modelPage(s) {
 function account(s, acct) {
   return `<div class="sg">
     <div class="panel"><div class="ph"><h3>PalDuels</h3><span>optional</span></div>
-      ${row('Sign-in', `${acct.signed_in ? `Signed in${acct.name ? ' as <b>' + esc(acct.name) + '</b>' : ''}. ` : ''}Reads your picks, balance and pal box. It never picks or chats for you, and spends credits only on a reroll you confirm in You › Pals.`, acct.signed_in ? '<button class="btn ghost" id="so">Sign out</button>' : '<button class="btn" id="si">Sign in</button>')}
+      ${row('Sign-in', `${acct.signed_in ? `Signed in${acct.name ? ' as <b>' + esc(acct.name) + '</b>' : ''}. ` : ''}Reads your picks, balance and pal box. It never picks for you unless you turn on Auto bet, and spends credits only on a reroll you confirm in You › Pals.`, acct.signed_in ? '<button class="btn ghost" id="so">Sign out</button>' : '<button class="btn" id="si">Sign in</button>')}
       ${row('Your Kick name', 'for your pal box and rivals; public, no sign-in needed', `<input type="text" data-n="kick_name" value="${esc(s.kick_name)}" placeholder="TrongatesLegacy">`)}</div>
     <div class="panel"><div class="ph"><h3>Kept safe</h3></div><div class="small" style="line-height:1.7">
       The sign-in saves only the site's session cookie, never your password, encrypted with ${navigator.userAgent.includes('Windows') ? 'Windows (DPAPI)' : 'your Mac’s Keychain'}. It stays on this computer: sync doesn’t carry it, so sign in once on each.</div></div>
+  </div>`;
+}
+
+// Settings › Auto bet: signing in to Kick, where bets go, and the limits. Kept on this computer: only one should bet.
+function autobetPage(s, v) {
+  const a = s.auto_bet;
+  const num = (k, label, sub, unit, min, max, pctOf) =>
+    row(label, sub, `<div class="st3"><input type="number" data-abn="${k}" ${pctOf ? 'data-pct="1"' : ''} min="${min}" max="${max}" value="${pctOf ? Math.round(a[k] * 100) : a[k]}" aria-label="${esc(label)}"${max > 99999 ? ' style="width:120px"' : ''}><span class="muted">${unit}</span></div>`);
+  const win = v?.window ? `Picks have stayed open about ${Math.floor(v.window[0] / 60)}:${String(v.window[0] % 60).padStart(2, '0')} (median of ${fmt(v.window[1])} calls).` : 'Augur learns how long picks stay open as it watches them.';
+  const kick = v?.signed_in
+    ? row('Kick', `Signed in${v.user ? ` as <b>${esc(v.user)}</b>` : ''}. The chat on Live uses this sign-in; Augur never sees your password and keeps no copy of it.`, '<button class="btn ghost" id="kso">Sign out</button>')
+    : row('Kick', 'Sign in to see the stream’s chat on Live and bet there. Augur never sees your password.', '<button class="btn" id="ksi">Sign in to Kick</button>');
+  return `<div class="sg">
+    <div style="display:grid;gap:14px;align-content:start">
+      <div class="panel"><div class="ph"><h3>Auto bet</h3>${toggle('data-ab="enabled"', a.enabled, 'Auto bet')}</div>
+        <div class="small" style="margin-bottom:8px">Augur types its bet into the stream’s Kick chat by itself, once per fight, with a countdown you can cancel. Arm it for each session on Live or from the tray.${v?.other ? ` <span class="bad">${esc(v.other)} has it on: only one computer should bet.</span>` : ''}</div>
+        ${kick}
+        ${row('The stream’s channel', 'its Kick name, as in kick.com/&lt;name&gt;', `<input type="text" data-abn="channel" value="${esc(a.channel)}" placeholder="channel name" spellcheck="false">`)}
+        ${row('Test mode', `types the bets into your own chat${v?.user || s.kick_name ? ` (${esc(v?.user || s.kick_name)})` : ''} instead: everything runs, nothing is bet`, toggle('data-ab="test_mode"', a.test_mode, 'Test mode'))}</div>
+      <div class="panel"><div class="ph"><h3>Never twice</h3></div><div class="small" style="line-height:1.7">
+        Each fight is claimed before anything is typed, so a restart or a second look can’t bet it again, and nothing is ever retried: a bet Augur can’t confirm is marked unconfirmed, not sent again. It stands down when you’ve bet on the fight yourself (your own <b>!h</b>/<b>!a</b> in chat, or in your picks list), when you’re typing in the chat, and when another computer has auto betting on.</div></div>
+    </div>
+    <div style="display:grid;gap:14px;align-content:start">
+      <div class="panel"><div class="ph"><h3>When to bet</h3></div>
+        ${num('min_chance', 'Lowest chance', 'sit out calls under this', '%', 50, 99, true)}
+        ${row('Skip hidden stats', 'wait while some stats are still hidden until the bell', toggle('data-ab="skip_hidden_stats"', a.skip_hidden_stats, 'Skip hidden stats'))}
+        ${num('hold_secs', 'Let the call settle', 'the pick and stake must stay the same this long', 'seconds', 0, 120)}
+        ${num('countdown_secs', 'Countdown', 'on Live, with Cancel, before it bets', 'seconds', 0, 30)}
+        ${num('latest_secs', 'No later than', 'after picks open, so it doesn’t miss the lock', 'seconds', 10, 600)}
+        <div class="small foot">${win}</div></div>
+      <div class="panel"><div class="ph"><h3>Limits a day</h3></div>
+        ${num('max_bets_per_day', 'Bets', 'auto bets at most', 'a day', 1, 500)}
+        ${num('max_credits_per_day', 'Credits', 'staked by auto bets at most', 'a day', 100, 100000000)}
+        <div class="small foot">The stake is Staking’s suggestion. Test bets don’t count.${v?.today?.[0] ? ` Today: ${fmt(v.today[0])} bet${v.today[0] === 1 ? '' : 's'}, ${fmt(v.today[1])} credits.` : ''}</div></div>
+    </div>
   </div>`;
 }
 
@@ -251,16 +287,17 @@ export async function render(app) {
   state.settingsPage ||= 'general';
   const page = state.settingsPage;
   const s = state.settings;
-  const [acct, preview, sync, upd, about] = await Promise.all([
+  const [acct, preview, sync, upd, about, av] = await Promise.all([
     page === 'account' ? invoke('account') : null,
     page === 'staking' ? invoke('stake_preview', { staking: s.staking }) : null,
     page === 'sync' ? invoke('sync_view') : null,
     page === 'updates' ? invoke('update_view') : null,
     page === 'general' ? invoke('about') : null,
+    page === 'autobet' ? invoke('auto_view') : null,
   ]);
   if (state.tab !== 'settings' || state.settingsPage !== page) return;
   const tabs = `<div class="seg ml">${PAGES.map(([k, l]) => `<button class="${page === k ? 'on' : ''}" data-page="${k}">${l}</button>`).join('')}</div>`;
-  const body = { general: () => general(s, about, state.live), staking: () => staking(s, preview), chat: () => chat(s, state.live), model: () => modelPage(s), account: () => account(s, acct), sync: () => syncPage(sync, state.syncFlash), updates: () => updates(s, upd) }[page]();
+  const body = { general: () => general(s, about, state.live), staking: () => staking(s, preview), chat: () => chat(s, state.live), model: () => modelPage(s), account: () => account(s, acct), autobet: () => autobetPage(s, av), sync: () => syncPage(sync, state.syncFlash), updates: () => updates(s, upd) }[page]();
   main.innerHTML = header('Settings', tabs) + body;
   state.syncFlash = null;
 
@@ -334,6 +371,20 @@ export async function render(app) {
     };
   });
   document.getElementById('si')?.addEventListener('click', () => invoke('sign_in'));
+  // Auto bet
+  main.querySelectorAll('[data-ab]').forEach((b) => (b.onclick = () => (flip(b, s.auto_bet, b.dataset.ab), save(true))));
+  main.querySelectorAll('[data-abn]').forEach((input) => {
+    input.onchange = () => {
+      const k = input.dataset.abn;
+      const v = input.value.trim();
+      if (k === 'channel') s.auto_bet.channel = v.replace(/^https?:\/\/(www\.)?kick\.com\//i, '').replace(/[/?#].*$/, '').toLowerCase();
+      else if (input.dataset.pct) s.auto_bet[k] = Math.min(99, Math.max(50, +v || 60)) / 100;
+      else if (v !== '') s.auto_bet[k] = Math.min(+input.max, Math.max(+input.min, Math.round(+v)));
+      save(true);
+    };
+  });
+  document.getElementById('ksi')?.addEventListener('click', () => invoke('kick_sign_in').catch(flash));
+  document.getElementById('kso')?.addEventListener('click', async () => (await invoke('kick_sign_out').catch(flash), render(app)));
   document.getElementById('cpdir')?.addEventListener('click', (e) => copyText(about.data_dir, e.target));
   document.getElementById('so')?.addEventListener('click', async () => {
     await invoke('sign_out');

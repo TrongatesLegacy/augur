@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tauri::webview::{PageLoadEvent, WebviewBuilder};
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder};
 
-use crate::app::{now_ms, notify, Shared};
+use crate::app::{notify, now_ms, Shared};
 use augur_engine::autobet::{self, AutoBet, AutoBetSettings, Decision, Moment};
 use augur_engine::kick::{self, Line};
 use augur_engine::{db, rusqlite};
@@ -252,7 +252,8 @@ pub async fn chat_place(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>, s
             let window = app.get_window("main").ok_or("no main window")?;
             let builder = WebviewBuilder::new(CHAT, WebviewUrl::External(url)).on_page_load(|w, p| {
                 // a page that isn't Kick's chat (a link clicked in it) goes back to the chat
-                if p.event() == PageLoadEvent::Finished && p.url().host_str().is_some_and(|h| h != "kick.com" && !h.ends_with(".kick.com")) {
+                if p.event() == PageLoadEvent::Finished && p.url().host_str().is_some_and(|h| h != "kick.com" && !h.ends_with(".kick.com"))
+                {
                     let _ = w.eval("history.back()");
                 }
             });
@@ -357,7 +358,12 @@ pub fn auto_arm(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>, on: bool)
             return Err("Sign in to Kick in Settings › Auto bet first.".into());
         }
         if v.channel.is_empty() {
-            return Err(if v.test { "Set your Kick name (Settings › Account) for test mode." } else { "Set the stream's Kick channel in Settings › Auto bet." }.into());
+            return Err(if v.test {
+                "Set your Kick name (Settings › Account) for test mode."
+            } else {
+                "Set the stream's Kick channel in Settings › Auto bet."
+            }
+            .into());
         }
         if let Some(other) = &v.other {
             return Err(format!("{other} has auto betting on: only one computer should bet."));
@@ -387,13 +393,8 @@ pub fn refresh(app: &AppHandle, shared: &Shared) {
     let s = &settings.auto_bet;
     let login = shared.kick.lock().unwrap().clone();
     let now = now_ms();
-    let other = shared
-        .others
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|o| o.auto_bet && now.saturating_sub(o.at) < OTHER_FRESH_MS)
-        .map(|o| o.name.clone());
+    let other =
+        shared.others.lock().unwrap().iter().find(|o| o.auto_bet && now.saturating_sub(o.at) < OTHER_FRESH_MS).map(|o| o.name.clone());
     if !s.enabled {
         shared.armed.store(false, Ordering::Relaxed);
     }
@@ -457,7 +458,9 @@ pub fn auto_loop(app: AppHandle, shared: Arc<Shared>) {
     }
     while !shared.stop.load(Ordering::Relaxed) {
         std::thread::sleep(Duration::from_secs(1));
-        let signed = signed_in(&app, &shared);
+        // Kick's sign-in is only looked at while auto betting is on
+        let enabled = shared.settings.lock().unwrap().auto_bet.enabled;
+        let signed = enabled && signed_in(&app, &shared);
         if last_refresh.elapsed() > Duration::from_secs(15) {
             refresh(&app, &shared);
             last_refresh = Instant::now();
@@ -496,7 +499,15 @@ pub fn auto_loop(app: AppHandle, shared: Arc<Shared>) {
                 close_out(&conn, &old, "picks closed before it was time to bet");
             }
             *shared.cancel.lock().unwrap() = false;
-            track = Some(Track { call_id, key: key.clone(), held_since: now, countdown_until: None, lines: vec![], read_at: None, waiting: String::new() });
+            track = Some(Track {
+                call_id,
+                key: key.clone(),
+                held_since: now,
+                countdown_until: None,
+                lines: vec![],
+                read_at: None,
+                waiting: String::new(),
+            });
         }
         let Some(t) = track.as_mut() else { continue };
         if t.key != key {
@@ -568,7 +579,14 @@ pub fn auto_loop(app: AppHandle, shared: Arc<Shared>) {
     }
 }
 
-fn record(p: &augur_engine::predict::Prediction, stake: &augur_engine::stake::Stake, call_id: i64, v: &AutoView, status: &str, reason: Option<&str>) -> AutoBet {
+fn record(
+    p: &augur_engine::predict::Prediction,
+    stake: &augur_engine::stake::Stake,
+    call_id: i64,
+    v: &AutoView,
+    status: &str,
+    reason: Option<&str>,
+) -> AutoBet {
     AutoBet {
         prediction_id: Some(call_id),
         home_owner: p.home.owner.clone(),
@@ -632,7 +650,16 @@ fn set_phase(app: &AppHandle, shared: &Shared, phase: &str, msg: &str, command: 
 
 /// The bet, once: type it in, then watch the chat for it and the bot's answer. Never sent again, whatever happens.
 #[allow(clippy::too_many_arguments)]
-fn bet_now(app: &AppHandle, shared: &Shared, conn: &rusqlite::Connection, id: i64, v: &AutoView, p: &augur_engine::predict::Prediction, command: &str, mut lines: Vec<Line>) {
+fn bet_now(
+    app: &AppHandle,
+    shared: &Shared,
+    conn: &rusqlite::Connection,
+    id: i64,
+    v: &AutoView,
+    p: &augur_engine::predict::Prediction,
+    command: &str,
+    mut lines: Vec<Line>,
+) {
     let what = format!("{command} on {} vs {}", p.home.pal, p.away.pal);
     let sent_at = now_ms();
     match type_bet(app, &v.channel, command) {
@@ -685,7 +712,11 @@ fn bet_now(app: &AppHandle, shared: &Shared, conn: &rusqlite::Connection, id: i6
         (None, _) => ("unconfirmed", "not seen in the chat"),
     };
     let _ = autobet::update(conn, id, status, Some(why), now_ms());
-    notify(app, if status == "confirmed" { "Auto bet test ✓" } else { "Auto bet unconfirmed" }, &format!("{what}: {why}. It won't be sent again."));
+    notify(
+        app,
+        if status == "confirmed" { "Auto bet test ✓" } else { "Auto bet unconfirmed" },
+        &format!("{what}: {why}. It won't be sent again."),
+    );
     finish(app, shared, conn, id);
     shared.bets_now.store(true, Ordering::Relaxed);
 }
@@ -699,7 +730,15 @@ fn finish(app: &AppHandle, shared: &Shared, conn: &rusqlite::Connection, id: i64
             "confirmed" => "Bet in and confirmed".to_string(),
             _ => b.reason.clone().unwrap_or_else(|| b.status.clone()),
         };
-        set_phase(app, shared, if matches!(b.status.as_str(), "sent" | "seen") { "sending" } else { "done" }, &msg, &b.command.clone(), None, Some(b));
+        set_phase(
+            app,
+            shared,
+            if matches!(b.status.as_str(), "sent" | "seen") { "sending" } else { "done" },
+            &msg,
+            &b.command.clone(),
+            None,
+            Some(b),
+        );
     }
     refresh(app, shared);
 }

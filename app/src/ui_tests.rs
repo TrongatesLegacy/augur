@@ -273,7 +273,76 @@ pub fn fixture_data() -> Value {
         (a.low, a.high) = (0.44, 0.61);
     }
     reroll_kept.pal.price = Some(500);
-    json!({
+    // auto betting: off (as most see Live), and on and counting down, signed in to Kick
+    let stake = live.stake.clone().unwrap_or_default();
+    let auto_on = crate::autobet::AutoView {
+        enabled: true,
+        armed: true,
+        signed_in: true,
+        user: Some("player-01".into()),
+        channel: "the-stream".into(),
+        phase: "countdown".into(),
+        message: "Betting in a moment".into(),
+        command: stake.command.clone(),
+        today: (3, 7_400),
+        window: Some((128, 61)),
+        ..Default::default()
+    };
+    // Your bets once Augur has auto bet: two of the seed's bets were its (one confirmed, one you doubled up on),
+    // plus a skip and a cancel in its record (in a store of their own, so the other pages don't see them)
+    let auto_conn = seed::store();
+    seed::import_bets(&auto_conn);
+    // a bet as the query gives it: seq, duel, owners, pals, the side backed and the stake
+    type Linked = (i64, i64, String, String, String, String, String, i64);
+    let linked: Vec<Linked> = auto_conn
+        .prepare("SELECT seq, duel_id, home_owner, away_owner, home_pal, away_pal, backed, stake FROM bets WHERE duel_id IS NOT NULL ORDER BY seq DESC LIMIT 2")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    for (i, (_, duel, ho, ao, hp, ap, side, amount)) in linked.iter().enumerate() {
+        let b = augur_engine::autobet::AutoBet {
+            home_owner: ho.clone(),
+            away_owner: ao.clone(),
+            home_pal: hp.clone(),
+            away_pal: ap.clone(),
+            side: side.clone(),
+            amount: *amount as u64,
+            command: augur_engine::stake::command(side, *amount as u64, &StakeSettings::default()),
+            prob: 0.74,
+            channel: "the-stream".into(),
+            status: "sending".into(),
+            claimed_at: recent - 3_600_000 * (i as u64 + 1),
+            ..Default::default()
+        };
+        let id = augur_engine::autobet::claim(&auto_conn, &b).unwrap().unwrap();
+        augur_engine::autobet::update(&auto_conn, id, "confirmed", None, recent).unwrap();
+        auto_conn
+            .execute(
+                "UPDATE auto_bets SET duel_id = ?2, reply = ?3 WHERE id = ?1",
+                augur_engine::rusqlite::params![id, duel, format!("{amount} on HOME - if it wins you get more (1.2x)")],
+            )
+            .unwrap();
+        if i == 1 {
+            // you bet on this one too
+            auto_conn.execute("INSERT INTO bets (seq, duel_id, home_owner, away_owner, home_pal, away_pal, backed, stake, result, seen_at) SELECT 99, duel_id, home_owner, away_owner, home_pal, away_pal, backed, 500, result, seen_at FROM bets WHERE duel_id = ?1 LIMIT 1", [duel]).unwrap();
+        }
+    }
+    for (status, why) in [("skipped", "you bet on it yourself"), ("cancelled", "you cancelled it")] {
+        let b = augur_engine::autobet::AutoBet {
+            home_pal: "Gumoss".into(),
+            away_pal: "Mozzarina".into(),
+            command: "!a 1500".into(),
+            status: status.into(),
+            reason: Some(why.into()),
+            claimed_at: recent - 60_000,
+            ..Default::default()
+        };
+        augur_engine::autobet::claim(&auto_conn, &b).unwrap();
+    }
+    let bets_auto = views::bets_view(&auto_conn, &StakeSettings::default(), "all", 0, Default::default()).unwrap();
+    let mut data = json!({
         "live": live,
         "history": history,
         "own_box": own_box,
@@ -350,7 +419,22 @@ pub fn fixture_data() -> Value {
         "learned_settings": model::Settings::default(),
         "learn_now": null,
         "player_image": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMCAxMCI+PHJlY3Qgd2lkdGg9IjEwIiBoZWlnaHQ9IjEwIiBmaWxsPSIjNTNmYzE4Ii8+PGNpcmNsZSBjeD0iNSIgY3k9IjQiIHI9IjIiIGZpbGw9IiMwYjEwMjAiLz48cmVjdCB4PSIyIiB5PSI3IiB3aWR0aD0iNiIgaGVpZ2h0PSI0IiByeD0iMyIgZmlsbD0iIzBiMTAyMCIvPjwvc3ZnPg==",
-    })
+    });
+    // auto betting's stand-ins (added here: one json! this size reaches the macro's recursion limit)
+    let auto_off = crate::autobet::AutoView { phase: "off".into(), ..Default::default() };
+    for (k, v) in [
+        ("bets_view_auto", json!(bets_auto)),
+        ("auto_view", json!(auto_off)),
+        ("auto_on", json!(auto_on)),
+        ("auto_arm", Value::Null),
+        ("auto_cancel", Value::Null),
+        ("chat_place", Value::Null),
+        ("kick_sign_in", Value::Null),
+        ("kick_sign_out", Value::Null),
+    ] {
+        data[k] = v;
+    }
+    data
 }
 
 /// Serves ui/ over plain HTTP on 127.0.0.1 (Chrome won't load ES modules from file:// pages), with the entry page
@@ -453,7 +537,16 @@ const MAIN_DRIVER: &str = r#"
       .map((el) => `${el.tagName.toLowerCase()}.${[...el.classList].join('.')} (${el.clientWidth}px, needs ${el.scrollWidth}px): ${el.textContent.trim().replace(/\s+/g, ' ').slice(0, 50)}`);
   if (!window.augur) window.__errors.push('the page never started (a module failed to load)');
   else {
-    for (const tab of only ? [only] : ['live', 'liveedge', 'history', 'call', 'bets', 'pals', 'players', 'playersfew', 'you', 'titles', 'titlesone', 'mypals', 'mypalsone', 'mypalsroll', 'mypalsbusy', 'mypalskept', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'changelog', 'updates', 'offair']) {
+    for (const tab of only ? [only] : ['live', 'liveedge', 'history', 'call', 'bets', 'pals', 'players', 'playersfew', 'you', 'titles', 'titlesone', 'mypals', 'mypalsone', 'mypalsroll', 'mypalsbusy', 'mypalskept', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'changelog', 'updates', 'offair', 'liveauto', 'autobet', 'betsauto']) {
+      // "liveauto" is Live with auto betting armed and counting down, signed in to Kick; "autobet" is its Settings
+      // page; "betsauto" is Your bets once Augur has auto bet
+      DATA.auto_off ||= DATA.auto_view;
+      const autoOn = ['liveauto', 'autobet'].includes(tab);
+      DATA.auto_view = autoOn ? { ...DATA.auto_on, countdown_until: Date.now() + 9000 } : DATA.auto_off;
+      window.augur.state.auto = DATA.auto_view;
+      if (tab === 'autobet') DATA.get_settings = { ...DATA.get_settings, auto_bet: { ...DATA.get_settings.auto_bet, enabled: true, channel: 'the-stream', test_mode: false } };
+      DATA.bets_plain ||= DATA.bets_view;
+      DATA.bets_view = tab === 'betsauto' ? DATA.bets_view_auto : DATA.bets_plain;
       // "playersfew" is Players with only 4 pals in the box: room enough to stack the cards' rolls
       DATA.player_all ||= DATA.player;
       DATA.player = tab === 'playersfew' ? { ...DATA.player_all, roster: DATA.player_all.roster.slice(0, 4) } : DATA.player_all;
@@ -468,7 +561,7 @@ const MAIN_DRIVER: &str = r#"
         window.augur.showUpdate(DATA.update_ready);
       }
       // "bets" is History's Your bets view; "staking", "sync" and "updates" are Settings pages
-      window.augur.state.view = tab === 'bets' ? 'bets' : 'calls';
+      window.augur.state.view = ['bets', 'betsauto'].includes(tab) ? 'bets' : 'calls';
       // "titles" is You › Titles, every title by category
       // "titlesone" is the same with one category's tab picked
       window.augur.state.youView = ['titles', 'titlesone'].includes(tab) ? 'titles' : tab.startsWith('mypals') ? 'pals' : 'profile';
@@ -488,9 +581,9 @@ const MAIN_DRIVER: &str = r#"
         const t = p.pick === 'home' ? { t_home: p.score.t_away * 0.985 } : { t_away: p.score.t_home * 0.985 };
         window.augur.state.live = { ...DATA.live, prediction: { ...p, score: { ...p.score, ...t }, owners: { summary: 'first meeting', since: null, owners: [], meetings: [] }, pal_h2h: { home_wins: 0, away_wins: 0, meetings: [], pages_scanned: 1 } } };
       } else window.augur.state.live = DATA.live;
-      window.augur.state.settingsPage = ['staking', 'sync', 'updates'].includes(tab) ? tab : tab === 'ownmodel' ? 'model' : tab === 'changelog' ? 'updates' : 'general';
+      window.augur.state.settingsPage = ['staking', 'sync', 'updates', 'autobet'].includes(tab) ? tab : tab === 'ownmodel' ? 'model' : tab === 'changelog' ? 'updates' : 'general';
       // "welcome" is the fresh install's overlay, over Live
-      await window.augur.show(['bets', 'call'].includes(tab) ? 'history' : ['staking', 'sync', 'changelog', 'updates', 'ownmodel'].includes(tab) ? 'settings' : ['welcome', 'offair', 'liveedge'].includes(tab) ? 'live' : ['titles', 'titlesone'].includes(tab) || tab.startsWith('mypals') ? 'you' : tab === 'playersfew' ? 'players' : tab);
+      await window.augur.show(['bets', 'call', 'betsauto'].includes(tab) ? 'history' : ['staking', 'sync', 'changelog', 'updates', 'ownmodel', 'autobet'].includes(tab) ? 'settings' : ['welcome', 'offair', 'liveedge', 'liveauto'].includes(tab) ? 'live' : ['titles', 'titlesone'].includes(tab) || tab.startsWith('mypals') ? 'you' : tab === 'playersfew' ? 'players' : tab);
       await sleep(300);
       // the page and every box in it that scrolls (its panel's title, and how much it holds against what shows)
       const scrolling = () =>
@@ -887,6 +980,32 @@ fn every_tab_renders_headless() {
     // compared lowercased: labels are styled uppercase and innerText reflects that
     let text = |tab: &str| r[tab].as_str().unwrap_or("").to_lowercase();
     assert!(text("live").contains("wumpo"), "Live: {}", text("live"));
+    assert!(!text("live").contains("auto bet"), "auto betting off, Live is as it was: {}", text("live"));
+    assert!(
+        text("liveauto").contains("auto bet")
+            && text("liveauto").contains("cancel")
+            && text("liveauto").contains("into the-stream’s chat")
+            && text("liveauto").contains("wumpo"),
+        "Live with auto betting armed: the countdown with Cancel beside the call: {}",
+        text("liveauto")
+    );
+    assert!(
+        text("autobet").contains("signed in as player-01")
+            && text("autobet").contains("test mode")
+            && text("autobet").contains("2:08 (median of 61 calls)"),
+        "Settings › Auto bet: {}",
+        text("autobet")
+    );
+    assert!(
+        text("betsauto").contains("auto\n") || text("betsauto").contains("auto ×2"),
+        "Your bets says which Augur placed: {}",
+        text("betsauto")
+    );
+    assert!(
+        text("betsauto").contains("auto bets") && text("betsauto").contains("you cancelled it") && text("betsauto").contains("manual ×2"),
+        "the record of auto bets, and a fight you both bet on: {}",
+        text("betsauto")
+    );
     assert!(text("history").contains("after the bell:"), "History shows a call that changed after picks closed: {}", text("history"));
     let p = &data["live"]["prediction"];
     let chance = format!("{}%", (p["prob"].as_f64().unwrap() * 100.0).round());
@@ -1005,7 +1124,7 @@ fn every_tab_renders_headless() {
     // everything fits at 1280x720 without a box scrolling inside it, even in the report's shorter window: only the
     // lists that grow without end (History's calls and your bets) scroll
     for (tab, boxes) in r["scrollers"].as_object().unwrap() {
-        let allowed = ["history", "bets"].contains(&tab.as_str());
+        let allowed = ["history", "bets", "betsauto"].contains(&tab.as_str());
         assert!(allowed || boxes.as_array().unwrap().is_empty(), "{tab}: boxes scroll inside it: {boxes}");
     }
     assert!(r["betRows"].as_u64().unwrap() > 0, "Your bets rows with a call open its breakdown too");
@@ -1211,6 +1330,9 @@ fn every_tab_renders_headless() {
             "changelog",
             "updates",
             "offair",
+            "liveauto",
+            "autobet",
+            "betsauto",
         ] {
             render(port, tab, Some((&folder, tab)));
         }

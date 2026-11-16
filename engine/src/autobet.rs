@@ -251,7 +251,9 @@ fn row(r: &rusqlite::Row) -> rusqlite::Result<AutoBet> {
 
 /// Every auto bet, newest first, with its duel once its call has settled.
 pub fn all(conn: &Connection) -> Result<Vec<AutoBet>> {
-    let mut st = conn.prepare(&format!("SELECT {COLS} FROM auto_bets a LEFT JOIN predictions p ON p.id = a.prediction_id ORDER BY a.claimed_at DESC, a.id DESC"))?;
+    let mut st = conn.prepare(&format!(
+        "SELECT {COLS} FROM auto_bets a LEFT JOIN predictions p ON p.id = a.prediction_id ORDER BY a.claimed_at DESC, a.id DESC"
+    ))?;
     let rows = st.query_map([], row)?.collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
@@ -435,7 +437,10 @@ mod tests {
         assert!(skip(Moment { open_ms: 61_000, ..moment() }), "too late");
         assert!(skip(Moment { today: (40, 0), ..moment() }), "bets a day");
         assert!(skip(Moment { today: (3, 98_000), ..moment() }), "credits a day");
-        assert_eq!(decide(&AutoBetSettings { skip_hidden_stats: false, ..s.clone() }, &Moment { estimated: true, ..moment() }), Decision::Go);
+        assert_eq!(
+            decide(&AutoBetSettings { skip_hidden_stats: false, ..s.clone() }, &Moment { estimated: true, ..moment() }),
+            Decision::Go
+        );
     }
 
     fn bet(prediction_id: i64) -> AutoBet {
@@ -467,7 +472,10 @@ mod tests {
         update(&conn, id, "sent", None, 2_000).unwrap();
         update(&conn, id, "confirmed", Some("the bot took it"), 3_000).unwrap();
         let b = for_call(&conn, 7).unwrap().unwrap();
-        assert_eq!((b.status.as_str(), b.sent_at, b.done_at, b.reason.as_deref()), ("confirmed", Some(2_000), Some(3_000), Some("the bot took it")));
+        assert_eq!(
+            (b.status.as_str(), b.sent_at, b.done_at, b.reason.as_deref()),
+            ("confirmed", Some(2_000), Some(3_000), Some("the bot took it"))
+        );
         // a fight ruled out is claimed too
         assert!(claim(&conn, &AutoBet { status: "skipped".into(), ..bet(8) }).unwrap().is_some());
         assert_eq!(claim(&conn, &bet(8)).unwrap(), None);
@@ -486,7 +494,9 @@ mod tests {
 
     #[test]
     fn finds_the_bet_in_chat_and_the_bots_answer() {
-        let lines = kick::parse_history(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/pages/kick-history.json")).unwrap()).unwrap();
+        let lines =
+            kick::parse_history(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/pages/kick-history.json")).unwrap())
+                .unwrap();
         let at = lines.iter().find(|l| l.content == "!h 2300").unwrap().at;
         let line = sent_line(&lines, "Player-01", "!H 2300", at + 2_000).expect("sent a moment before Augur thought");
         assert_eq!(bot_reply(&lines, line).map(|l| &l.content[..12]), Some("2300 on HOME"));

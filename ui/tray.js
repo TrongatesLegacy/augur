@@ -1,5 +1,6 @@
 // The tray popover: only what's useful at a glance, and the copy buttons (the bet and the chat line). Between duels
 // and off air it says how the last stream went. It sizes itself to what it shows.
+import { statusChip } from './lib/auto.js';
 import { invoke, listen } from './lib/bridge.js';
 import { copyText } from './lib/clipboard.js';
 import { esc, feedProblem, fmt, pct, signed } from './lib/format.js';
@@ -70,7 +71,7 @@ function render() {
     el.innerHTML = `<div class="hd"><span><i></i>${view.live ? 'FIGHT ON' : 'PICKS OPEN'}</span><span class="c">${p.home.estimated || p.away.estimated ? 'STATS GUESSED' : esc(p.tale.verdict)}</span></div>
       <div class="call"><div><div class="who">${esc(fav.pal)}</div><div class="vs">over <b>${esc(dog.pal)}</b></div><div class="small">${esc(p.home.owner)} vs ${esc(p.away.owner)}</div><div class="why">${esc(whyLine(p))}</div></div>${dial(p.prob, 84)}</div>
       <div class="stats">${tapeRows(p)}</div>
-      <div class="betrow">${bet}${command ? '<button class="btn ghost" id="cb">Copy bet</button>' : ''}</div>
+      <div class="betrow">${bet}${autoNote(state.auto) || (command ? '<button class="btn ghost" id="cb">Copy bet</button>' : '')}</div>
       ${settings?.chat_lines === false ? '' : `<div class="say"><div class="vo" id="vb">${voices.map((v) => `<button class="${v === voice ? 'on' : ''}" data-v="${esc(v)}">${esc(SHORT[v] || v)}</button>`).join('')}</div>
       <div class="q" id="vq">${esc(voiceLine(p, voice, settings?.include_chance !== false))}</div><button class="btn copy" id="cp">Copy for chat</button></div>`}${foot}`;
     el.querySelectorAll('#vb button').forEach((b) => {
@@ -91,6 +92,14 @@ function render() {
   fit();
 }
 
+// with auto betting armed, what it's doing on this fight stands in for Copy bet, so you don't bet it twice
+function autoNote(a) {
+  if (!a?.enabled || !a.armed) return '';
+  if (a.bet && ['sending', 'sent', 'seen', 'confirmed', 'unconfirmed'].includes(a.bet.status)) return `<span class="anote" title="${esc(a.message || '')}">${statusChip(a.bet.status)} Auto bet</span>`;
+  if (a.phase === 'countdown') return '<span class="anote"><span class="ast gold">Soon</span> Auto bet</span>';
+  return '<span class="anote"><span class="ast">Armed</span> Auto bet</span>';
+}
+
 addEventListener('keydown', (e) => {
   if (e.key === 'Escape') invoke('hide_popover');
 });
@@ -102,6 +111,10 @@ listen('settings', (v) => {
   state.settings = v;
   render();
 });
+listen('autobet', (v) => {
+  state.auto = v;
+  render();
+});
 listen('live', (v) => {
   state.view = v;
   render();
@@ -109,6 +122,7 @@ listen('live', (v) => {
 state.settings = await invoke('get_settings');
 state.view = await invoke('live');
 state.update = await invoke('update_view');
+state.auto = await invoke('auto_view').catch(() => null);
 render();
 // for the headless UI tests
 window.augur = { rendered: true };

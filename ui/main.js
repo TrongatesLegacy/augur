@@ -1,5 +1,6 @@
 // The main window: the sidebar, the shared state the tabs read, and the events from the Rust side.
 import { activity, activityHtml, FLASH_MS } from './lib/activity.js';
+import { hideChat, placeChat } from './lib/auto.js';
 import { invoke, listen } from './lib/bridge.js';
 import { esc } from './lib/format.js';
 import * as history from './tabs/history.js';
@@ -27,6 +28,8 @@ const app = {
     // another tab closes a call's breakdown in History
     if (tab !== app.state.tab) app.state.call = null;
     app.state.tab = tab;
+    // the stream's chat shows on Live only
+    if (tab !== 'live' && app.state.auto?.enabled) hideChat();
     document.querySelectorAll('.nav').forEach((n) => n.classList.toggle('on', n.dataset.tab === tab));
     return TABS[tab].render(app);
   },
@@ -114,6 +117,16 @@ listen('live', (v) => {
   if (app.state.tab === 'live') live.render(app);
 });
 listen('navigate', (tab) => app.show(tab));
+// auto betting: Live's column follows what it's doing; Settings › Auto bet follows the sign-in
+listen('autobet', (v) => {
+  app.state.auto = v;
+  if (app.state.tab === 'live') live.render(app);
+});
+listen('kick', async () => {
+  app.state.auto = await invoke('auto_view');
+  if (app.state.tab === 'settings' && app.state.settingsPage === 'autobet') settings.render(app);
+});
+window.addEventListener('resize', () => app.state.tab === 'live' && app.state.auto?.enabled && placeChat());
 listen('settings', (s) => {
   // another computer's change arrived through sync
   app.state.settings = s;
@@ -185,6 +198,7 @@ listen('account', (name) => {
 
 app.state.settings = await invoke('get_settings');
 app.state.live = await invoke('live');
+app.state.auto = await invoke('auto_view').catch(() => null);
 busy.fetch = await invoke('backfill_progress');
 busy.sync = await invoke('sync_view').catch(() => null);
 showActivity();

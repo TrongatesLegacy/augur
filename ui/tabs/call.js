@@ -1,6 +1,7 @@
 // History › one call's breakdown: the two pals and the result, how the duel went (each side's HP over the fight,
 // from its tape, and the damage by move), and how the model came to its call (the three factors added up on the
 // log-odds scale, the tale of the tape and the settings it used). Opened from a row in Augur's calls or Your bets.
+import { statusChip, viaChip } from '../lib/auto.js';
 import { invoke } from '../lib/bridge.js';
 import { esc, fmt, signed } from '../lib/format.js';
 import { SIDES, headline as callHeadline, modelFooter, other, pal, tape, waterfall } from '../lib/callparts.js';
@@ -35,11 +36,14 @@ function ledger(d) {
     cols.push(col('Augur’s bet', b.augur_stake ? `<b>${esc(b.augur_command)}</b>${made(b.augur_result, b.estimated)}` : '<small>sat out</small>'));
     if (d.bets_read) {
       const you = b.backed ? `<b title="${fmt(b.stake)} on ${esc(pal(c, b.backed))}">${cmd(b.backed, b.stake)}</b>${made(b.result)}` : '<small>no bet</small>';
-      cols.push(col(`Your bet <span class="lab ${b.label}">${BET_LABELS[b.label]}</span>`, you));
+      cols.push(col(`Your bet <span class="lab ${b.label}">${BET_LABELS[b.label]}</span>${viaChip(b.via)}`, you));
     }
   } else if (c.damaged) {
     cols.push(col('Money', '<small title="Its call was overwritten after the fight, so it’s left out of the money">left out</small>'));
   }
+  // what auto betting did on it
+  const a = d.auto_bet;
+  if (a) cols.push(col(`Auto bet ${statusChip(a.status)}`, `<b>${esc(a.command || '—')}</b>${a.reason || a.reply ? `<small title="${esc(a.reply || a.reason)}">${esc((a.reason || a.reply).slice(0, 48))}</small>` : ''}`));
   return `<div class="ledger">${cols.join('')}</div>`;
 }
 

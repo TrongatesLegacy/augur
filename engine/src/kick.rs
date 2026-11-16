@@ -166,7 +166,9 @@ mod tests {
 
     #[test]
     fn knows_a_bet_command() {
-        for (c, side) in [("!h", "home"), ("!A", "away"), ("!home 100", "home"), ("!a all", "away"), ("!away'", "away"), ("!h 2,300", "home")] {
+        for (c, side) in
+            [("!h", "home"), ("!A", "away"), ("!home 100", "home"), ("!a all", "away"), ("!away'", "away"), ("!h 2,300", "home")]
+        {
             assert_eq!(bet_side(c), Some(side), "{c}");
         }
         for c in ["!hello", "!h now please", "!time over", "h", "!card", ""] {

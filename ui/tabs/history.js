@@ -1,6 +1,7 @@
 // History: Augur's own calls (today, this week or all time), calibration and the record by stream; and Your bets:
 // the developer's bets next to Augur's calls and stakes, with missed fights kept apart from deviations. A row with a
 // call opens its breakdown (call.js); Back returns to the list as it was.
+import { autoRow, viaChip } from '../lib/auto.js';
 import { invoke } from '../lib/bridge.js';
 import { ago, esc, fmt, pct, short, signed } from '../lib/format.js';
 import { BET_LABELS } from '../lib/stake.js';
@@ -24,6 +25,13 @@ function callRow(c) {
   return `<tr class="go" data-call="${c.id}" tabindex="0" title="See how this duel went and how Augur called it"><td><span class="res ${right ? 'o' : 'x'}">${right ? '✓' : '✕'}</span></td><td>${esc(c.home_pal)} <span class="muted">vs</span> ${esc(c.away_pal)}</td><td>${esc(c.pick === 'home' ? c.home_pal : c.away_pal)}${lateNote(c)}</td><td class="num">${pct(c.prob)}</td><td class="${right ? 'ok' : 'bad'}">${right ? 'Right' : 'Missed'}</td><td class="num">${esc(c.ko || '')}</td><td class="goar" aria-hidden="true">›</td></tr>`;
 }
 
+// Your bets by who placed them, once Augur has auto bet
+const VIA = [
+  ['all', 'All'],
+  ['manual', 'Manual'],
+  ['auto', 'Auto'],
+];
+
 const VIEWS = [
   ['calls', "Augur's calls"],
   ['bets', 'Your bets'],
@@ -37,7 +45,7 @@ const cell = (top, under) => `<div class="two"><span>${top}</span><small>${under
 
 function betRow(f) {
   const augur = f.pick ? cell(side(f, f.pick), `${pct(f.prob)} · ${f.augur_command ? `<b>${esc(f.augur_command)}</b>` : 'no bet'}`) : '<span class="muted">no call</span>';
-  const yours = f.backed ? cell(side(f, f.backed), `${fmt(f.stake)} credits`) : '<span class="muted">no bet</span>';
+  const yours = f.backed ? cell(`${side(f, f.backed)}${viaChip(f.via)}`, `${fmt(f.stake)} credits`) : '<span class="muted">no bet</span>';
   const open = f.call_id != null ? ` class="go" data-call="${f.call_id}" tabindex="0" title="See how this duel went and how Augur called it"` : '';
   return `<tr${open}><td>${esc(f.home_pal)} <span class="muted">vs</span> ${esc(f.away_pal)}</td><td>${augur}</td><td>${yours}</td><td><span class="lab ${f.label}">${BET_LABELS[f.label]}</span></td><td class="num">${money(f.result)}</td><td class="num">${f.pick ? money(f.augur_result, f.estimated) : money(null)}</td><td class="goar" aria-hidden="true">${open ? '›' : ''}</td></tr>`;
 }
@@ -55,6 +63,15 @@ async function renderBets(app, controls) {
   const lead = c.augur - c.yours;
   const max = Math.max(Math.abs(c.augur), Math.abs(c.yours), 1);
   const bet = c.followed + c.deviated;
+  // with auto bets: All, Manual or Auto (a fight you didn't bet on shows under All only)
+  const hasVia = c.fights.some((f) => f.via);
+  const via = hasVia ? state.via || 'all' : 'all';
+  const fights = via === 'all' ? c.fights : c.fights.filter((f) => f.via?.via === via);
+  const viaSeg = hasVia ? `<div class="seg sm" style="margin-left:auto">${VIA.map(([k, l]) => `<button class="${via === k ? 'on' : ''}" data-via="${k}">${l}</button>`).join('')}</div>` : '';
+  const autos = b.auto_bets || [];
+  const autoPanel = autos.length
+    ? `<div class="panel col list grow"><div class="ph"><h3>Auto bets</h3><span>${autos.filter((a) => a.status === 'confirmed' && !a.test).length} confirmed</span></div><div class="fillin">${autos.map(autoRow).join('')}</div></div>`
+    : '';
   main.innerHTML =
     header('History · your bets', controls) +
     `<div class="hrow bets">
@@ -71,13 +88,14 @@ async function renderBets(app, controls) {
         <div><span class="label">No call</span><b class="bn">${fmt(c.no_call)}</b><small>${c.no_call ? `${signed(c.no_call_yours)} on fights Augur didn't call` : 'none'}</small></div></div>
     </div>
     <div class="g2 grow">
-      <div class="panel col">${c.fights.length ? `<div class="fillin"><table class="sticky"><thead><tr><th>Fight</th><th>Augur</th><th>You</th><th></th><th>You made</th><th>Augur's way</th><th></th></tr></thead><tbody>
-        ${c.fights.slice(0, 200).map(betRow).join('')}
+      <div class="panel col">${viaSeg ? `<div class="ph"><h3>Fights</h3>${viaSeg}</div>` : ''}${fights.length ? `<div class="fillin"><table class="sticky"><thead><tr><th>Fight</th><th>Augur</th><th>You</th><th></th><th>You made</th><th>Augur's way</th><th></th></tr></thead><tbody>
+        ${fights.slice(0, 200).map(betRow).join('')}
       </tbody></table></div>` : empty('star', 'No bets or calls in this range yet', 'Your bets show here next to Augur’s calls.')}</div>
       <div class="stackc">
         <div class="panel"><div class="ph"><h3>Your picks list</h3><button class="btn ghost" id="rb" ${acct.signed_in ? '' : 'disabled'}>Read now</button></div>
           <div class="small">${status}</div>${reading ? `<div class="progress"><i style="width:${Math.min(100, (100 * b.stored) / imp.total)}%"></i></div>` : ''}</div>
-        <div class="panel col grow"><div class="ph"><h3>How it's worked out</h3></div><div class="fillin hwo">
+        ${autoPanel}
+        <div class="panel col${autos.length ? '' : ' grow'}"><div class="ph"><h3>How it's worked out</h3></div><div class="${autos.length ? '' : 'fillin '}hwo">
           <div><span class="lab followed">Followed</span><p>you bet Augur's pick (any amount)</p></div>
           <div><span class="lab deviated">Deviated</span><p>the other side, or a bet when Augur said sit out</p></div>
           <div><span class="lab missed">Missed</span><p>no bet on a call Augur would have bet on, kept out of the comparison</p></div>
@@ -110,6 +128,12 @@ function wire(app) {
   main.querySelectorAll('.seg button[data-r]').forEach((b) => {
     b.onclick = () => {
       state.range = b.dataset.r;
+      render(app);
+    };
+  });
+  main.querySelectorAll('.seg button[data-via]').forEach((b) => {
+    b.onclick = () => {
+      state.via = b.dataset.via;
       render(app);
     };
   });

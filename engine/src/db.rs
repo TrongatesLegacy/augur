@@ -114,6 +114,8 @@ const ADDED: &[(&str, &str, &str)] = &[
     // its pre-fight call was overwritten after the fight (before 0.1.5): counted right or wrong, but its stake
     // isn't one you were shown, so it's left out of the money comparison
     ("predictions", "damaged", "INTEGER DEFAULT 0"),
+    // when picks closed on it (site clock, ms), to learn how long picks stay open
+    ("predictions", "closed_at", "INTEGER"),
     // the site's pal rank for each side when called: "Tier C - ranked 154 of 357 species, power 55/100"
     ("fighters", "tier", "TEXT"),
     ("fighters", "pal_rank", "INTEGER"),
@@ -154,6 +156,7 @@ pub fn open(path: &Path) -> Result<Connection> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.execute_batch(SCHEMA)?;
+    conn.execute_batch(crate::autobet::SCHEMA)?;
     migrate(&conn)?;
     Ok(conn)
 }
@@ -161,6 +164,7 @@ pub fn open(path: &Path) -> Result<Connection> {
 pub fn open_memory() -> Result<Connection> {
     let conn = Connection::open_in_memory()?;
     conn.execute_batch(SCHEMA)?;
+    conn.execute_batch(crate::autobet::SCHEMA)?;
     migrate(&conn)?;
     Ok(conn)
 }
@@ -508,13 +512,31 @@ pub fn settle_call(conn: &Connection, id: i64, duel: u64, home_owner: &str, away
     Ok(())
 }
 
-/// Picks have closed on the fight up: its open call stands as it is now.
-pub fn close_call(conn: &Connection, home_owner: &str, away_owner: &str) -> Result<()> {
+/// Picks have closed on the fight up: its open call stands as it is now. `at`: the site's clock, when it's known.
+pub fn close_call(conn: &Connection, home_owner: &str, away_owner: &str, at: Option<u64>) -> Result<()> {
     conn.execute(
-        "UPDATE predictions SET closed = 1 WHERE status = 'open' AND COALESCE(closed, 0) = 0 AND home_owner = ?1 AND away_owner = ?2",
-        params![home_owner, away_owner],
+        "UPDATE predictions SET closed = 1, closed_at = ?3 WHERE status = 'open' AND COALESCE(closed, 0) = 0 AND home_owner = ?1 AND away_owner = ?2",
+        params![home_owner, away_owner, at.map(|t| t as i64)],
     )?;
     Ok(())
+}
+
+/// How long picks usually stay open, from the calls Augur saw open and close (seconds): the median, and over how
+/// many. A call first seen part-way through its window counts short, so this leans low, which is the safe side.
+pub fn picks_window(conn: &Connection) -> Result<Option<(u64, usize)>> {
+    let mut secs: Vec<u64> = conn
+        .prepare(
+            "SELECT (closed_at - seen_at) / 1000 FROM predictions WHERE closed_at IS NOT NULL AND seen_at > 0
+             AND closed_at > seen_at AND COALESCE(late_only, 0) = 0",
+        )?
+        .query_map([], |r| r.get::<_, i64>(0))?
+        .collect::<Rq<Vec<_>>>()?
+        .into_iter()
+        .filter(|&s| s > 0 && s < 1800)
+        .map(|s| s as u64)
+        .collect();
+    secs.sort_unstable();
+    Ok((!secs.is_empty()).then(|| (secs[secs.len() / 2], secs.len())))
 }
 
 fn save_fighters(conn: &Connection, id: i64, c: &NewCall) -> Result<()> {
@@ -1174,7 +1196,7 @@ mod tests {
         // still open: an update replaces it
         first.prob = 0.56;
         assert_eq!(add_call(&conn, &first).unwrap(), id);
-        close_call(&conn, "x", "y").unwrap();
+        close_call(&conn, "x", "y", Some(9_000)).unwrap();
         let mut late = call("x", "y");
         (late.pick, late.prob, late.picks_open) = ("away".into(), 0.575, false);
         late.away.fighter.def = 999.0;

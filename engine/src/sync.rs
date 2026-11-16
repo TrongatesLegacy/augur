@@ -3,10 +3,11 @@
 //! nothing needs a lock and sync apps never make "conflicted copies":
 //!     Augur Sync/devices/<device>.json    its name, app version and settings, each with when it last changed
 //!     Augur Sync/calls/<device>.jsonl     its calls (the calls file format), merged into the others' stores
+//!     Augur Sync/autobets/<device>.jsonl  its auto bets, so every computer knows which of your bets Augur placed
 //! Settings merge one at a time: the latest change wins. Calls merge without duplicates. What stays on each computer
 //! (its sign-in, launch at login, the public data it fetches itself) is the caller's to leave out.
 
-use crate::{calls, db};
+use crate::{autobet, calls, db};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -69,6 +70,11 @@ pub struct SyncState {
     /// what the calls file last held: which settled calls and how many are marked damaged or ranked. A new result
     /// or mark (or an update that adds something to the file, which starts this empty) writes the file again
     pub calls_mark: String,
+    /// what the auto bets file last held
+    pub autobets_mark: String,
+    /// auto betting is on here: said in this computer's file, so another computer won't turn it on too
+    #[serde(skip)]
+    pub auto_bet: bool,
 }
 
 /// A computer's file in the folder.
@@ -83,6 +89,9 @@ pub struct DeviceFile {
     pub settings: BTreeMap<String, Entry>,
     #[serde(default)]
     pub calls: usize,
+    /// auto betting is on there
+    #[serde(default)]
+    pub auto_bet: bool,
 }
 
 /// A folder a sync app already moves on this computer.
@@ -162,6 +171,13 @@ impl SyncState {
                     out.calls += calls::import(conn, &file).unwrap_or(0);
                 }
             }
+            // their auto bets ride with the calls: they say which of your bets Augur placed
+            for o in &others {
+                let file = dir.join("autobets").join(format!("{}.jsonl", o.device));
+                if file.exists() {
+                    let _ = autobet::import(conn, &file, &o.device);
+                }
+            }
             if out.calls > 0 {
                 let from = if others.len() == 1 { others[0].name.clone() } else { format!("{} computers", others.len()) };
                 self.remember(Change { at: now, from, summary: format!("{} call{}", out.calls, if out.calls == 1 { "" } else { "s" }) });
@@ -187,6 +203,12 @@ impl SyncState {
             self.calls_written = calls::export(conn, &calls_file)?;
             self.calls_mark = mark;
         }
+        let bets_file = dir.join("autobets").join(format!("{}.jsonl", self.device));
+        let bets_mark = autobet::mark_now(conn)?;
+        if self.what.calls && (bets_mark != self.autobets_mark || !bets_file.exists()) && !(bets_mark.is_empty() && !bets_file.exists()) {
+            std::fs::create_dir_all(bets_file.parent().unwrap())?;
+            self.autobets_mark = autobet::export(conn, &bets_file)?;
+        }
         let file = DeviceFile {
             device: self.device.clone(),
             name: self.name.clone(),
@@ -195,6 +217,7 @@ impl SyncState {
             at: now,
             settings: if self.what.settings { self.record.clone() } else { BTreeMap::new() },
             calls: self.calls_written,
+            auto_bet: self.auto_bet,
         };
         let path = dir.join("devices").join(format!("{}.json", self.device));
         std::fs::create_dir_all(path.parent().unwrap())?;

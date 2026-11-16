@@ -1,6 +1,7 @@
 // Live: the duel that's up, built from the same pieces as a call's breakdown in History (the headline, how Augur is
 // calling it and the tale of the tape), plus what only Live has: the bet to copy, the projected HP race (the "before"
 // of the breakdown's How it went), the head to head, what's next and the chat line.
+import { column, statusChip, wireColumn } from '../lib/auto.js';
 import { headline, tape, waterfall } from '../lib/callparts.js';
 import { copyText } from '../lib/clipboard.js';
 import { esc, feedProblem, fmt, pct, short } from '../lib/format.js';
@@ -28,8 +29,13 @@ function upNext(live, compact) {
 }
 
 // what Augur says to bet, under its pick in the headline: the command with a copy button, the credits, and why
-function bet(p, stake, command) {
-  const copy = command ? `<button class="btn sm" id="cmd" title="Copy ${esc(command)} for chat">Copy</button>` : '';
+function bet(p, stake, command, auto) {
+  // armed, auto betting places this bet: its status stands in for Copy, so it isn't bet twice
+  const copy = auto?.armed
+    ? `<span class="anote" title="${esc(auto.message || '')}">${auto.bet ? statusChip(auto.bet.status) : '<span class="ast">Armed</span>'} Auto</span>`
+    : command
+      ? `<button class="btn sm" id="cmd" title="Copy ${esc(command)} for chat">Copy</button>`
+      : '';
   if (!stake) return { verdict: `<div class="lbet"><b>${esc(command)}</b>${copy}</div>`, line: esc(whyLine(p)) };
   if (!stake.amount) return { verdict: `<div class="lbet off"><b>No bet</b>${copy}</div>`, line: esc(stake.why) };
   return { verdict: `<div class="lbet"><b>${esc(stake.command)}</b><span>${fmt(stake.amount)} credits</span>${copy}</div>`, line: esc(stake.why) };
@@ -134,6 +140,10 @@ function hpRace(p) {
 export function render(app) {
   const { state, main, header } = app;
   const live = state.live;
+  // with auto betting on, a column on the right: its status and the stream's chat
+  const auto = state.auto?.enabled ? state.auto : null;
+  const wrap = (body) => (auto ? `<div class="lwrap grow"><div class="lmain">${body}</div>${column(auto)}</div>` : body);
+  const done = () => auto && wireColumn(app, () => render(app));
   const p = live?.prediction;
   const status = live?.error
     ? `<div class="pill ml" title="${esc(live.error)}"><span class="dot idle"></span>${feedProblem(live.error)[0]}</div>`
@@ -179,7 +189,8 @@ export function render(app) {
           all,
         )}</div>`
       : `<div class="panel col lstreams"><div class="ph"><h3>Recent streams</h3></div>${empty('chart', 'No streams yet', 'One bar per stream, once Augur has called some fights.')}</div>`;
-    main.innerHTML = header('Live · PalDuels', status) + hero + `<div class="loff grow">${stream}${upNext(live, false)}${recent}${days}</div>`;
+    main.innerHTML = header('Live · PalDuels', status) + wrap(hero + `<div class="loff grow">${stream}${upNext(live, false)}${recent}${days}</div>`);
+    done();
     return;
   }
   const { voices, voice } = pickVoice(state.voice, state.settings);
@@ -193,14 +204,15 @@ export function render(app) {
         <div class="lq"><div class="q" id="vq">${esc(voiceLine(p, voice, state.settings?.include_chance !== false))}</div><button class="btn sm" id="cp">Copy</button></div></div>`;
   main.innerHTML =
     header(`Live · ${esc(p.title || 'PalDuels')}`, status) +
-    (d
-      ? headline(d, { ...bet(p, live.stake, command), chance: p.prob }).replace('class="stage cstage', 'class="stage cstage lhead') +
+    wrap(d
+      ? headline(d, { ...bet(p, live.stake, command, auto), chance: p.prob }).replace('class="stage cstage', 'class="stage cstage lhead') +
         `<div class="cgrid lgrid grow">
           <div class="stackc">${hpRace(p)}${headToHead(p)}</div>
           <div class="stackc">${waterfall(d, '')}${chat}</div>
           <div class="stackc">${tape(d)}</div>
         </div>`
       : `<div class="panel col grow">${empty('eye', 'Working out the call', 'The breakdown shows as soon as Augur has made it.')}</div>`);
+  done();
   // a panel with more below fades out at its foot, until it's scrolled to the end
   main.querySelectorAll('.lgrid .fillin').forEach((el) => {
     const more = () => el.classList.toggle('more', el.scrollTop + el.clientHeight < el.scrollHeight - 2);

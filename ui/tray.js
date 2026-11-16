@@ -1,5 +1,6 @@
 // The tray popover: only what's useful at a glance, and the copy buttons (the bet and the chat line). Between duels
 // and off air it says how the last stream went. It sizes itself to what it shows.
+import { statusChip } from './lib/auto.js';
 import { invoke, listen } from './lib/bridge.js';
 import { copyText } from './lib/clipboard.js';
 import { esc, feedProblem, fmt, pct, signed } from './lib/format.js';
@@ -58,8 +59,9 @@ function render() {
   const u = state.update;
   const upd = u?.latest && u.ready ? `<div class="tup"><span>✦ Augur <b>${esc(u.latest.version)}</b> is ready</span><button id="tu">${u.installing ? 'Restarting…' : 'Restart to update'}</button></div>` : '';
   const foot = upd + `<div class="ft"><span>Today <b>${fmt(today[0])}/${fmt(today[1])}</b>${today[1] ? ` · ${pct(today[0] / today[1])}` : ''}</span><span class="fb"><button id="open">Open Augur ›</button><button id="quit" class="qt" title="Quit Augur" aria-label="Quit Augur"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg></button></span></div>`;
+  const strip = autoStrip(state.auto);
   if (!p) {
-    el.innerHTML = quiet(view) + foot;
+    el.innerHTML = strip + quiet(view) + foot;
   } else {
     const fav = p.pick === 'home' ? p.home : p.away;
     const dog = p.pick === 'home' ? p.away : p.home;
@@ -67,10 +69,10 @@ function render() {
     state.voice = voice;
     const command = betCommand(p, view.stake);
     const bet = view.stake ? stakeLine(view.stake) : `<div class="bet"><div><b>${esc(command)}</b></div></div>`;
-    el.innerHTML = `<div class="hd"><span><i></i>${view.live ? 'FIGHT ON' : 'PICKS OPEN'}</span><span class="c">${p.home.estimated || p.away.estimated ? 'STATS GUESSED' : esc(p.tale.verdict)}</span></div>
+    el.innerHTML = `${strip}<div class="hd"><span><i></i>${view.live ? 'FIGHT ON' : 'PICKS OPEN'}</span><span class="c">${p.home.estimated || p.away.estimated ? 'STATS GUESSED' : esc(p.tale.verdict)}</span></div>
       <div class="call"><div><div class="who">${esc(fav.pal)}</div><div class="vs">over <b>${esc(dog.pal)}</b></div><div class="small">${esc(p.home.owner)} vs ${esc(p.away.owner)}</div><div class="why">${esc(whyLine(p))}</div></div>${dial(p.prob, 84)}</div>
       <div class="stats">${tapeRows(p)}</div>
-      <div class="betrow">${bet}${command ? '<button class="btn ghost" id="cb">Copy bet</button>' : ''}</div>
+      <div class="betrow">${bet}${autoNote(state.auto) || (command ? '<button class="btn ghost" id="cb">Copy bet</button>' : '')}</div>
       ${settings?.chat_lines === false ? '' : `<div class="say"><div class="vo" id="vb">${voices.map((v) => `<button class="${v === voice ? 'on' : ''}" data-v="${esc(v)}">${esc(SHORT[v] || v)}</button>`).join('')}</div>
       <div class="q" id="vq">${esc(voiceLine(p, voice, settings?.include_chance !== false))}</div><button class="btn copy" id="cp">Copy for chat</button></div>`}${foot}`;
     el.querySelectorAll('#vb button').forEach((b) => {
@@ -83,12 +85,29 @@ function render() {
     document.getElementById('cb')?.addEventListener('click', (e) => copyText(command, e.target));
   }
   document.getElementById('open').onclick = () => invoke('open_window', { tab: 'live' });
+  document.getElementById('afix')?.addEventListener('click', () => invoke('open_window', { tab: 'autobet' }));
   document.getElementById('tu')?.addEventListener('click', (e) => {
     e.target.disabled = true;
     invoke('update_install');
   });
   document.getElementById('quit').onclick = () => invoke('quit_app');
   fit();
+}
+
+// armed, a strip at the top: quiet while it can bet, red with what's wrong (and Fix) when it can't
+function autoStrip(a) {
+  if (!a?.enabled || !a.armed) return '';
+  if (a.problem)
+    return `<div class="astrip bad"><span>⚠ Auto bet can't bet: ${esc(a.problem)}</span><button id="afix">Fix</button></div>`;
+  return `<div class="astrip"><span>Auto bet armed · ${a.test ? 'test mode, ' : ''}${esc(a.channel)}</span></div>`;
+}
+
+// with auto betting armed, what it's doing on this fight stands in for Copy bet, so you don't bet it twice
+function autoNote(a) {
+  if (!a?.enabled || !a.armed) return '';
+  if (a.bet && ['sending', 'sent', 'seen', 'confirmed', 'unconfirmed'].includes(a.bet.status)) return `<span class="anote" title="${esc(a.message || '')}">${statusChip(a.bet.status)} Auto bet</span>`;
+  if (a.phase === 'countdown') return '<span class="anote"><span class="ast gold">Soon</span> Auto bet</span>';
+  return '<span class="anote"><span class="ast">Armed</span> Auto bet</span>';
 }
 
 addEventListener('keydown', (e) => {
@@ -102,6 +121,10 @@ listen('settings', (v) => {
   state.settings = v;
   render();
 });
+listen('autobet', (v) => {
+  state.auto = v;
+  render();
+});
 listen('live', (v) => {
   state.view = v;
   render();
@@ -109,6 +132,7 @@ listen('live', (v) => {
 state.settings = await invoke('get_settings');
 state.view = await invoke('live');
 state.update = await invoke('update_view');
+state.auto = await invoke('auto_view').catch(() => null);
 render();
 // for the headless UI tests
 window.augur = { rendered: true };

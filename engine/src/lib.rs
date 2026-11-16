@@ -7,11 +7,13 @@
 pub mod error;
 pub mod model;
 
+pub mod autobet;
 pub mod backfill;
 pub mod bets;
 pub mod calls;
 pub mod db;
 pub mod history;
+pub mod kick;
 pub mod learn;
 pub mod predict;
 pub mod reroll;

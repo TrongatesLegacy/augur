@@ -1172,3 +1172,31 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 .seg.sm button { white-space: nowrap; }
 /* a long title name takes a second line rather than being cut (Windows' font runs wider) */
 .tcb b { overflow-wrap: break-word; }
+
+/* Live with auto betting on: the page beside a column with the auto bet's status and the stream's Kick chat (the chat
+   itself is a webview the app lays over .kchat) */
+.lwrap { display: flex; gap: var(--gap); min-height: 0; }
+.lmain { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: var(--gap); }
+.lmain > .grow { flex: 1 1 0; }
+.kcol { flex: 0 0 290px; display: flex; flex-direction: column; gap: var(--gap); min-height: 0; }
+.kpanel .ph { margin-bottom: 6px; }
+.kst { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12.5px; min-height: 28px; }
+.kst .btn { margin-left: auto; }
+.ksub { display: block; margin-top: 6px; color: var(--t3); font-size: 11px; }
+.kchat { flex: 1 1 0; min-height: 160px; padding: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.ast { font: 700 9.5px var(--sans); letter-spacing: .06em; padding: 2px 6px; border-radius: 5px; text-transform: uppercase; white-space: nowrap; background: rgba(255,255,255,.07); }
+.ast.ok { background: rgba(61,220,151,.15); }
+.ast.bad { background: rgba(255,95,109,.14); }
+.ast.gold { background: rgba(255,207,107,.15); }
+.via { font: 700 9px var(--sans); letter-spacing: .06em; padding: 1px 5px; border-radius: 4px; text-transform: uppercase; margin-left: 4px; vertical-align: 1px; }
+.via.auto { background: rgba(79,227,255,.14); color: var(--home); }
+.via.man { background: rgba(255,255,255,.06); color: var(--t3); }
+.via.dbl { background: rgba(255,95,109,.14); color: var(--bad); }
+.arow > span { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; min-width: 0; }
+.arow small { flex-basis: 100%; color: var(--t3); font-size: 11px; }
+.seg.sm button { padding: 3px 9px; font-size: 11.5px; }
+.anote { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--t2); white-space: nowrap; }
+.lwrap .lchat .ph { flex-wrap: wrap; row-gap: 6px; }
+.astrip { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -4px 0 8px; padding: 6px 10px; border-radius: 9px; font-size: 11.5px; color: var(--t3); background: rgba(255,255,255,.04); border: 1px solid var(--line); }
+.astrip.bad { color: var(--bad); background: rgba(255,95,109,.1); border-color: rgba(255,95,109,.3); }
+.astrip button { font: 700 11px var(--sans); padding: 3px 9px; border-radius: 7px; border: 0; background: rgba(255,95,109,.2); color: var(--t1); }

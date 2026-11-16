@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 
+use augur_engine::autobet;
 use augur_engine::backfill::Progress;
 use augur_engine::bets::{self, Comparison};
 use augur_engine::history::{self, Backtest};
@@ -48,6 +49,8 @@ pub struct LiveView {
     pub off_air: Option<OffAir>,
     /// the call on the duel that's up, broken down like a settled one in History (no fight yet)
     pub detail: Option<CallDetail>,
+    /// the site's clock at the last check (ms), to tell how long picks have been open
+    pub site_now: Option<u64>,
 }
 
 /// What the popover and Live show when no duel is up.
@@ -163,6 +166,8 @@ pub struct BetsView {
     pub synced_at: Option<u64>,
     pub stored: usize,
     pub import: Progress,
+    /// auto betting's record, newest first (the latest 40): what it bet, skipped or cancelled, and why
+    pub auto_bets: Vec<autobet::AutoBet>,
 }
 
 /// The developer's bets next to Augur's calls in the range. Bets on fights Augur didn't call count in the range when
@@ -182,8 +187,26 @@ pub fn bets_view(conn: &Connection, s: &StakeSettings, range: &str, now_secs: u6
     let balance = bets::balance(conn);
     let mut comparison = bets::compare(&calls, &bets, s, &bets::odds(conn)?, synced_at.unwrap_or(0));
     comparison.fights.truncate(200);
+    let autos = autobet::all(conn)?;
+    label_bets(conn, &mut comparison.fights, &autos)?;
     let stored = conn.query_row("SELECT COUNT(*) FROM bets", [], |r| r.get::<_, i64>(0))? as usize;
-    Ok(BetsView { comparison, balance, synced_at, stored, import })
+    Ok(BetsView { comparison, balance, synced_at, stored, import, auto_bets: autos.into_iter().take(40).collect() })
+}
+
+/// Marks each bet as Augur's (auto betting) or yours, once Augur has bet at least once.
+fn label_bets(conn: &Connection, fights: &mut [bets::Fight], autos: &[autobet::AutoBet]) -> R<()> {
+    if !autos.iter().any(|a| a.went_out() && !a.test) {
+        return Ok(());
+    }
+    let seen: HashMap<u64, u64> = conn
+        .prepare("SELECT seq, COALESCE(seen_at, 0) FROM bets")?
+        .query_map([], |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)?.max(0) as u64)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let via = autobet::via(&db::bets(conn)?, autos, &seen);
+    for f in fights.iter_mut() {
+        f.via = f.seq.and_then(|q| via.get(&q).cloned());
+    }
+    Ok(())
 }
 
 // --- You › Pals: your own box, what a reroll would do for each pal, and the reroll itself ---
@@ -427,6 +450,8 @@ pub struct CallDetail {
     pub bet: Option<bets::Fight>,
     /// the picks list has been read at least once, so "no bet" means you didn't bet
     pub bets_read: bool,
+    /// auto betting on this call: what it did and why
+    pub auto_bet: Option<autobet::AutoBet>,
 }
 
 /// The duel as it was fought.
@@ -674,10 +699,18 @@ pub struct MoveLine {
 pub fn call_detail(conn: &Connection, id: i64, staking: &StakeSettings) -> R<Option<CallDetail>> {
     let Some(call) = db::settled_call(conn, id)? else { return Ok(None) };
     let synced_at: Option<u64> = db::meta_get(conn, "bets_synced_at")?.and_then(|v| v.parse().ok());
-    let bet = bets::compare(std::slice::from_ref(&call), &db::bets(conn)?, staking, &bets::odds(conn)?, synced_at.unwrap_or(0))
-        .fights
-        .into_iter()
-        .find(|f| f.call_id == Some(id));
+    let mut found: Vec<bets::Fight> =
+        bets::compare(std::slice::from_ref(&call), &db::bets(conn)?, staking, &bets::odds(conn)?, synced_at.unwrap_or(0))
+            .fights
+            .into_iter()
+            .filter(|f| f.call_id == Some(id))
+            .collect();
+    let autos = autobet::all(conn)?;
+    label_bets(conn, &mut found, &autos)?;
+    let bet = found.pop();
+    // the duel's auto bet, whichever computer's call it went with
+    let auto_bet = autobet::for_call(conn, id)?
+        .or_else(|| autos.into_iter().find(|a| a.duel_id.is_some() && a.duel_id == call.duel_id && a.status != "skipped"));
     let (stats_from, estimated, stake_cmd): (Option<String>, bool, Option<String>) =
         conn.query_row("SELECT stats_from, COALESCE(estimated, 0) = 1, stake_cmd FROM predictions WHERE id = ?", [id], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?))
@@ -708,6 +741,7 @@ pub fn call_detail(conn: &Connection, id: i64, staking: &StakeSettings) -> R<Opt
         sides,
         bet,
         bets_read: synced_at.is_some(),
+        auto_bet,
         call,
     }))
 }
@@ -759,6 +793,7 @@ pub fn live_detail(p: &Prediction, stake: Option<&Stake>) -> CallDetail {
         sides: sides.unwrap_or_default(),
         bet: None,
         bets_read: false,
+        auto_bet: None,
         call,
     }
 }

@@ -868,7 +868,7 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 .lc { display: grid; justify-items: center; align-content: start; gap: 4px; padding: 0 8px; min-width: 0; }
 .lc + .lc { border-left: 1px solid var(--line); }
 .ll { display: flex; align-items: center; gap: 6px; height: 14px; font: 700 9px var(--sans); letter-spacing: .12em; text-transform: uppercase; color: var(--t3); white-space: nowrap; }
-.ll .lab { font-size: 8px; padding: 1px 5px; }
+.ll .lab, .ll .ast { font-size: 8px; padding: 1px 5px; }
 /* a very big amount wraps under its command rather than spilling */
 .lv { display: flex; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: 0 7px; max-width: 100%; font-size: 13.5px; line-height: 1.2; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .lv b { font-weight: 700; color: var(--t1); }

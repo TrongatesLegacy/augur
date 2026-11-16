@@ -72,6 +72,10 @@ pub struct Shared {
     pub auto: Mutex<crate::autobet::AutoView>,
     pub armed: AtomicBool,
     pub cancel: Mutex<bool>,
+    /// the chat is showing on Live (bets are typed); hidden, they're sent by the chat page. And: check now that auto
+    /// betting can bet (just armed)
+    pub chat_shown: AtomicBool,
+    pub auto_check: AtomicBool,
     pub kick: Mutex<crate::autobet::KickLogin>,
     /// the tray menu's Arm auto bet item
     pub arm_item: Mutex<Option<MenuItem<tauri::Wry>>>,
@@ -109,8 +113,9 @@ fn stake_for(conn: &rusqlite::Connection, settings: &AppSettings, pick: &str, pr
 }
 
 /// A 32px tray icon: a gold ring filled to the chance around a dot in the favourite's colour (cyan home, pink away).
-/// Windows can't show text in the tray, so the icon carries the call.
-fn ring_icon(chance: Option<f64>, home: bool) -> Image<'static> {
+/// Windows can't show text in the tray, so the icon carries the call. `trouble`: a red dot in the corner, auto
+/// betting is armed but can't bet.
+fn ring_icon(chance: Option<f64>, home: bool, trouble: bool) -> Image<'static> {
     let n = 32u32;
     let mut px = vec![0u8; (n * n * 4) as usize];
     let c = (n as f64 - 1.0) / 2.0;
@@ -120,7 +125,10 @@ fn ring_icon(chance: Option<f64>, home: bool) -> Image<'static> {
             let r = (dx * dx + dy * dy).sqrt();
             // angle clockwise from the top, 0..1
             let a = ((dx.atan2(-dy) / std::f64::consts::TAU) + 1.0) % 1.0;
-            let rgba: Option<[u8; 4]> = if (11.0..=15.0).contains(&r) {
+            let corner = ((x as f64 - 26.0).powi(2) + (y as f64 - 5.5).powi(2)).sqrt();
+            let rgba: Option<[u8; 4]> = if trouble && corner <= 5.5 {
+                Some(if corner <= 4.2 { [255, 95, 109, 255] } else { [13, 11, 22, 255] })
+            } else if (11.0..=15.0).contains(&r) {
                 match chance {
                     Some(p) if a <= p => Some([255, 207, 107, 255]),
                     _ => Some([255, 255, 255, 60]),
@@ -160,10 +168,15 @@ pub fn restake(app: &AppHandle, shared: &Shared) {
     update_tray(app, shared);
 }
 
-fn update_tray(app: &AppHandle, shared: &Shared) {
+pub(crate) fn update_tray(app: &AppHandle, shared: &Shared) {
     let Some(tray) = shared.tray.lock().unwrap().clone() else { return };
     let live = shared.live.lock().unwrap().clone();
     let show = shared.settings.lock().unwrap().tray_pick;
+    // auto betting armed but unable to bet: a warning on the icon, so it's seen with Augur in the tray
+    let trouble = {
+        let a = shared.auto.lock().unwrap();
+        (a.enabled && a.armed).then(|| a.problem.clone()).flatten()
+    };
     let bet = live.stake.as_ref().filter(|s| !s.command.is_empty()).map(|s| format!(" · {}", s.command)).unwrap_or_default();
     let (title, tip) = match &live.prediction {
         Some(p) => (
@@ -177,12 +190,22 @@ fn update_tray(app: &AppHandle, shared: &Shared) {
         ),
         None => (String::new(), format!("Augur · {}", if live.title.is_empty() { "no duel up" } else { &live.title })),
     };
+    let tip = match &trouble {
+        Some(why) => format!("{tip} · auto bet can't bet: {why}"),
+        None => tip,
+    };
     let _ = tray.set_tooltip(Some(&tip));
     if cfg!(target_os = "macos") {
-        let _ = tray.set_title(if show && !title.is_empty() { Some(title) } else { None });
+        let title = if show { title } else { String::new() };
+        let title = match (&trouble, title.is_empty()) {
+            (Some(_), true) => "⚠ Auto bet".to_string(),
+            (Some(_), false) => format!("⚠ {title}"),
+            (None, _) => title,
+        };
+        let _ = tray.set_title(if title.is_empty() { None } else { Some(title) });
     } else {
         let p = live.prediction.as_ref().filter(|_| show);
-        let _ = tray.set_icon(Some(ring_icon(p.map(|p| p.prob), p.is_none_or(|p| p.pick == "home"))));
+        let _ = tray.set_icon(Some(ring_icon(p.map(|p| p.prob), p.is_none_or(|p| p.pick == "home"), trouble.is_some())));
     }
     let _ = app;
 }
@@ -992,6 +1015,8 @@ pub fn run() {
         auto: Mutex::new(Default::default()),
         armed: AtomicBool::new(false),
         cancel: Mutex::new(false),
+        chat_shown: AtomicBool::new(false),
+        auto_check: AtomicBool::new(false),
         kick: Mutex::new(Default::default()),
         arm_item: Mutex::new(None),
         zoom: Mutex::new(1.0),
@@ -1075,7 +1100,7 @@ pub fn run() {
             let icon = if cfg!(target_os = "macos") {
                 Image::from_bytes(include_bytes!("../icons/tray-template.png"))?
             } else {
-                ring_icon(None, true)
+                ring_icon(None, true, false)
             };
             let tray = TrayIconBuilder::with_id("augur")
                 .icon(icon)

@@ -116,7 +116,8 @@ listen('live', (v) => {
   showWelcome(v);
   if (app.state.tab === 'live') live.render(app);
 });
-listen('navigate', (tab) => app.show(tab));
+// "autobet" (the popover's Fix): Settings › Auto bet
+listen('navigate', (tab) => (tab === 'autobet' ? ((app.state.settingsPage = 'autobet'), app.show('settings')) : app.show(tab)));
 // auto betting: Live's column follows what it's doing; Settings › Auto bet follows the sign-in
 listen('autobet', (v) => {
   app.state.auto = v;

@@ -53,6 +53,10 @@ pub struct AutoView {
     pub today: (u32, u64),
     /// how long picks usually stay open (seconds) and over how many calls
     pub window: Option<(u64, usize)>,
+    /// armed but something's wrong (signed out, the chat isn't ready, the chat can't be read...): what, and whether
+    /// it stops auto betting until it's fixed. The tray, the popover and Live all say so.
+    pub problem: Option<String>,
+    pub blocking: bool,
 }
 
 /// Kick, as this computer is signed in to it.
@@ -234,6 +238,7 @@ pub async fn chat_place(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>, s
         if let Some(w) = existing {
             let _ = w.hide();
         }
+        shared.chat_shown.store(false, Ordering::Relaxed);
         return Ok(());
     }
     let zoom = *shared.zoom.lock().unwrap();
@@ -249,25 +254,51 @@ pub async fn chat_place(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>, s
             let _ = w.show();
         }
         None => {
-            let window = app.get_window("main").ok_or("no main window")?;
-            let builder = WebviewBuilder::new(CHAT, WebviewUrl::External(url)).on_page_load(|w, p| {
-                // a page that isn't Kick's chat (a link clicked in it) goes back to the chat
-                if p.event() == PageLoadEvent::Finished && p.url().host_str().is_some_and(|h| h != "kick.com" && !h.ends_with(".kick.com"))
-                {
-                    let _ = w.eval("history.back()");
-                }
-            });
-            window.add_child(builder, pos, size).map_err(|e| e.to_string())?;
+            make_chat(&app, url, pos, size)?;
         }
     }
+    shared.chat_shown.store(true, Ordering::Relaxed);
     Ok(())
+}
+
+/// Kick's popout chat as a webview inside the main window.
+fn make_chat(app: &AppHandle, url: tauri::Url, pos: LogicalPosition<f64>, size: LogicalSize<f64>) -> Result<tauri::Webview, String> {
+    let window = app.get_window("main").ok_or("no main window")?;
+    let builder = WebviewBuilder::new(CHAT, WebviewUrl::External(url)).on_page_load(|w, p| {
+        // a page that isn't Kick's chat (a link clicked in it) goes back to the chat
+        if p.event() == PageLoadEvent::Finished && p.url().host_str().is_some_and(|h| h != "kick.com" && !h.ends_with(".kick.com")) {
+            let _ = w.eval("history.back()");
+        }
+    });
+    window.add_child(builder, pos, size).map_err(|e| e.to_string())
+}
+
+/// While armed, the chat is kept ready even when Live isn't showing (Augur in the tray): made off screen and hidden,
+/// on the right channel. Returns whether it was just made (it needs a moment to load).
+fn ensure_chat(app: &AppHandle, channel: &str) -> bool {
+    let Ok(url) = tauri::Url::parse(&kick::popout_url(channel)) else { return false };
+    match app.get_webview(CHAT) {
+        Some(w) => {
+            if w.url().map(|u| u.path().to_lowercase()).ok() != Some(url.path().to_lowercase()) {
+                let _ = w.navigate(url);
+                return true;
+            }
+            false
+        }
+        None => {
+            if let Ok(w) = make_chat(app, url, LogicalPosition::new(-4000.0, -4000.0), LogicalSize::new(320.0, 600.0)) {
+                let _ = w.hide();
+            }
+            true
+        }
+    }
 }
 
 /// What typing a bet in did.
 #[derive(Debug, PartialEq)]
 enum Typed {
-    /// Enter went in and the box emptied: Kick took it
-    Sent,
+    /// it went in (typed, or Kick's own send answered), with Kick's id for the line when it said
+    Sent(Option<String>),
     /// nothing went in, so nothing was sent: why
     NotSent(String),
 }
@@ -315,7 +346,7 @@ const AFTER: &str = r#"(function (text) {
 /// Types the command into the chat and presses Enter, once. Never presses again: if Kick doesn't take it, the
 /// command is cleared from the box (so it can't go in later by accident) and the bet is marked not sent.
 fn type_bet(app: &AppHandle, channel: &str, command: &str) -> Typed {
-    let Some(w) = app.get_webview(CHAT) else { return Typed::NotSent("the chat isn't open on Live".into()) };
+    let Some(w) = app.get_webview(CHAT) else { return Typed::NotSent("the chat isn't ready".into()) };
     let want = kick::popout_url(channel);
     if w.url().map(|u| u.as_str().trim_end_matches('/').to_lowercase()).ok() != Some(want.to_lowercase()) {
         return Typed::NotSent(format!("the chat on Live isn't {channel}'s"));
@@ -335,13 +366,137 @@ fn type_bet(app: &AppHandle, channel: &str, command: &str) -> Typed {
             return Typed::NotSent(s);
         }
         // Enter may have gone in: say so, and let the chat tell
-        _ => return Typed::Sent,
+        _ => return Typed::Sent(None),
     }
     std::thread::sleep(Duration::from_millis(1200));
     match eval(&w, format!("{AFTER}({text})"), Duration::from_secs(2)) {
         Some(serde_json::Value::String(s)) if s == "stuck" => Typed::NotSent("Kick didn't take the Enter (cleared it from the box)".into()),
-        _ => Typed::Sent,
+        _ => Typed::Sent(None),
     }
+}
+
+/// Starts the one send, from inside the hidden Kick chat page with its own sign-in: one POST to Kick's own
+/// message endpoint, the request Kick's chat makes when you press Enter. Keyed by the auto bet, and only ever started
+/// by this script, so polling it (below) can't send again.
+const SEND_START: &str = r#"(function (room, text, key, t, x) {
+  var s = (window.__augurSend = window.__augurSend || {});
+  if (s[key]) return 'already';
+  s[key] = { state: 'sending' };
+  var h = { Accept: 'application/json', 'Content-Type': 'application/json' };
+  if (t) h.Authorization = 'Bearer ' + decodeURIComponent(t);
+  if (x) h['X-XSRF-TOKEN'] = decodeURIComponent(x);
+  fetch('https://kick.com/api/v2/messages/send/' + room, { method: 'POST', credentials: 'include', headers: h, body: JSON.stringify({ content: text, type: 'message' }) })
+    .then(function (r) {
+      return r.text().then(function (b) {
+        var j = null;
+        try { j = JSON.parse(b); } catch (e) {}
+        s[key] = { state: r.ok ? 'sent' : 'refused', code: r.status, id: (j && j.data && j.data.id) || '', msg: (j && (j.message || (j.status && j.status.message))) || '' };
+      });
+    })
+    .catch(function (e) { s[key] = { state: 'unknown', msg: String((e && e.message) || e) }; });
+  return 'started';
+})"#;
+
+const SEND_POLL: &str = r#"(function (key) { var s = window.__augurSend || {}; return s[key] || { state: 'gone' }; })"#;
+
+/// The bet with the window hidden (or Live not showing): pages that aren't on screen may not take typing, so the
+/// hidden chat page sends it with Kick's own request instead. Once, never again: an answer that doesn't come counts
+/// as maybe sent, and the chat decides.
+fn api_send(app: &AppHandle, room: u64, command: &str, key: i64) -> Typed {
+    let Some(w) = app.get_webview(CHAT) else { return Typed::NotSent("the chat isn't ready".into()) };
+    let cookies = kick_cookies(app);
+    let get = |n: &str| {
+        serde_json::to_string(&cookies.iter().find(|c| c.name() == n).map(|c| c.value().to_string()).unwrap_or_default())
+            .unwrap_or_default()
+    };
+    let text = serde_json::to_string(command).unwrap_or_default();
+    let key = format!("\"bet-{key}\"");
+    match eval(&w, format!("{SEND_START}({room}, {text}, {key}, {}, {})", get("session_token"), get("XSRF-TOKEN")), Duration::from_secs(3))
+    {
+        Some(serde_json::Value::String(s)) if s == "started" => {}
+        Some(serde_json::Value::String(s)) if s == "already" => return Typed::Sent(None),
+        // the script may have run: maybe sent
+        _ => return Typed::Sent(None),
+    }
+    let end = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < end {
+        std::thread::sleep(Duration::from_millis(500));
+        let Some(r) = eval(&w, format!("{SEND_POLL}({key})"), Duration::from_secs(2)) else { continue };
+        match r["state"].as_str() {
+            Some("sent") => return Typed::Sent(r["id"].as_str().filter(|i| !i.is_empty()).map(str::to_string)),
+            Some("refused") => {
+                let why = r["msg"].as_str().filter(|m| !m.is_empty()).unwrap_or("no reason given");
+                return Typed::NotSent(format!("Kick refused it (HTTP {}: {why})", r["code"]));
+            }
+            Some("sending") => continue,
+            _ => return Typed::Sent(None),
+        }
+    }
+    Typed::Sent(None)
+}
+
+/// The bet goes in: typed into the chat when you can see it on Live, sent by the hidden chat page otherwise.
+fn send_bet(app: &AppHandle, shared: &Shared, v: &AutoView, room: Option<u64>, command: &str, id: i64) -> Typed {
+    let main = app.get_webview_window("main");
+    let on_screen = shared.chat_shown.load(Ordering::Relaxed)
+        && main.as_ref().is_some_and(|w| w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(true));
+    if on_screen {
+        return type_bet(app, &v.channel, command);
+    }
+    match room {
+        Some(room) => api_send(app, room, command, id),
+        None => Typed::NotSent(format!("couldn't look up {}'s chat on Kick", v.channel)),
+    }
+}
+
+// --- the health check: armed, can it actually bet? ---
+
+const PROBE: &str = r#"(function () {
+  var box = document.querySelector('[data-testid="chat-input"]');
+  if (!box) return document.readyState === 'complete' ? 'no-box' : 'loading';
+  if (box.getAttribute('contenteditable') === 'false' || box.getAttribute('aria-disabled') === 'true' || box.closest('[aria-disabled="true"]')) return 'off';
+  return 'ok';
+})()"#;
+
+/// What's stopping auto betting, if anything, and whether it blocks it. `chat_since`: when the chat was made or sent
+/// to a new channel (it gets a moment to load).
+fn health(app: &AppHandle, shared: &Shared, v: &AutoView, signed: bool, chat_since: Instant) -> Option<(String, bool)> {
+    if !signed {
+        return Some(("Signed out of Kick".into(), true));
+    }
+    if let Some(o) = &v.other {
+        return Some((format!("{o} has auto betting on"), true));
+    }
+    if v.channel.is_empty() {
+        return Some((if v.test { "Set your Kick name for test mode" } else { "No channel set" }.into(), true));
+    }
+    let chan = match kick::channel(&v.channel) {
+        Ok(c) => c,
+        Err(augur_engine::error::Error::Http(404)) => return Some((format!("{} isn't a Kick channel", v.channel), true)),
+        Err(_) => return Some(("Can't reach Kick".into(), true)),
+    };
+    if kick::history(chan.id).is_err() {
+        return Some(("Can't read the Kick chat, so it can't check you haven't bet".into(), true));
+    }
+    let loading = chat_since.elapsed() < Duration::from_secs(30);
+    match app.get_webview(CHAT).and_then(|w| eval(&w, PROBE.to_string(), Duration::from_secs(3))) {
+        Some(serde_json::Value::String(s)) if s == "ok" => {}
+        Some(serde_json::Value::String(s)) if s == "off" => {
+            return Some(("The chat box is off (slow mode, followers or subscribers only?)".into(), true));
+        }
+        _ if loading => {}
+        _ => return Some(("The Kick chat isn't ready (sign in to Kick again?)".into(), true)),
+    }
+    // the last real bet today didn't go in: worth knowing, but the next one may
+    let today = shared.db().ok().and_then(|c| autobet::all(&c).ok()).unwrap_or_default();
+    if let Some(b) =
+        today.iter().find(|b| b.device.is_none() && b.claimed_at >= midnight(now_ms()) && b.status != "skipped" && b.status != "cancelled")
+    {
+        if b.status == "failed" {
+            return Some((format!("Last auto bet not sent: {}", b.reason.clone().unwrap_or_default()), false));
+        }
+    }
+    None
 }
 
 // --- arming, cancelling, and what Live shows ---
@@ -370,6 +525,7 @@ pub fn auto_arm(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>, on: bool)
         }
     }
     shared.armed.store(on, Ordering::Relaxed);
+    shared.auto_check.store(true, Ordering::Relaxed);
     refresh(&app, &shared);
     Ok(shared.auto.lock().unwrap().clone())
 }
@@ -416,6 +572,8 @@ pub fn refresh(app: &AppHandle, shared: &Shared) {
     if !v.armed {
         v.phase = "off".into();
         v.countdown_until = None;
+        v.problem = None;
+        v.blocking = false;
     }
     let _ = app.emit("autobet", &*v);
     let armed = v.armed;
@@ -424,6 +582,7 @@ pub fn refresh(app: &AppHandle, shared: &Shared) {
         let _ = item.set_text(if armed { "Disarm auto bet" } else { "Arm auto bet" });
         let _ = item.set_enabled(s.enabled);
     }
+    crate::app::update_tray(app, shared);
 }
 
 /// The start of today, local time near enough (UTC: the limits are a safety cap, not a calendar).
@@ -452,6 +611,8 @@ pub fn auto_loop(app: AppHandle, shared: Arc<Shared>) {
     let mut track: Option<Track> = None;
     let mut channel_id: Option<(String, u64, Instant)> = None;
     let mut last_refresh = Instant::now() - Duration::from_secs(60);
+    let mut next_check = Instant::now();
+    let mut chat_since = Instant::now();
     // the name you signed in as, from last time
     if let Ok(conn) = shared.db() {
         shared.kick.lock().unwrap().user = db::meta_get(&conn, "kick_user").ok().flatten();
@@ -469,6 +630,31 @@ pub fn auto_loop(app: AppHandle, shared: Arc<Shared>) {
         if !(view.enabled && view.armed) {
             track = None;
             *shared.cancel.lock().unwrap() = false;
+            continue;
+        }
+        // armed: keep the chat ready, and check every 30 seconds (and straight after arming) that it can bet
+        if signed && !view.channel.is_empty() && ensure_chat(&app, &view.channel) {
+            chat_since = Instant::now();
+        }
+        if shared.auto_check.swap(false, Ordering::Relaxed) || Instant::now() >= next_check {
+            next_check = Instant::now() + Duration::from_secs(30);
+            let found = health(&app, &shared, &view, signed, chat_since);
+            let before = view.problem.clone();
+            {
+                let mut v = shared.auto.lock().unwrap();
+                (v.problem, v.blocking) = found.clone().map_or((None, false), |(p, b)| (Some(p), b));
+                let _ = app.emit("autobet", &*v);
+            }
+            match (&before, &found) {
+                (None, Some((p, _))) => notify(&app, "Auto bet can't bet", p),
+                (Some(_), None) => notify(&app, "Auto bet is working again", &format!("into {}'s chat", view.channel)),
+                _ => {}
+            }
+            crate::app::update_tray(&app, &shared);
+        }
+        let view = shared.auto.lock().unwrap().clone();
+        if let (Some(p), true) = (&view.problem, view.blocking) {
+            set_phase(&app, &shared, "waiting", p, "", None, None);
             continue;
         }
         // another computer turned it on after this one was armed: neither should bet twice, so this one stands down
@@ -666,21 +852,25 @@ fn bet_now(
     mut lines: Vec<Line>,
 ) {
     let what = format!("{command} on {} vs {}", p.home.pal, p.away.pal);
+    let chan = kick::channel(&v.channel).ok();
     let sent_at = now_ms();
-    match type_bet(app, &v.channel, command) {
+    let line_id = match send_bet(app, shared, v, chan.as_ref().map(|c| c.chatroom_id), command, id) {
         Typed::NotSent(why) => {
             let _ = autobet::update(conn, id, "failed", Some(&why), now_ms());
             notify(app, "Auto bet not sent", &format!("{what}: {why}"));
             finish(app, shared, conn, id);
             return;
         }
-        Typed::Sent => {
+        Typed::Sent(line) => {
             let _ = autobet::update(conn, id, "sent", None, sent_at);
+            if let Some(l) = &line {
+                let _ = autobet::set_line(conn, id, l, None);
+            }
+            line
         }
-    }
+    };
     finish(app, shared, conn, id);
     let user = v.user.clone().unwrap_or_default();
-    let chan = kick::channel(&v.channel).ok();
     let end = Instant::now() + CONFIRM_FOR;
     let mut seen: Option<Line> = None;
     while Instant::now() < end {
@@ -690,7 +880,12 @@ fn bet_now(
             merge(&mut lines, more);
         }
         if seen.is_none() {
-            if let Some(l) = autobet::sent_line(&lines, &user, command, sent_at) {
+            // Kick's id for the line when its send said, else yours with the command's text
+            let found = match &line_id {
+                Some(lid) => lines.iter().find(|l| &l.id == lid),
+                None => autobet::sent_line(&lines, &user, command, sent_at),
+            };
+            if let Some(l) = found {
                 let _ = autobet::set_line(conn, id, &l.id, None);
                 let _ = autobet::update(conn, id, "seen", None, now_ms());
                 seen = Some(l.clone());

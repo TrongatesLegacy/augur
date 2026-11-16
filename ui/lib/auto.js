@@ -44,8 +44,8 @@ export function column(a) {
   const cd = a.phase === 'countdown' && a.countdown_until;
   const status = !a.armed
     ? `<span class="dot idle"></span>Off · arm it for this session`
-    : a.other
-      ? `<span class="dot bad"></span>${esc(a.other)} has auto betting on`
+    : a.problem
+      ? `<span class="dot bad"></span><span class="bad">Can't bet: ${esc(a.problem)}</span>`
       : cd
         ? `<span class="dot"></span><b>${esc(a.command)}</b> in <b id="kcd">${Math.max(1, Math.ceil((a.countdown_until - Date.now()) / 1000))}</b>s <button class="btn sm ghost" id="kcx">Cancel</button>`
         : `<span class="dot ${a.phase === 'done' && a.bet && ['failed', 'unconfirmed'].includes(a.bet.status) ? 'bad' : a.phase === 'waiting' || a.phase === 'idle' ? 'idle' : ''}"></span>${a.bet ? `${statusChip(a.bet.status)} <b>${esc(a.bet.command)}</b> ` : ''}${esc(a.message || 'Armed')}`;

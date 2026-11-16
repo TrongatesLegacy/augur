@@ -34,6 +34,8 @@ Something the model can't see (a passive, an unlisted move, an owner's rating) g
 
 ## Known open questions
 
+- **Unlisted moves make calls less sure** (`model::HIDDEN_DOUBT`, 3): over the first 200 real calls (16 Nov), calls whose pick had the hidden-moves boost promised 80% and won 64% (28), where only the other side had it 67% and 53% (19), and the rest 70% and 69% (153). Dividing the log-odds by 1 + k × the two sides' extra boost improved log loss on both halves, 0.651 → 0.636 at 3, 0.634 at 4, 0.632 at 6, with no pick changing; removing the boost instead cost 3 right calls. Scored on the calls it was chosen on, so it starts damped at 3: re-check after more streams and consider 4-6, or making it learn like `SPECIES_LIVE`.
+
 - **Testing the learner itself:** a one-off `tune` or `learn --dry-run` scores settings on calls they were fitted to. To judge a change to `learn.rs`, replay it call by call instead: before each call, learn only from the calls and past duels before it, then score that call. On 16 Nov that replay over the 108 calls of 13-15 Nov gave: the learner building on its last run, log loss 0.615 (73 right); never learning, 0.579 (73); starting afresh each run, 0.581 (75); stricter margins (40 held-back calls, 0.01 on calls, 0.005 on duels), 0.583 (74). Most of the difference came from Saturday's misses at 89-95%. The drift was `STATS_STEEPNESS` 3 → 5 on 15 held-back calls, `TYPE_BONUS` 1.25 and a 0.1 pal-rank weight.
 
 - **Type edge:** 1.5x. The 4,702-duel history test prefers 1.25-1.5x; per-hit tapes show about 1.1x; when only one side's *species* types beat the other's, that side won 48% of 1,292 duels. The first 19 live calls prefer 2x by a hair.

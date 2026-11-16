@@ -207,6 +207,23 @@ pub struct Score {
     pub p_home: f64,
     /// each species' record, shrunk toward 50%: [home, away]
     pub rates: [f64; 2],
+    /// how much less sure the call is for moves the site doesn't list (`doubt`): its log-odds were divided by this
+    #[serde(default = "unit")]
+    pub doubt: f64,
+}
+
+/// How much less sure a call should be when a side does much of its damage with moves the site doesn't list (its
+/// hidden boost estimates them). Those fights are harder to call than their numbers say: over the first 200 real calls
+/// (16 Nov), calls whose pick had the boost promised 80% and won 64% (28 calls), calls where only the other side had
+/// it promised 67% and won 53% (19), and the rest promised 70% and won 69% (153). Dividing the call's log-odds by
+/// 1 + this × the two sides' extra boost improved the log loss on both halves of those calls, from 0.651 to 0.634 at 4
+/// across all 200, without changing a pick (turning the boost off instead cost 3 right calls). Damped below the best
+/// (4-8) until more streams confirm it; scored on the same calls it was chosen on.
+pub const HIDDEN_DOUBT: f64 = 3.0;
+
+/// The divisor for a call's log-odds: 1 with no unlisted moves to speak of, more as either side leans on them.
+pub fn doubt(home: &Fighter, away: &Fighter) -> f64 {
+    1.0 + HIDDEN_DOUBT * ((home.hidden_boost - 1.0).max(0.0) + (away.hidden_boost - 1.0).max(0.0))
 }
 
 /// Palworld type chart: attacker element -> the element it beats.
@@ -345,9 +362,12 @@ pub fn score(s: &Settings, home: &Fighter, away: &Fighter, species_rec: [[f64; 2
         (Some(h), Some(a)) => sigmoid((f64::from(h.power) - f64::from(a.power)) / RANK_POINTS),
         _ => 0.5,
     };
-    let p_home =
-        sigmoid(logit(p_stats) + s.species_weight * logit(p_species) + s.pal_h2h_weight * logit(p_h2h) + s.pal_rank_weight * logit(p_rank));
-    Score { t_home, t_away, p_stats, p_species, p_h2h, p_rank, p_home, rates }
+    let doubt = doubt(home, away);
+    let p_home = sigmoid(
+        (logit(p_stats) + s.species_weight * logit(p_species) + s.pal_h2h_weight * logit(p_h2h) + s.pal_rank_weight * logit(p_rank))
+            / doubt,
+    );
+    Score { t_home, t_away, p_stats, p_species, p_h2h, p_rank, p_home, rates, doubt }
 }
 
 /// Fit log(hit %) = c + a*log(power) + b*log(type mult) + log(ATK/DEF) by least squares over one peak hit per
@@ -393,6 +413,34 @@ pub fn calibrate(s: &Settings, samples: &[(f64, f64, f64, f64, f64)]) -> Option<
 
 #[cfg(test)]
 mod tests {
+
+    /// A side leaning on moves the site doesn't list makes the call less sure, never a different pick.
+    #[test]
+    fn hidden_moves_make_the_call_less_sure() {
+        let f = |hp: f64, hb: f64| Fighter {
+            pal: "x".into(),
+            types: vec!["neutral".into()],
+            hp,
+            atk: 500.0,
+            def: 500.0,
+            skills: vec![],
+            passives: vec![],
+            hidden_boost: hb,
+            speed: 1.0,
+            pal_rank: None,
+        };
+        let s = Settings::default();
+        let rec = [[10.0, 10.0], [10.0, 10.0]];
+        let plain = score(&s, &f(7000.0, 1.0), &f(5000.0, 1.0), rec, [0.0, 0.0]);
+        assert_eq!(plain.doubt, 1.0);
+        let hidden = score(&s, &f(7000.0, 1.0), &f(5000.0, 1.2), rec, [0.0, 0.0]);
+        assert!((hidden.doubt - (1.0 + HIDDEN_DOUBT * 0.2)).abs() < 1e-9);
+        // the away side's hidden moves make it stronger, but the home side stays the pick, less surely than its
+        // stats alone (with the boost) would say
+        let undoubted =
+            sigmoid(logit(hidden.p_stats) + s.species_weight * logit(hidden.p_species) + s.pal_h2h_weight * logit(hidden.p_h2h));
+        assert!(hidden.p_home > 0.5 && hidden.p_home < undoubted, "{} against {undoubted}", hidden.p_home);
+    }
     use super::*;
 
     fn types(t: &[&str]) -> Vec<String> {

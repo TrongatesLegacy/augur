@@ -537,7 +537,7 @@ const MAIN_DRIVER: &str = r#"
       .map((el) => `${el.tagName.toLowerCase()}.${[...el.classList].join('.')} (${el.clientWidth}px, needs ${el.scrollWidth}px): ${el.textContent.trim().replace(/\s+/g, ' ').slice(0, 50)}`);
   if (!window.augur) window.__errors.push('the page never started (a module failed to load)');
   else {
-    for (const tab of only ? [only] : ['live', 'liveedge', 'history', 'call', 'bets', 'pals', 'players', 'playersfew', 'you', 'titles', 'titlesone', 'mypals', 'mypalsone', 'mypalsroll', 'mypalsbusy', 'mypalskept', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'changelog', 'updates', 'offair', 'liveauto', 'autobet', 'betsauto']) {
+    for (const tab of only ? [only] : ['live', 'liveedge', 'history', 'call', 'bets', 'pals', 'players', 'playersfew', 'you', 'titles', 'titlesone', 'mypals', 'mypalsone', 'mypalsroll', 'mypalsbusy', 'mypalskept', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'changelog', 'updates', 'offair', 'liveauto', 'autobet', 'betsauto', 'livefight']) {
       // "liveauto" is Live with auto betting armed and counting down, signed in to Kick; "autobet" is its Settings
       // page; "betsauto" is Your bets once Augur has auto bet
       DATA.auto_off ||= DATA.auto_view;
@@ -580,10 +580,15 @@ const MAIN_DRIVER: &str = r#"
         const p = DATA.live.prediction;
         const t = p.pick === 'home' ? { t_home: p.score.t_away * 0.985 } : { t_away: p.score.t_home * 0.985 };
         window.augur.state.live = { ...DATA.live, prediction: { ...p, score: { ...p.score, ...t }, owners: { summary: 'first meeting', since: null, owners: [], meetings: [] }, pal_h2h: { home_wins: 0, away_wins: 0, meetings: [], pages_scanned: 1 } } };
+      } else if (tab === 'livefight') {
+        // "livefight" is Live while the duel is fought: the first two thirds of a stored tape, still going
+        const hits = DATA.call_detail.fight.hits;
+        const upto = hits[Math.floor((hits.length * 2) / 3)].t;
+        window.augur.state.live = { ...DATA.live, live: true, fight: { hits: hits.filter((h) => h.t <= upto), secs: upto + 1 } };
       } else window.augur.state.live = DATA.live;
       window.augur.state.settingsPage = ['staking', 'sync', 'updates', 'autobet'].includes(tab) ? tab : tab === 'ownmodel' ? 'model' : tab === 'changelog' ? 'updates' : 'general';
       // "welcome" is the fresh install's overlay, over Live
-      await window.augur.show(['bets', 'call', 'betsauto'].includes(tab) ? 'history' : ['staking', 'sync', 'changelog', 'updates', 'ownmodel', 'autobet'].includes(tab) ? 'settings' : ['welcome', 'offair', 'liveedge', 'liveauto'].includes(tab) ? 'live' : ['titles', 'titlesone'].includes(tab) || tab.startsWith('mypals') ? 'you' : tab === 'playersfew' ? 'players' : tab);
+      await window.augur.show(['bets', 'call', 'betsauto'].includes(tab) ? 'history' : ['staking', 'sync', 'changelog', 'updates', 'ownmodel', 'autobet'].includes(tab) ? 'settings' : ['welcome', 'offair', 'liveedge', 'liveauto', 'livefight'].includes(tab) ? 'live' : ['titles', 'titlesone'].includes(tab) || tab.startsWith('mypals') ? 'you' : tab === 'playersfew' ? 'players' : tab);
       await sleep(300);
       // the page and every box in it that scrolls (its panel's title, and how much it holds against what shows)
       const scrolling = () =>
@@ -653,7 +658,17 @@ const MAIN_DRIVER: &str = r#"
         document.querySelector('#main tr[data-call]')?.click();
         await sleep(400);
         out.callStage = stageFits();
-        out.chart = { lines: document.querySelectorAll('.hpc path.line').length, proj: document.querySelectorAll('.hpc path.proj').length, hits: document.querySelectorAll('.hpc circle').length, ko: !!document.querySelector('.hpc .ko') };
+        out.chart = { lines: document.querySelectorAll('.worm path.wline').length, proj: document.querySelectorAll('.worm .wproj').length, hits: document.querySelectorAll('.worm line.ws').length, ko: !!document.querySelector('.worm .wko') };
+        // hovering the first hit shows that moment: its time, both sides' HP and the hit, tagged first
+        const wsvg = document.querySelector('.worm .wsvg');
+        const stem = document.querySelector('.worm line.ws');
+        if (wsvg && stem) {
+          const b = wsvg.getBoundingClientRect();
+          const sx = b.left + (+stem.getAttribute('x1') / wsvg.viewBox.baseVal.width) * b.width;
+          wsvg.dispatchEvent(new MouseEvent('mousemove', { clientX: sx, clientY: b.top + b.height / 2, bubbles: true }));
+          const tip = document.querySelector('.worm .wtip');
+          out.chart.tip = tip && !tip.hidden ? tip.innerText : '';
+        }
         out.fits = document.getElementById('main').scrollHeight <= document.getElementById('main').clientHeight + 1;
         out.scrollers[tab] = scrolling();
       }
@@ -982,6 +997,14 @@ fn every_tab_renders_headless() {
     assert!(text("live").contains("wumpo"), "Live: {}", text("live"));
     assert!(!text("live").contains("auto bet"), "auto betting off, Live is as it was: {}", text("live"));
     assert!(
+        text("livefight").contains("who’s ahead")
+            && text("livefight").contains("live ·")
+            && !text("livefight").contains("projected hp race"),
+        "with the duel being fought, Live shows who's ahead in place of the projection: {}",
+        text("livefight")
+    );
+    assert!(text("live").contains("projected hp race") && !text("live").contains("who’s ahead"), "before the bell, the projection");
+    assert!(
         text("liveauto").contains("auto bet")
             && text("liveauto").contains("cancel")
             && text("liveauto").contains("into the-stream’s chat")
@@ -1083,7 +1106,7 @@ fn every_tab_renders_headless() {
     let ko = d["fight"]["ko"].as_str().unwrap();
     assert!(call.contains(&home) && call.contains(&away) && call.contains("augur called"), "the breakdown names both pals: {call}");
     assert!(call.contains(&format!("k.o.\n{ko}\n")) && call.contains("% hp left"), "the K.O. and HP left under the dial: {call}");
-    assert!(call.contains("how it went") && call.contains("damage by move") && call.contains("top hits"), "how the duel went: {call}");
+    assert!(call.contains("how it went") && call.contains("damage by move") && call.contains("wins by k.o."), "how the duel went: {call}");
     assert!(call.contains("counted most for"), "the breakdown says what swung the call most: {call}");
     assert!(
         call.contains("how augur called it") && call.contains("records") && call.contains("pal h2h") && call.contains("together"),
@@ -1106,10 +1129,12 @@ fn every_tab_renders_headless() {
     let side = if bet["backed"] == "home" { "!h" } else { "!a" };
     let yours = format!("your bet\n{label}\n{side} {}\n", bet["stake"].as_u64().unwrap());
     assert!(call.contains(&format!("augur’s bet\n{cmd}\n")) && call.contains(&yours), "the money on it, Augur's and yours: {call}");
-    assert_eq!(r["chart"]["lines"], json!(2), "an HP line per side");
-    assert_eq!(r["chart"]["hits"].as_u64().unwrap() as usize, d["fight"]["hits"].as_array().unwrap().len(), "a dot per hit");
+    assert_eq!(r["chart"]["lines"], json!(2), "the gap's line, coloured above and below the middle");
+    assert_eq!(r["chart"]["hits"].as_u64().unwrap() as usize, d["fight"]["hits"].as_array().unwrap().len(), "a stem per hit");
     assert_eq!(r["chart"]["ko"], json!(true), "the K.O. is marked");
-    assert_eq!(r["chart"]["proj"], json!(2), "with Augur's projected race behind it");
+    assert_eq!(r["chart"]["proj"], json!(1), "with Augur's projected gap behind it");
+    let tip = r["chart"]["tip"].as_str().unwrap_or("").to_lowercase();
+    assert!(tip.contains("first hit") && tip.contains('%') && tip.contains("0:"), "hovering a hit shows the moment: {tip}");
     assert_eq!(r["fits"], json!(true), "the breakdown fits the window without scrolling");
     let bare = r["callBare"].as_str().unwrap().to_lowercase();
     assert!(
@@ -1333,6 +1358,7 @@ fn every_tab_renders_headless() {
             "liveauto",
             "autobet",
             "betsauto",
+            "livefight",
         ] {
             render(port, tab, Some((&folder, tab)));
         }

@@ -525,12 +525,32 @@ pub struct Duel {
     pub winner_hp_left: Option<u32>,
 }
 
+/// Every hit in a fight's tape, as the site's "who's ahead" chart lists them: a finished duel's page, or the live
+/// state's HUD while a duel is fought.
+pub fn parse_hits(html: &str) -> Vec<Hit> {
+    regex!(r#"(?s)<span class="lp-tip-e is-(home|away) is-h" data-t="(\d+)"[^>]*><i>\w+ HIT</i>\s*(.*?)\s*<b>(\d+)</b>"#)
+        .captures_iter(html)
+        .map(|c| Hit { side: c[1].into(), t: c[2].parse().unwrap_or(0), mv: text(&c[3]), pct: c[4].parse().unwrap_or(0.0) })
+        .collect()
+}
+
+/// The fight that's on (or just finished) as the live state's HUD shows it: its hits so far and how long it's run.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct LiveFight {
+    pub hits: Vec<Hit>,
+    /// seconds fought so far (the chart's last frame)
+    pub secs: u32,
+}
+
+/// None before the bell (no chart in the HUD yet).
+pub fn parse_live_fight(hud: &str) -> Option<LiveFight> {
+    let secs = regex!(r#"<div class="lp-worm-p"[^>]*data-bc-frame="(\d+)""#).captures(hud)?[1].parse().ok()?;
+    Some(LiveFight { hits: parse_hits(hud), secs })
+}
+
 pub fn parse_duel(page: &str) -> Duel {
     let mut d = Duel {
-        hits: regex!(r#"(?s)<span class="lp-tip-e is-(home|away) is-h" data-t="(\d+)"[^>]*><i>\w+ HIT</i>\s*(.*?)\s*<b>(\d+)</b>"#)
-            .captures_iter(page)
-            .map(|c| Hit { side: c[1].into(), t: c[2].parse().unwrap_or(0), mv: text(&c[3]), pct: c[4].parse().unwrap_or(0.0) })
-            .collect(),
+        hits: parse_hits(page),
         home_casts: page.matches(r#"<span class="lp-tip-e is-home is-c""#).count() as u32,
         away_casts: page.matches(r#"<span class="lp-tip-e is-away is-c""#).count() as u32,
         ..Default::default()
@@ -1432,6 +1452,16 @@ mod tests {
         // a form posting anywhere but the site's own /reroll isn't sent (checked before any request)
         let elsewhere = RerollForm { action: "https://example.com/steal".into(), ..reveal.forms[0].clone() };
         assert!(reroll_send(&elsewhere, "session=x").unwrap_err().to_string().contains("won't send"));
+    }
+
+    /// The live HUD carries the same "who's ahead" chart as a duel's page: its hits, and how far the fight has got.
+    #[test]
+    fn reads_the_fight_on_from_the_hud() {
+        let page = page("duel-4702.html");
+        let f = parse_live_fight(&page).expect("the chart");
+        assert_eq!(f.hits, parse_duel(&page).hits);
+        assert!(!f.hits.is_empty() && f.secs >= f.hits.iter().map(|h| h.t).max().unwrap(), "{} hits, {}s", f.hits.len(), f.secs);
+        assert_eq!(parse_live_fight(r#"<div class="lp-hud">picks open</div>"#), None, "before the bell there's no chart");
     }
 
     #[test]

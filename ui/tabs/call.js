@@ -4,8 +4,9 @@
 import { statusChip, viaChip } from '../lib/auto.js';
 import { invoke } from '../lib/bridge.js';
 import { esc, fmt, signed } from '../lib/format.js';
-import { SIDES, headline as callHeadline, modelFooter, other, pal, tape, waterfall } from '../lib/callparts.js';
+import { SIDES, headline as callHeadline, modelFooter, pal, tape, waterfall } from '../lib/callparts.js';
 import { BET_LABELS } from '../lib/stake.js';
+import { projectedGap, wireWorm, worm } from '../lib/worm.js';
 import { empty } from '../lib/viz.js';
 
 const clock = (t) => `${Math.floor(t / 60)}:${String(Math.round(t % 60)).padStart(2, '0')}`;
@@ -47,50 +48,6 @@ function ledger(d) {
   return `<div class="ledger">${cols.join('')}</div>`;
 }
 
-// each side's HP over the fight as steps, from the tape: home cyan, away pink; the hardest hits ringed, the K.O. marked
-function hpChart(f, c, m) {
-  const W = 520;
-  const H = 120;
-  const L = 38;
-  const B = 18;
-  const end = Math.max(f.ko_secs || 0, ...f.hits.map((h) => h.t), 1) + 1;
-  const x = (t) => (L + ((W - L - 6) * t) / end).toFixed(1);
-  const y = (v) => (6 + ((H - B - 6) * (100 - Math.max(0, Math.min(100, v)))) / 100).toFixed(1);
-  const path = (pts) => pts.map(([t, v], i) => (i ? `H${x(t)} V${y(v)}` : `M${x(t)} ${y(v)}`)).join(' ');
-  const big = new Set(f.biggest.slice(0, 3).map((h) => `${h.side}${h.t}${h.move}${h.pct}`));
-  // each hit lands on the other side's line: walk the tape again to place it
-  const left = { home: 100, away: 100 };
-  const dots = f.hits
-    .map((h) => {
-      const target = other(h.side);
-      left[target] = Math.max(0, left[target] - h.pct);
-      const ring = big.has(`${h.side}${h.t}${h.move}${h.pct}`);
-      const name = h.move || 'unnamed hit';
-      return `<circle class="${h.side}${ring ? ' big' : ''}" cx="${x(h.t)}" cy="${y(left[target])}" r="${ring ? 4.5 : 2.5}"><title>${clock(h.t)} · ${esc(pal(c, h.side))}'s ${esc(name)}: ${h.pct}% of ${esc(pal(c, target))}'s HP</title></circle>`;
-    })
-    .join('');
-  const ticks = [...new Set([0, Math.round(end / 3), Math.round((2 * end) / 3)])].filter((t) => f.ko_secs == null || x(f.ko_secs) - x(t) > 46 || t === 0);
-  // Augur's projected race, faint behind the real one: each side's HP falling at the rate the model gave it. The
-  // model's times aren't seconds, so its first K.O. is put at the real one; a miss shows where the fight left it
-  const sc = m?.score;
-  const first = sc && Math.min(sc.t_home, sc.t_away);
-  const proj =
-    first > 0 && Number.isFinite(first) && f.ko_secs
-      ? SIDES.map((s) => {
-          // a side falls as fast as the other knocks it out (t: each side's time to land its K.O.)
-          const t = s === 'home' ? sc.t_away : sc.t_home;
-          return `<path class="proj ${s}" d="M${x(0)} ${y(100)} L${x(f.ko_secs)} ${y(100 * (1 - first / t))}"><title>Augur's projection: ${esc(pal(c, s))} ${t === first ? 'knocked out first' : `left with ${Math.round(100 * (1 - first / t))}% HP`}</title></path>`;
-        }).join('')
-      : '';
-  const ko = f.ko_secs != null ? `<line class="ko" x1="${x(f.ko_secs)}" x2="${x(f.ko_secs)}" y1="4" y2="${H - B}"/><text class="kot" x="${x(f.ko_secs)}" y="${H - 4}" text-anchor="end">K.O. ${esc(f.ko)}</text>` : '';
-  return `<svg class="hpc" viewBox="0 0 ${W} ${H}" role="img" aria-label="Each side's HP over the fight: ${esc(pal(c, c.winner))} won${f.ko ? ` by K.O. at ${esc(f.ko)}` : ''}">
-    <g class="grid">${[100, 50, 0].map((v) => `<line x1="${L}" x2="${W - 6}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 6}" y="${+y(v) + 4}" text-anchor="end">${v}%</text>`).join('')}</g>
-    <g class="grid">${ticks.map((t) => `<text x="${x(t)}" y="${H - 4}" text-anchor="middle">${clock(t)}</text>`).join('')}</g>
-    ${ko}${proj}
-    ${SIDES.map((s, i) => `<path class="area ${s}" d="${path(f.hp[i])} V${y(0)} H${x(0)} Z"/><path class="line ${s}" d="${path(f.hp[i])}"/>`).join('')}
-    ${dots}</svg>`;
-}
-
 function howItWent(d) {
   const f = d.fight;
   const c = d.call;
@@ -98,15 +55,11 @@ function howItWent(d) {
   if (!f || !f.hits.length) {
     return `<div class="panel col chart"><div class="ph"><h3>How it went</h3><span>${casts}</span></div>${empty('chart', f ? 'No fight tape for this duel' : 'The duel isn’t stored', f ? 'Only the result was kept: older duels came without their tape.' : 'Its result came from the live feed.')}</div>`;
   }
-  const projected = d.model?.score ? '<span class="lgp" title="Augur’s projected race, its first K.O. put at the real one"><i></i>Projected</span>' : '';
-  const lg = SIDES.map((s) => `<span><i class="${s}"></i>${esc(pal(c, s))}</span>`).join('') + projected;
-  const top = f.biggest
-    .slice(0, 3)
-    .map((h) => `<span class="chip ${h.side}" title="${clock(h.t)} · ${esc(pal(c, h.side))}"><b>${h.pct}%</b> ${esc(h.move)}</span>`)
-    .join('');
+  const proj = projectedGap(d.model?.score);
+  const lg = proj != null ? '<span class="lgp" title="Augur’s projected gap at the K.O., its first K.O. put at the real one"><i></i>Projected</span>' : '';
   return `<div class="panel chart"><div class="ph"><h3>How it went</h3><div class="lg">${lg}</div></div>
-    ${hpChart(f, c, d.model)}
-    <div class="crow chips"><span class="label">Top hits</span>${top}</div></div>`;
+    ${worm({ hits: f.hits, end: f.ko_secs ?? Math.max(0, ...f.hits.map((h) => h.t)) + 1, ko: f.ko_secs ?? null, winner: c.winner }, { names: [c.home_pal, c.away_pal], proj, projAt: f.ko_secs ?? null, h: 128, adv: false })}
+</div>`;
 }
 
 // the damage each side dealt, by move: one bar per move, scaled to the other side's whole HP
@@ -159,6 +112,7 @@ export async function render(app, back) {
       main.querySelectorAll('[data-wvp]').forEach((x) => (x.hidden = x.dataset.wvp !== t.dataset.wv));
     };
   });
+  wireWorm(main);
   const b = document.getElementById('back');
   b.onclick = back;
   b.focus({ preventScroll: true });

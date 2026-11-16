@@ -3,6 +3,7 @@
 // of the breakdown's How it went), the head to head, what's next and the chat line.
 import { besideCopy, column, wireColumn } from '../lib/auto.js';
 import { headline, tape, waterfall } from '../lib/callparts.js';
+import { moments, projectedGap, wireWorm, worm } from '../lib/worm.js';
 import { copyText } from '../lib/clipboard.js';
 import { esc, feedProblem, fmt, pct, short } from '../lib/format.js';
 import { SHORT, face, orb, pickVoice, voiceLine, whyLine } from '../lib/pal.js';
@@ -138,6 +139,17 @@ function hpRace(p) {
     <div class="small rnote">${note}</div></div>`;
 }
 
+// Who's ahead in the fight that's on (or just finished), from the live feed: the HP gap over the fight, with Augur's
+// projected gap at the K.O. marked at the right
+function fightPanel(live, p) {
+  const f = live.fight;
+  const ms = moments(f.hits);
+  const last = ms[ms.length - 1];
+  const out = last && (last.home === 0 || last.away === 0) ? (last.home === 0 ? 'away' : 'home') : null;
+  const w = worm({ hits: f.hits, end: f.secs, ko: out ? last.t : null, winner: out }, { names: [p.home.pal, p.away.pal], proj: projectedGap(p.score), live: live.live, h: 230 });
+  return `<div class="panel wpanel"><div class="ph"><h3>Who’s ahead</h3><span>${out ? 'K.O.' : live.live ? `<span class="dot"></span>live · ${Math.floor(f.secs / 60)}:${String(f.secs % 60).padStart(2, '0')}` : 'the fight'}</span></div>${w}</div>`;
+}
+
 export function render(app) {
   const { state, main, header } = app;
   const live = state.live;
@@ -208,12 +220,13 @@ export function render(app) {
     wrap(d
       ? headline(d, { ...bet(p, live.stake, command, auto), chance: p.prob }).replace('class="stage cstage', 'class="stage cstage lhead') +
         `<div class="cgrid lgrid grow">
-          <div class="stackc">${hpRace(p)}${headToHead(p)}</div>
+          <div class="stackc">${live.fight ? fightPanel(live, p) : hpRace(p)}${headToHead(p)}</div>
           <div class="stackc">${waterfall(d, '')}${chat}</div>
           <div class="stackc">${tape(d)}</div>
         </div>`
       : `<div class="panel col grow">${empty('eye', 'Working out the call', 'The breakdown shows as soon as Augur has made it.')}</div>`);
   done();
+  wireWorm(main);
   // a panel with more below fades out at its foot, until it's scrolled to the end
   main.querySelectorAll('.lgrid .fillin').forEach((el) => {
     const more = () => el.classList.toggle('more', el.scrollTop + el.clientHeight < el.scrollHeight - 2);

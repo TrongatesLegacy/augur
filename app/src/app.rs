@@ -316,6 +316,7 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
                 live.live = state.live;
                 live.picks_open = state.picks_open();
                 live.site_now = state.now;
+                live.fight = state.hud.as_deref().and_then(site::parse_live_fight);
                 live.queue = state.upcoming().into_iter().take(4).collect();
                 live.synced_at = now_ms();
                 live.error = None;

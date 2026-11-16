@@ -187,7 +187,7 @@ pub fn run(cli: Cli) -> CliResult {
             println!(
                 "Calls: {} ({} settled)",
                 count("SELECT COUNT(*) FROM predictions"),
-                count("SELECT COUNT(*) FROM predictions WHERE status = 'settled'")
+                count("SELECT COUNT(DISTINCT duel_id) FROM predictions WHERE status = 'settled'")
             );
             println!(
                 "Duels: {} ({} with tapes, {} hits)",

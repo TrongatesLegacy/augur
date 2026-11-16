@@ -168,9 +168,10 @@ function autobetPage(s, v) {
   return `<div class="sg">
     <div style="display:grid;gap:14px;align-content:start">
       <div class="panel"><div class="ph"><h3>Auto bet</h3>${toggle('data-ab="enabled"', a.enabled, 'Auto bet')}</div>
-        <div class="small" style="margin-bottom:8px">Augur types its bet into the stream’s Kick chat by itself, once per fight, with a countdown you can cancel. Arm it for each session on Live or from the tray.${v?.other ? ` <span class="bad">${esc(v.other)} has it on: only one computer should bet.</span>` : ''}</div>
+        <div class="small" style="margin-bottom:8px">Augur types its bet into the stream’s Kick chat by itself, once per fight, with a countdown you can cancel. Arm it for each session on Live or from the tray, or have it arm when Augur starts.${v?.other ? ` <span class="bad">${esc(v.other)} has it on: only one computer should bet.</span>` : ''}</div>
         ${kick}
         ${row('The stream’s channel', 'its Kick name, as in kick.com/&lt;name&gt;', `<input type="text" data-abn="channel" value="${esc(a.channel)}" placeholder="channel name" spellcheck="false">`)}
+        ${row('Arm when Augur starts', 'otherwise arm it each session on Live or from the tray', toggle('data-ab="arm_at_start"', a.arm_at_start, 'Arm when Augur starts'))}
         ${row('Test mode', `types the bets into your own chat${v?.user || s.kick_name ? ` (${esc(v?.user || s.kick_name)})` : ''} instead: everything runs, nothing is bet`, toggle('data-ab="test_mode"', a.test_mode, 'Test mode'))}</div>
       <div class="panel"><div class="ph"><h3>Never twice</h3></div><div class="small" style="line-height:1.7">
         Each fight is claimed before anything is typed, so a restart or a second look can’t bet it again, and nothing is ever retried: a bet Augur can’t confirm is marked unconfirmed, not sent again. It stands down when you’ve bet on the fight yourself (your own <b>!h</b>/<b>!a</b> in chat, or in your picks list), when you’re typing in the chat, and when another computer has auto betting on.</div></div>

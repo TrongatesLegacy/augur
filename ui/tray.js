@@ -1,6 +1,6 @@
 // The tray popover: only what's useful at a glance, and the copy buttons (the bet and the chat line). Between duels
 // and off air it says how the last stream went. It sizes itself to what it shows.
-import { statusChip } from './lib/auto.js';
+import { besideCopy } from './lib/auto.js';
 import { invoke, listen } from './lib/bridge.js';
 import { copyText } from './lib/clipboard.js';
 import { esc, feedProblem, fmt, pct, signed } from './lib/format.js';
@@ -68,11 +68,13 @@ function render() {
     const { voices, voice } = pickVoice(state.voice, settings);
     state.voice = voice;
     const command = betCommand(p, view.stake);
+    // armed, the auto bet's status sits beside Copy bet, which dims once an auto bet on this fight has gone out
+    const auto = besideCopy(state.auto);
     const bet = view.stake ? stakeLine(view.stake) : `<div class="bet"><div><b>${esc(command)}</b></div></div>`;
     el.innerHTML = `${strip}<div class="hd"><span><i></i>${view.live ? 'FIGHT ON' : 'PICKS OPEN'}</span><span class="c">${p.home.estimated || p.away.estimated ? 'STATS GUESSED' : esc(p.tale.verdict)}</span></div>
       <div class="call"><div><div class="who">${esc(fav.pal)}</div><div class="vs">over <b>${esc(dog.pal)}</b></div><div class="small">${esc(p.home.owner)} vs ${esc(p.away.owner)}</div><div class="why">${esc(whyLine(p))}</div></div>${dial(p.prob, 84)}</div>
       <div class="stats">${tapeRows(p)}</div>
-      <div class="betrow">${bet}${autoNote(state.auto) || (command ? '<button class="btn ghost" id="cb">Copy bet</button>' : '')}</div>
+      <div class="betrow">${bet}${auto.note}${command ? `<button class="btn ghost${auto.dim ? ' dim' : ''}" id="cb"${auto.dim ? ' title="Auto bet already in for this fight: copying would bet it twice"' : ''}>Copy bet</button>` : ''}</div>
       ${settings?.chat_lines === false ? '' : `<div class="say"><div class="vo" id="vb">${voices.map((v) => `<button class="${v === voice ? 'on' : ''}" data-v="${esc(v)}">${esc(SHORT[v] || v)}</button>`).join('')}</div>
       <div class="q" id="vq">${esc(voiceLine(p, voice, settings?.include_chance !== false))}</div><button class="btn copy" id="cp">Copy for chat</button></div>`}${foot}`;
     el.querySelectorAll('#vb button').forEach((b) => {
@@ -100,15 +102,6 @@ function autoStrip(a) {
   if (a.problem)
     return `<div class="astrip bad"><span>⚠ Auto bet can't bet: ${esc(a.problem)}</span><button id="afix">Fix</button></div>`;
   return `<div class="astrip"><span>Auto bet armed · ${a.test ? 'test mode, ' : ''}${esc(a.channel)}</span></div>`;
-}
-
-// with auto betting armed, what it's doing on this fight stands in for Copy bet, so you don't bet it twice
-function autoNote(a) {
-  // test mode bets into your own chat, so the real bet is still yours to copy
-  if (!a?.enabled || !a.armed || a.test) return '';
-  if (a.bet && ['sending', 'sent', 'seen', 'confirmed', 'unconfirmed'].includes(a.bet.status)) return `<span class="anote" title="${esc(a.message || '')}">${statusChip(a.bet.status)} Auto bet</span>`;
-  if (a.phase === 'countdown') return '<span class="anote"><span class="ast gold">Soon</span> Auto bet</span>';
-  return '<span class="anote"><span class="ast">Armed</span> Auto bet</span>';
 }
 
 addEventListener('keydown', (e) => {

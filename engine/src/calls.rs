@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::db::{self, CallFighter, NewCall};
 use crate::error::Error;
 use crate::model::Settings;
+use crate::stake::StakeSettings;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Line {
@@ -30,6 +31,9 @@ pub struct Line {
     pub stake: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stake_cmd: Option<String>,
+    /// the staking settings the stake came from
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staking: Option<StakeSettings>,
     /// overwritten after the fight, so left out of the money comparison; carried so every computer agrees
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub damaged: bool,
@@ -60,6 +64,7 @@ pub fn export(conn: &Connection, path: &Path) -> crate::Result<usize> {
             model,
             stake: c.stake,
             stake_cmd,
+            staking: c.staking,
             damaged: c.damaged,
         };
         out.push_str(&serde_json::to_string(&line)?);
@@ -135,7 +140,7 @@ fn import_lines(conn: &Connection, text: &str) -> crate::Result<db::Merged> {
             conn.execute("UPDATE predictions SET damaged = 1 WHERE id = ?", [id])?;
         }
         if let Some(amount) = l.stake {
-            db::set_call_stake(conn, id, amount, l.stake_cmd.as_deref().unwrap_or(""))?;
+            db::set_call_stake(conn, id, amount, l.stake_cmd.as_deref().unwrap_or(""), l.staking.as_ref())?;
         }
         if let (Some(duel), Some(winner)) = (l.duel, l.winner) {
             db::settle_call(conn, id, duel, &l.home_owner, &l.away_owner, &winner)?;
@@ -162,6 +167,24 @@ mod tests {
         let out = std::env::temp_dir().join(format!("augur-calls-{}.jsonl", std::process::id()));
         assert_eq!(export(&conn, &out).unwrap(), n);
         let _ = std::fs::remove_file(out);
+    }
+
+    /// The staking settings a call's stake came from travel with it to another computer.
+    #[test]
+    fn staking_travels_with_the_calls() {
+        let fixture = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/calls.jsonl"));
+        let mac = db::open_memory().unwrap();
+        import(&mac, fixture).unwrap();
+        let max = StakeSettings { strategy: crate::stake::Strategy::DefaultOrMax, skip_below: Some(0.65), ..Default::default() };
+        mac.execute("UPDATE predictions SET stake = 5000, stake_cmd = '!h all', staking = ?", [serde_json::to_string(&max).unwrap()])
+            .unwrap();
+        let out = std::env::temp_dir().join(format!("augur-staking-{}.jsonl", std::process::id()));
+        export(&mac, &out).unwrap();
+        let pc = db::open_memory().unwrap();
+        import(&pc, &out).unwrap();
+        let _ = std::fs::remove_file(out);
+        let staked: Vec<_> = db::settled(&pc).unwrap().into_iter().filter(|c| c.stake.is_some()).collect();
+        assert!(!staked.is_empty() && staked.iter().all(|c| c.staking.as_ref() == Some(&max)), "every staked call keeps its settings");
     }
 
     /// The pal ranks a call read travel with it: to the calls file and into another computer's store.

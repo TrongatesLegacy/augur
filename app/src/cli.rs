@@ -89,7 +89,7 @@ pub fn run(cli: Cli) -> CliResult {
                     let st = stake::suggest(&p.pick, p.prob, &app.staking, &bets::odds(&conn)?);
                     if saved.is_none() || save {
                         let id = db::add_call(&conn, &p.to_call())?;
-                        db::set_call_stake(&conn, id, st.amount, &st.command)?;
+                        db::set_call_stake(&conn, id, st.amount, &st.command, Some(&app.staking))?;
                     }
                     if json {
                         println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "prediction": p, "stake": st })).unwrap());

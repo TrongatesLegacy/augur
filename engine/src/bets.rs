@@ -153,6 +153,55 @@ pub struct Fight {
     /// whether Augur placed the bet (auto betting) or you did
     #[serde(default)]
     pub via: Option<crate::autobet::Via>,
+    /// the staking settings Augur's stake came from, in a line (None: not saved, or no call)
+    #[serde(default)]
+    pub staking: Option<String>,
+    /// when the call was made (site clock, ms; None for no-call fights)
+    #[serde(default)]
+    pub at: Option<u64>,
+}
+
+/// A stretch of calls staked with the same settings, oldest first, and what each kind of bet made in it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct StakingPeriod {
+    /// the settings in a line (`stake::summary`); None: calls from before they were saved
+    pub staking: Option<String>,
+    pub from: u64,
+    pub to: u64,
+    /// settled calls in it
+    pub calls: usize,
+    /// Augur's way on every one of them, missed calls included
+    pub augur: i64,
+    /// your bets on them, and the ones auto betting placed
+    pub yours: i64,
+    pub auto: i64,
+    pub auto_bets: usize,
+}
+
+/// Splits the calls into stretches with the same staking settings (`fights` as `compare` gives them, with `via` set),
+/// so a change of strategy, or turning auto betting on, can be judged by what came after it.
+pub fn staking_periods(fights: &[Fight]) -> Vec<StakingPeriod> {
+    let mut calls: Vec<&Fight> = fights.iter().filter(|f| f.call_id.is_some() && f.label != Label::Pending).collect();
+    calls.sort_by_key(|f| (f.at.unwrap_or(0), f.duel_id.unwrap_or(0)));
+    let mut out: Vec<StakingPeriod> = Vec::new();
+    for f in calls {
+        let at = f.at.unwrap_or(0);
+        if out.last().is_none_or(|p| p.staking != f.staking) {
+            out.push(StakingPeriod { staking: f.staking.clone(), from: at, ..Default::default() });
+        }
+        let p = out.last_mut().expect("just pushed");
+        p.to = at;
+        p.calls += 1;
+        p.augur += f.augur_result.unwrap_or(0);
+        if matches!(f.label, Label::Followed | Label::Deviated) {
+            p.yours += f.result.unwrap_or(0);
+        }
+        if f.via.as_ref().is_some_and(|v| v.via == "auto") {
+            p.auto += f.result.unwrap_or(0);
+            p.auto_bets += 1;
+        }
+    }
+    out
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -174,6 +223,9 @@ pub struct Comparison {
     /// their bets on fights Augur didn't call
     pub no_call_yours: i64,
     pub odds: Odds,
+    /// oldest first (`staking_periods`, once the fights know which bets auto betting placed)
+    #[serde(default)]
+    pub staking: Vec<StakingPeriod>,
 }
 
 /// Lines up Augur's calls (oldest first, as `db::settled` gives them) with the developer's bets. `synced_ms`: when the
@@ -247,11 +299,13 @@ pub fn compare(calls: &[CallRecord], bets: &[Pick], s: &StakeSettings, odds: &Od
             stake: bet.map(|b| b.stake),
             result,
             augur_stake: amount,
-            augur_command: stake::command(&call.pick, amount, s),
+            augur_command: stake::command(&call.pick, amount, call.staking.as_ref().unwrap_or(s)),
             augur_result,
             estimated: estimated && label != Label::Pending,
             seq: bet.map(|b| b.seq),
             via: None,
+            staking: call.staking.as_ref().map(stake::summary),
+            at: Some(call.seen_at.max(0) as u64),
         });
     }
     for b in bets.iter().filter(|b| !used.contains(&b.seq) && b.result.is_some()) {
@@ -275,6 +329,8 @@ pub fn compare(calls: &[CallRecord], bets: &[Pick], s: &StakeSettings, odds: &Od
             estimated: false,
             seq: Some(b.seq),
             via: None,
+            staking: None,
+            at: None,
         });
     }
     // newest first: by duel number where both have one, calls (made live) ahead of old unlinked bets
@@ -381,5 +437,50 @@ mod tests {
         assert_eq!(c.no_call_yours, 277 + 512 - 500 + 230 + 480 + 50 - 100 - 200);
         let before = compare(&calls, &bets, &s, &o, 0);
         assert_eq!(before.missed, 0, "not judged before the picks list was read");
+    }
+
+    /// Calls split into stretches where the staking settings change, each with what Augur's way, your bets and the
+    /// auto bets made; pending calls and fights Augur didn't call are left out.
+    #[test]
+    fn staking_periods_split_where_the_settings_change() {
+        let fight = |at: u64, staking: Option<&str>, label: Label, augur: i64, yours: Option<i64>, auto: bool| Fight {
+            call_id: Some(at as i64),
+            duel_id: Some(at),
+            home_pal: "A".into(),
+            away_pal: "B".into(),
+            winner: Some("home".into()),
+            label,
+            pick: Some("home".into()),
+            prob: Some(0.7),
+            backed: yours.map(|_| "home".into()),
+            stake: yours.map(|_| 500),
+            result: yours,
+            augur_stake: 500,
+            augur_command: "!h".into(),
+            augur_result: Some(augur),
+            estimated: false,
+            seq: None,
+            via: auto.then(|| crate::autobet::Via { via: "auto".into(), status: None, double: false }),
+            staking: staking.map(String::from),
+            at: Some(at),
+        };
+        let mut no_call = fight(5, None, Label::NoCall, 0, Some(70), false);
+        no_call.call_id = None;
+        // newest first, as compare gives them
+        let fights = vec![
+            fight(9, Some("max"), Label::Pending, 0, None, false),
+            fight(8, Some("max"), Label::Followed, 300, Some(300), true),
+            fight(7, Some("max"), Label::Missed, -500, None, false),
+            no_call,
+            fight(4, Some("scaled"), Label::Deviated, 200, Some(-100), false),
+            fight(3, Some("scaled"), Label::Followed, -400, Some(-400), false),
+            fight(1, None, Label::Followed, 100, Some(100), false),
+        ];
+        let p = staking_periods(&fights);
+        let got: Vec<_> = p.iter().map(|p| (p.staking.as_deref(), p.from, p.to, p.calls, p.augur, p.yours, p.auto, p.auto_bets)).collect();
+        assert_eq!(
+            got,
+            vec![(None, 1, 1, 1, 100, 100, 0, 0), (Some("scaled"), 3, 4, 2, -200, -500, 0, 0), (Some("max"), 7, 8, 2, -200, 300, 300, 1),]
+        );
     }
 }

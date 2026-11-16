@@ -43,8 +43,18 @@ const money = (n, est) => (n == null ? '<span class="muted">—</span>' : `<span
 // a cell with the pal on top and the detail under it
 const cell = (top, under) => `<div class="two"><span>${top}</span><small>${under}</small></div>`;
 
+// a stretch of calls staked the same way: the settings, when, and what Augur's way, your bets and auto bets made
+const day = (ms) => new Date(ms).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+function stakingRow(p) {
+  const when = day(p.from) === day(p.to) ? day(p.from) : `${day(p.from)} – ${day(p.to)}`;
+  const auto = p.auto_bets ? ` · auto ${money(p.auto)} <span class="muted">(${fmt(p.auto_bets)})</span>` : '';
+  return `<div class="row arow"><span>${p.staking ? esc(p.staking) : '<span class="muted">Before staking was saved</span>'}<small>${when} · ${fmt(p.calls)} calls · Augur's way ${money(p.augur)} · yours ${money(p.yours)}${auto}</small></span></div>`;
+}
+
 function betRow(f) {
-  const augur = f.pick ? cell(side(f, f.pick), `${pct(f.prob)} · ${f.augur_command ? `<b>${esc(f.augur_command)}</b>` : 'no bet'}`) : '<span class="muted">no call</span>';
+  const augur = f.pick
+    ? `<span${f.staking ? ` title="${esc(f.staking)}"` : ''}>${cell(side(f, f.pick), `${pct(f.prob)} · ${f.augur_command ? `<b>${esc(f.augur_command)}</b>` : 'no bet'}`)}</span>`
+    : '<span class="muted">no call</span>';
   const yours = f.backed ? cell(`${side(f, f.backed)}${viaChip(f.via)}`, `${fmt(f.stake)} credits`) : '<span class="muted">no bet</span>';
   const open = f.call_id != null ? ` class="go" data-call="${f.call_id}" tabindex="0" title="See how this duel went and how Augur called it"` : '';
   return `<tr${open}><td>${esc(f.home_pal)} <span class="muted">vs</span> ${esc(f.away_pal)}</td><td>${augur}</td><td>${yours}</td><td><span class="lab ${f.label}">${BET_LABELS[f.label]}</span></td><td class="num">${money(f.result)}</td><td class="num">${f.pick ? money(f.augur_result, f.estimated) : money(null)}</td><td class="goar" aria-hidden="true">${open ? '›' : ''}</td></tr>`;
@@ -72,6 +82,11 @@ async function renderBets(app, controls) {
   const autoPanel = autos.length
     ? `<div class="panel col list grow"><div class="ph"><h3>Auto bets</h3><span>${autos.filter((a) => a.status === 'confirmed' && !a.test).length} confirmed</span></div><div class="fillin">${autos.map(autoRow).join('')}</div></div>`
     : '';
+  // newest first; only once there's something to tell apart (a change of settings, or ones saved at all)
+  const periods = [...(c.staking || [])].reverse();
+  const stakingPanel = periods.some((p) => p.staking)
+    ? `<div class="panel col list${autos.length ? '' : ' grow'}"><div class="ph"><h3>By staking</h3><span>${periods.length === 1 ? 'one setting so far' : `${fmt(periods.length)} settings`}</span></div><div class="fillin">${periods.map(stakingRow).join('')}</div></div>`
+    : '';
   main.innerHTML =
     header('History · your bets', controls) +
     `<div class="hrow bets">
@@ -94,8 +109,9 @@ async function renderBets(app, controls) {
       <div class="stackc">
         <div class="panel"><div class="ph"><h3>Your picks list</h3><button class="btn ghost" id="rb" ${acct.signed_in ? '' : 'disabled'}>Read now</button></div>
           <div class="small">${status}</div>${reading ? `<div class="progress"><i style="width:${Math.min(100, (100 * b.stored) / imp.total)}%"></i></div>` : ''}</div>
+        ${stakingPanel}
         ${autoPanel}
-        <div class="panel col${autos.length ? '' : ' grow'}"><div class="ph"><h3>How it's worked out</h3></div><div class="${autos.length ? '' : 'fillin '}hwo">
+        <div class="panel col${autos.length || stakingPanel ? '' : ' grow'}"><div class="ph"><h3>How it's worked out</h3></div><div class="${autos.length || stakingPanel ? '' : 'fillin '}hwo">
           <div><span class="lab followed">Followed</span><p>you bet Augur's pick (any amount)</p></div>
           <div><span class="lab deviated">Deviated</span><p>the other side, or a bet when Augur said sit out</p></div>
           <div><span class="lab missed">Missed</span><p>no bet on a call Augur would have bet on, kept out of the comparison</p></div>

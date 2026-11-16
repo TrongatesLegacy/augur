@@ -106,6 +106,32 @@ pub fn command(pick: &str, amount: u64, s: &StakeSettings) -> String {
     }
 }
 
+/// Staking settings in a line, as Your bets and a call's breakdown say them: "Scaled: 500 at 55% up to 5,000 at
+/// 85%", "Default or max: 5,000 from 70%, 500 below", "Fixed: 1,000", each with ", sitting out under 65%" if set.
+pub fn summary(s: &StakeSettings) -> String {
+    let pct = |p: f64| format!("{:.0}%", p * 100.0);
+    let n = |v: u64| {
+        let d = v.to_string();
+        let mut out = String::new();
+        for (i, c) in d.chars().enumerate() {
+            if i > 0 && (d.len() - i).is_multiple_of(3) {
+                out.push(',');
+            }
+            out.push(c);
+        }
+        out
+    };
+    let how = match s.strategy {
+        Strategy::Scaled => format!("Scaled: {} at {} up to {} at {}", n(s.default_bet), pct(s.scale_from), n(s.max_bet), pct(s.scale_to)),
+        Strategy::DefaultOrMax => format!("Default or max: {} from {}, {} below", n(s.max_bet), pct(s.max_from), n(s.default_bet)),
+        Strategy::Fixed => format!("Fixed: {}", n(s.fixed_amount)),
+    };
+    match s.skip_below {
+        Some(f) => format!("{how}, sitting out under {}", pct(f)),
+        None => how,
+    }
+}
+
 /// The stake for a call with chance `prob` on `pick`.
 pub fn suggest(pick: &str, prob: f64, s: &StakeSettings, odds: &Odds) -> Stake {
     let edge = prob * odds.rate - (1.0 - prob);
@@ -214,5 +240,13 @@ mod tests {
         assert_eq!(short(248_000), "248k");
         assert_eq!(short(5000), "5,000");
         assert_eq!(short(100), "100");
+    }
+
+    #[test]
+    fn settings_in_a_line() {
+        assert_eq!(summary(&StakeSettings::default()), "Scaled: 500 at 55% up to 5,000 at 85%");
+        let max = StakeSettings { strategy: Strategy::DefaultOrMax, skip_below: Some(0.65), ..Default::default() };
+        assert_eq!(summary(&max), "Default or max: 5,000 from 70%, 500 below, sitting out under 65%");
+        assert_eq!(summary(&StakeSettings { strategy: Strategy::Fixed, ..Default::default() }), "Fixed: 1,000");
     }
 }

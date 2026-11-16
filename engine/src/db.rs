@@ -3,6 +3,7 @@
 
 use crate::model::{Fighter, Move, PalRank};
 use crate::site::{Duel, Hit, Pick, Recent, Species};
+use crate::stake::{Odds, StakeSettings};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -116,6 +117,8 @@ const ADDED: &[(&str, &str, &str)] = &[
     ("predictions", "damaged", "INTEGER DEFAULT 0"),
     // when picks closed on it (site clock, ms), to learn how long picks stay open
     ("predictions", "closed_at", "INTEGER"),
+    // the staking settings its stake came from (JSON), so a change of strategy shows in the results
+    ("predictions", "staking", "TEXT"),
     // the site's pal rank for each side when called: "Tier C - ranked 154 of 357 species, power 55/100"
     ("fighters", "tier", "TEXT"),
     ("fighters", "pal_rank", "INTEGER"),
@@ -131,6 +134,7 @@ fn migrate(conn: &Connection) -> Result<()> {
             conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind}"))?;
         }
     }
+    stamp_default_staking(conn)?;
     let indexed: i64 = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'one_call'", [], |r| r.get(0))?;
     if indexed == 0 {
         // two copies of Augur importing the same calls file at once could each store a call: keep the first.
@@ -670,6 +674,8 @@ pub struct CallRecord {
     /// overwritten after the fight: left out of the money comparison
     #[serde(default)]
     pub damaged: bool,
+    /// the staking settings its stake came from (None: not saved)
+    pub staking: Option<StakeSettings>,
 }
 
 impl CallRecord {
@@ -755,7 +761,7 @@ fn settled_where(conn: &Connection, and: &str, args: impl rusqlite::Params) -> R
          SELECT p.id, COALESCE(p.seen_at, 0), p.home_owner, p.away_owner, p.home_pal, p.away_pal, p.pick, p.prob, p.p_stats, p.p_species,
                 p.p_h2h, p.home_species_w, p.home_species_l, p.away_species_w, p.away_species_l, p.pal_h2h_home, p.pal_h2h_away,
                 p.duel_id, d.winner, d.fought_at, d.ko, d.winner_hp_left, p.stake, p.late_pick, p.late_prob, COALESCE(p.late_only, 0),
-                COALESCE(p.app_version, ''), COALESCE(p.model, ''), COALESCE(p.damaged, 0)
+                COALESCE(p.app_version, ''), COALESCE(p.model, ''), COALESCE(p.damaged, 0), p.staking
          FROM p LEFT JOIN duels d ON d.id = p.duel_id WHERE d.winner IS NOT NULL {and} ORDER BY p.duel_id, p.id"
     ))?;
     let calls: Vec<CallRecord> = st
@@ -790,6 +796,7 @@ fn settled_where(conn: &Connection, and: &str, args: impl rusqlite::Params) -> R
                 version: r.get(26)?,
                 model: r.get(27)?,
                 damaged: r.get::<_, i64>(28)? == 1,
+                staking: r.get::<_, Option<String>>(29)?.and_then(|s| serde_json::from_str(&s).ok()),
             })
         })?
         .collect::<Rq<_>>()?;
@@ -803,14 +810,40 @@ fn settled_where(conn: &Connection, and: &str, args: impl rusqlite::Params) -> R
         .collect()
 }
 
-/// Saves the stake Augur suggested with a call.
-pub fn set_call_stake(conn: &Connection, id: i64, amount: u64, command: &str) -> Result<()> {
+/// Saves the stake Augur suggested with a call, and the staking settings it came from (None: not known, from a
+/// computer that didn't save them).
+pub fn set_call_stake(conn: &Connection, id: i64, amount: u64, command: &str, staking: Option<&StakeSettings>) -> Result<()> {
+    let staking = staking.and_then(|s| serde_json::to_string(s).ok());
     // once picks have closed the stake stands too
     conn.execute(
-        "UPDATE predictions SET stake = ?1, stake_cmd = ?2 WHERE id = ?3 AND COALESCE(closed, 0) = 0",
-        params![amount as i64, command, id],
+        "UPDATE predictions SET stake = ?1, stake_cmd = ?2, staking = ?3 WHERE id = ?4 AND COALESCE(closed, 0) = 0",
+        params![amount as i64, command, staking, id],
     )?;
     Ok(())
+}
+
+/// Calls staked before their staking settings were saved get the default ones, once, where the default settings give
+/// the stake they have: until then nobody had changed them. A stake they don't give (another strategy, on a computer
+/// still running an older Augur) stays unknown rather than be put down to the wrong settings.
+fn stamp_default_staking(conn: &Connection) -> Result<()> {
+    const DONE: &str = "staking_stamped";
+    if meta_get(conn, DONE)?.is_some() {
+        return Ok(());
+    }
+    let s = StakeSettings::default();
+    let json = serde_json::to_string(&s).unwrap_or_default();
+    let rows: Vec<(i64, String, f64, i64)> = conn
+        .prepare("SELECT id, pick, prob, stake FROM predictions WHERE stake IS NOT NULL AND staking IS NULL")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .collect::<Rq<_>>()?;
+    for (id, pick, prob, stake) in rows {
+        // the saved chance is rounded, so the stake it gives back can be a step out
+        let given = crate::stake::suggest(&pick, prob, &s, &Odds::assumed()).amount as i64;
+        if (given - stake).abs() <= s.round_to as i64 {
+            conn.execute("UPDATE predictions SET staking = ?1 WHERE id = ?2", params![json, id])?;
+        }
+    }
+    meta_set(conn, DONE, "1")
 }
 
 // --- the developer's bets ---
@@ -1192,7 +1225,7 @@ mod tests {
         let mut first = call("x", "y");
         (first.pick, first.prob) = ("home".into(), 0.557);
         let id = add_call(&conn, &first).unwrap();
-        set_call_stake(&conn, id, 600, "!h 600").unwrap();
+        set_call_stake(&conn, id, 600, "!h 600", None).unwrap();
         // still open: an update replaces it
         first.prob = 0.56;
         assert_eq!(add_call(&conn, &first).unwrap(), id);
@@ -1201,7 +1234,7 @@ mod tests {
         (late.pick, late.prob, late.picks_open) = ("away".into(), 0.575, false);
         late.away.fighter.def = 999.0;
         assert_eq!(add_call(&conn, &late).unwrap(), id);
-        set_call_stake(&conn, id, 900, "!a 900").unwrap();
+        set_call_stake(&conn, id, 900, "!a 900", None).unwrap();
         let row: (String, f64, String, String, f64) = conn
             .query_row("SELECT pick, prob, stake_cmd, late_pick, late_prob FROM predictions WHERE id = ?", [id], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
@@ -1297,5 +1330,36 @@ mod tests {
         let orphans: i64 = conn.query_row("SELECT COUNT(*) FROM fighters WHERE prediction_id = ?", [repeat], |r| r.get(0)).unwrap();
         assert_eq!(orphans, 0, "the repeat's fighters went with it");
         assert!(insert_call(&conn, &call("x", "y")).is_err(), "and repeats are refused from now on");
+    }
+
+    /// Calls staked before the settings were saved get the default ones, once, where the defaults give their stake;
+    /// one they don't give (staked another way) stays unknown, and a call saved from now on keeps its own.
+    #[test]
+    fn calls_staked_before_saving_get_the_default_settings() {
+        let conn = open_memory().unwrap();
+        let mut at_default = call("a", "b");
+        at_default.prob = 0.7; // the defaults: 500 + 4,500 x half the way from 55% to 85% = 2,750, so 2,800
+        let a = add_call(&conn, &at_default).unwrap();
+        let b = add_call(&conn, &call("c", "d")).unwrap();
+        let c = add_call(&conn, &call("e", "f")).unwrap();
+        let d = add_call(&conn, &call("g", "h")).unwrap();
+        conn.execute("UPDATE predictions SET stake = 2800 WHERE id = ?", [a]).unwrap();
+        conn.execute("UPDATE predictions SET stake = 2700 WHERE id = ?", [b]).unwrap(); // a step out: the saved chance is rounded
+        conn.execute("UPDATE predictions SET stake = 5000 WHERE id = ?", [c]).unwrap(); // another strategy's
+        let max = StakeSettings { strategy: crate::stake::Strategy::DefaultOrMax, ..Default::default() };
+        set_call_stake(&conn, d, 5000, "!h all", Some(&max)).unwrap();
+        conn.execute("DELETE FROM meta WHERE key = 'staking_stamped'", []).unwrap();
+        stamp_default_staking(&conn).unwrap();
+        let staking = |id: i64| -> Option<StakeSettings> {
+            let s: Option<String> = conn.query_row("SELECT staking FROM predictions WHERE id = ?", [id], |r| r.get(0)).unwrap();
+            s.and_then(|s| serde_json::from_str(&s).ok())
+        };
+        assert_eq!(staking(a), Some(StakeSettings::default()));
+        assert_eq!(staking(b), Some(StakeSettings::default()));
+        assert_eq!(staking(c), None, "a stake the defaults don't give isn't put down to them");
+        assert_eq!(staking(d), Some(max), "one saved with its settings keeps them");
+        conn.execute("UPDATE predictions SET staking = NULL WHERE id = ?", [a]).unwrap();
+        stamp_default_staking(&conn).unwrap();
+        assert_eq!(staking(a), None, "only once");
     }
 }

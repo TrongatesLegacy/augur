@@ -65,8 +65,9 @@ impl Default for AutoBetSettings {
 /// What auto betting does about the call that's up, right now.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Decision {
-    /// not yet, or not this call as it stands (it may still change while picks are open): why
-    Wait(String),
+    /// not yet, or not this call as it stands (it may still change while picks are open): why, as Live says it now,
+    /// and as the record says it if the fight goes before it's bet on
+    Wait { now: String, was: String },
     /// never on this fight: why (recorded, so it isn't looked at again)
     Skip(String),
     /// start the countdown
@@ -110,7 +111,26 @@ pub fn decide(s: &AutoBetSettings, m: &Moment) -> Decision {
     if m.today.0 >= s.max_bets_per_day || m.today.1 + m.amount > s.max_credits_per_day {
         return Decision::Skip("today's auto bet limit".into());
     }
-    waiting.map_or(Decision::Go, |(now, _)| Decision::Wait(now))
+    waiting.map_or(Decision::Go, |(now, was)| Decision::Wait { now, was })
+}
+
+/// How a fight auto betting was still waiting on went without a bet.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Ended {
+    PicksClosed,
+    NextFight,
+    /// the site stopped showing it before picks were seen to close
+    Gone,
+}
+
+/// The skip's reason: what it was waiting for, then how the fight went ("… when picks closed").
+pub fn sat_out(was: &str, ended: Ended) -> String {
+    let how = match ended {
+        Ended::PicksClosed => "picks closed",
+        Ended::NextFight => "the next fight came up",
+        Ended::Gone => "the fight left the site",
+    };
+    format!("{was} when {how}")
 }
 
 /// What the call has to change before it can be bet on, as Live says it while waiting and as the skip says it after.
@@ -471,7 +491,7 @@ mod tests {
     fn decides_when_to_bet() {
         let s = AutoBetSettings::default();
         assert_eq!(decide(&s, &moment()), Decision::Go);
-        let wait = |m: Moment| matches!(decide(&s, &m), Decision::Wait(_));
+        let wait = |m: Moment| matches!(decide(&s, &m), Decision::Wait { .. });
         let skip = |m: Moment| matches!(decide(&s, &m), Decision::Skip(_));
         // the call can still change while picks are open: these wait
         assert!(wait(Moment { held_ms: 3_000, ..moment() }), "the call hasn't settled");
@@ -493,6 +513,13 @@ mod tests {
             Decision::Skip("61% was still under your 65% minimum 180s into picks, too late to bet".into())
         );
         assert_eq!(decide(&s, &late), Decision::Skip("too late: picks had been open over 180s".into()));
+        // the past-tense reason it keeps while waiting, for the record if the fight goes first
+        let Decision::Wait { now, was } = decide(&s, &Moment { prob: 0.58, ..moment() }) else { panic!("waits") };
+        assert_eq!(now, "58% is under your 65% minimum");
+        assert_eq!(sat_out(&was, Ended::PicksClosed), "58% was still under your 65% minimum when picks closed");
+        let Decision::Wait { was, .. } = decide(&s, &Moment { estimated: true, ..moment() }) else { panic!("waits") };
+        assert_eq!(sat_out(&was, Ended::Gone), "some stats were still hidden when the fight left the site");
+        assert_eq!(sat_out("Augur still said sit it out", Ended::NextFight), "Augur still said sit it out when the next fight came up");
         assert!(skip(Moment { today: (40, 0), ..moment() }), "bets a day");
         assert!(skip(Moment { today: (3, 98_000), ..moment() }), "credits a day");
         assert_eq!(

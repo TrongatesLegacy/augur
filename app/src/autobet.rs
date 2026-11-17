@@ -13,7 +13,7 @@ use tauri::webview::{PageLoadEvent, WebviewBuilder};
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::app::{notify, now_ms, Shared};
-use augur_engine::autobet::{self, AutoBet, AutoBetSettings, Decision, Moment};
+use augur_engine::autobet::{self, AutoBet, AutoBetSettings, Decision, Ended, Moment};
 use augur_engine::kick::{self, Line};
 use augur_engine::{db, rusqlite};
 
@@ -650,7 +650,7 @@ struct Track {
     /// chat lines read since the fight came up
     lines: Vec<Line>,
     read_at: Option<Instant>,
-    /// why it's waiting, kept for the record if picks close first
+    /// what it was waiting for, in the record's words, kept in case the fight goes first
     waiting: String,
 }
 
@@ -754,7 +754,7 @@ pub fn auto_loop(app: AppHandle, shared: Arc<Shared>) {
         let live = shared.live.lock().unwrap().clone();
         let (Some(p), Some(stake)) = (live.prediction.clone(), live.stake.clone()) else {
             if let Some(t) = track.take() {
-                close_out(&conn, &t, "the fight went before picks closed");
+                close_out(&conn, &t, Ended::Gone);
             }
             set_phase(&app, &shared, "idle", "Waiting for the next fight", "", None, None);
             continue;
@@ -773,7 +773,7 @@ pub fn auto_loop(app: AppHandle, shared: Arc<Shared>) {
         let now = now_ms();
         if track.as_ref().is_none_or(|t| t.call_id != call_id) {
             if let Some(old) = track.take() {
-                close_out(&conn, &old, "picks closed before it was time to bet");
+                close_out(&conn, &old, Ended::NextFight);
             }
             *shared.cancel.lock().unwrap() = false;
             track = Some(Track {
@@ -803,9 +803,8 @@ pub fn auto_loop(app: AppHandle, shared: Arc<Shared>) {
             }
         }
         if !live.picks_open {
-            let reason = if t.waiting.is_empty() { "picks closed".to_string() } else { format!("picks closed: {}", t.waiting) };
             if let Some(t) = track.take() {
-                close_out(&conn, &t, &reason);
+                close_out(&conn, &t, Ended::PicksClosed);
             }
             continue;
         }
@@ -830,10 +829,10 @@ pub fn auto_loop(app: AppHandle, shared: Arc<Shared>) {
                 || bet_in_picks(&conn, &p.home.owner, &p.away.owner, now.saturating_sub(site_now.saturating_sub(p.seen_at))),
         };
         match autobet::decide(&s, &m) {
-            Decision::Wait(why) => {
+            Decision::Wait { now, was } => {
                 t.countdown_until = None;
-                t.waiting = why.clone();
-                set_phase(&app, &shared, "waiting", &why, &stake.command, None, None);
+                t.waiting = was;
+                set_phase(&app, &shared, "waiting", &now, &stake.command, None, None);
             }
             Decision::Skip(why) => {
                 let _ = autobet::claim(&conn, &record(&p, &stake, call_id, &view, "skipped", Some(&why)));
@@ -884,14 +883,15 @@ fn record(
 }
 
 /// A fight that went without a bet is recorded as skipped, with why, so History can say.
-fn close_out(conn: &rusqlite::Connection, t: &Track, why: &str) {
+fn close_out(conn: &rusqlite::Connection, t: &Track, ended: Ended) {
     if t.waiting.is_empty() {
         return; // never got as far as thinking about it
     }
+    let why = autobet::sat_out(&t.waiting, ended);
     let _ = conn.execute(
         "INSERT OR IGNORE INTO auto_bets (prediction_id, status, reason, claimed_at, home_owner, away_owner, home_pal, away_pal, side, prob)
          SELECT id, 'skipped', ?2, ?3, home_owner, away_owner, home_pal, away_pal, pick, prob FROM predictions WHERE id = ?1",
-        rusqlite::params![t.call_id, why, now_ms() as i64],
+        rusqlite::params![t.call_id, &why, now_ms() as i64],
     );
 }
 

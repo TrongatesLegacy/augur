@@ -2,7 +2,10 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.18 (current)
+## 0.1.19 (current)
+- How Augur called it is readable again, and the who's-ahead chart's hit numbers stand out
+
+## 0.1.18
 - A call's breakdown says an auto bet once, under Your bet, instead of in a column of its own
 - Each call saves its staking settings, and Your bets shows what each staking setup made
 

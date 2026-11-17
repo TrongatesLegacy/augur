@@ -13,8 +13,9 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_dialog::DialogExt;
 
-/// Settings each computer keeps for itself.
-pub const LOCAL: &[&str] = &["launch_at_login", "start_in_tray", "backfill", "auto_bet"];
+/// Settings each computer keeps for itself. Auto bet's other settings sync, but whether it's on stays here: only one
+/// computer should bet.
+pub const LOCAL: &[&str] = &["launch_at_login", "start_in_tray", "backfill", "auto_bet.enabled", "auto_bet.arm_at_start"];
 
 const OS: &str = if cfg!(target_os = "macos") {
     "macOS"
@@ -79,6 +80,7 @@ fn run_once(app: &AppHandle, shared: &Shared) {
     let mut st = shared.sync.lock().unwrap().clone();
     // said in this computer's file, so another computer won't turn auto betting on too
     st.auto_bet = current.auto_bet.enabled;
+    st.defaults = values(&AppSettings::default());
     let got = st.sync(&conn, &values(&current), OS, env!("CARGO_PKG_VERSION"), now_ms());
     if !got.settings.is_empty() {
         let mut v = serde_json::to_value(&current).unwrap_or_default();

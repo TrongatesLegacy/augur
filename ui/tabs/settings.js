@@ -156,7 +156,8 @@ function account(s, acct) {
   </div>`;
 }
 
-// Settings › Auto bet: signing in to Kick, where bets go, and the limits. Kept on this computer: only one should bet.
+// Settings › Auto bet: signing in to Kick, where bets go, and the limits. They sync; whether it's on stays on each
+// computer, since only one should bet.
 function autobetPage(s, v) {
   const a = s.auto_bet;
   const num = (k, label, sub, unit, min, max, pctOf) =>
@@ -168,7 +169,7 @@ function autobetPage(s, v) {
   return `<div class="sg">
     <div style="display:grid;gap:14px;align-content:start">
       <div class="panel"><div class="ph"><h3>Auto bet</h3>${toggle('data-ab="enabled"', a.enabled, 'Auto bet')}</div>
-        <div class="small" style="margin-bottom:8px">Augur types its bet into the stream’s Kick chat by itself, once per fight, with a countdown you can cancel. Arm it for each session on Live or from the tray, or have it arm when Augur starts.${v?.other ? ` <span class="bad">${esc(v.other)} has it on: only one computer should bet.</span>` : ''}</div>
+        <div class="small" style="margin-bottom:8px">Augur types its bet into the stream’s Kick chat by itself, once per fight, with a countdown you can cancel. Arm it for each session on Live or from the tray, or have it arm when Augur starts. These settings sync with your other computers; being on and arming at start don’t.${v?.other ? ` <span class="bad">${esc(v.other)} has it on: only one computer should bet.</span>` : ''}</div>
         ${kick}
         ${row('The stream’s channel', 'its Kick name, as in kick.com/&lt;name&gt;', `<input type="text" data-abn="channel" value="${esc(a.channel)}" placeholder="channel name" spellcheck="false">`)}
         ${row('Arm when Augur starts', 'otherwise arm it each session on Live or from the tray', toggle('data-ab="arm_at_start"', a.arm_at_start, 'Arm when Augur starts'))}
@@ -217,7 +218,7 @@ function syncPage(v, flashMsg) {
         ${row('This computer', 'how the others see it', `<input type="text" id="sname" value="${esc(v.name)}" maxlength="40">`)}
         ${row('Settings', 'staking, voices, notifications, the model', toggle('data-what="settings"', v.what.settings, 'Sync settings'))}
         ${row('Augur’s calls', 'so every computer has the same record', toggle('data-what="calls"', v.what.calls, 'Sync calls'))}
-        <div class="small foot">Stays on each computer: the sign-in, launch at login and background fetching. Duels, species and your bets come from the site on each.</div></div>
+        <div class="small foot">Stays on each computer: the sign-ins, launch at login, background fetching, and whether auto bet is on or arms at start. Duels, species and your bets come from the site on each.</div></div>
     </div>
     <div class="stackc">
       <div class="panel list"><div class="ph"><h3>Other computers</h3></div>${others}</div>

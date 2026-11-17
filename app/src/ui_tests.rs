@@ -341,6 +341,20 @@ pub fn fixture_data() -> Value {
         };
         augur_engine::autobet::claim(&auto_conn, &b).unwrap();
     }
+    // a call you missed that auto betting sat out, waiting for hidden stats
+    let missed = views::bets_view(&auto_conn, &StakeSettings::default(), "all", 0, Default::default()).unwrap();
+    let missed = missed.comparison.fights.iter().find(|f| f.label == augur_engine::bets::Label::Missed).unwrap();
+    let b = augur_engine::autobet::AutoBet {
+        prediction_id: missed.call_id,
+        home_pal: missed.home_pal.clone(),
+        away_pal: missed.away_pal.clone(),
+        command: missed.augur_command.clone(),
+        status: "skipped".into(),
+        reason: Some("some stats were still hidden 180s into picks, too late to bet".into()),
+        claimed_at: recent - 120_000,
+        ..Default::default()
+    };
+    augur_engine::autobet::claim(&auto_conn, &b).unwrap();
     let bets_auto = views::bets_view(&auto_conn, &StakeSettings::default(), "all", 0, Default::default()).unwrap();
     // the staking settings saved with the calls: the defaults, then a switch to the max from 70% for the newest few
     {
@@ -1097,6 +1111,11 @@ fn every_tab_renders_headless() {
     assert!(
         text("betsauto").contains("auto bets") && text("betsauto").contains("you cancelled it") && text("betsauto").contains("manual ×2"),
         "the record of auto bets, and a fight you both bet on: {}",
+        text("betsauto")
+    );
+    assert!(
+        text("betsauto").contains("auto skipped") && text("betsauto").contains("some stats were still hidden 180s into picks"),
+        "a missed call auto betting sat out says why: {}",
         text("betsauto")
     );
     assert!(text("history").contains("after the bell:"), "History shows a call that changed after picks closed: {}", text("history"));

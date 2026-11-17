@@ -153,6 +153,9 @@ pub struct Fight {
     /// whether Augur placed the bet (auto betting) or you did
     #[serde(default)]
     pub via: Option<crate::autobet::Via>,
+    /// a missed call auto betting was armed for but sat out: why
+    #[serde(default)]
+    pub auto_skipped: Option<String>,
     /// the staking settings Augur's stake came from, in a line (None: not saved, or no call)
     #[serde(default)]
     pub staking: Option<String>,
@@ -304,6 +307,7 @@ pub fn compare(calls: &[CallRecord], bets: &[Pick], s: &StakeSettings, odds: &Od
             estimated: estimated && label != Label::Pending,
             seq: bet.map(|b| b.seq),
             via: None,
+            auto_skipped: None,
             staking: call.staking.as_ref().map(stake::summary),
             at: Some(call.seen_at.max(0) as u64),
         });
@@ -329,6 +333,7 @@ pub fn compare(calls: &[CallRecord], bets: &[Pick], s: &StakeSettings, odds: &Od
             estimated: false,
             seq: Some(b.seq),
             via: None,
+            auto_skipped: None,
             staking: None,
             at: None,
         });
@@ -461,6 +466,7 @@ mod tests {
             estimated: false,
             seq: None,
             via: auto.then(|| crate::autobet::Via { via: "auto".into(), status: None, double: false }),
+            auto_skipped: None,
             staking: staking.map(String::from),
             at: Some(at),
         };

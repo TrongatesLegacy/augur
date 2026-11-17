@@ -2,7 +2,10 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.20 (current)
+## 0.1.21 (current)
+- Auto bet says what held it up when it skips, and Your bets shows the calls it sat out
+
+## 0.1.20
 - Auto bet's settings sync between your computers (whether it's on stays on each)
 
 ## 0.1.19

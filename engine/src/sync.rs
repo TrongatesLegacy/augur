@@ -75,6 +75,10 @@ pub struct SyncState {
     /// auto betting is on here: said in this computer's file, so another computer won't turn it on too
     #[serde(skip)]
     pub auto_bet: bool,
+    /// the settings' defaults, flattened: a setting first seen at its default counts as old, so an update that starts
+    /// syncing it doesn't overwrite what the other computer set with this one's untouched default
+    #[serde(skip)]
+    pub defaults: BTreeMap<String, Value>,
 }
 
 /// A computer's file in the folder.
@@ -135,9 +139,10 @@ impl SyncState {
     pub fn note_local(&mut self, values: &BTreeMap<String, Value>, now: u64) -> bool {
         let mut changed = false;
         for (k, v) in values {
-            if self.record.get(k).is_none_or(|e| &e.value != v) {
+            let mine = self.record.get(k);
+            if mine.is_none_or(|e| &e.value != v) {
                 // first sight of a setting at its first value counts as old, so a new computer doesn't win with defaults
-                let at = if self.record.is_empty() { 0 } else { now };
+                let at = if self.record.is_empty() || (mine.is_none() && self.defaults.get(k) == Some(v)) { 0 } else { now };
                 self.record.insert(k.clone(), Entry { value: v.clone(), at });
                 changed = true;
             }
@@ -295,6 +300,7 @@ pub fn merge(record: &mut BTreeMap<String, Entry>, others: &[DeviceFile]) -> (BT
 }
 
 /// Settings as flat keys, one level into objects: {"staking": {"min_bet": 100}} -> {"staking.min_bet": 100}.
+/// `leave_out` takes whole settings ("backfill") or one inside an object ("auto_bet.enabled").
 pub fn flatten(v: &Value, leave_out: &[&str]) -> BTreeMap<String, Value> {
     let mut out = BTreeMap::new();
     if let Value::Object(map) = v {
@@ -302,7 +308,10 @@ pub fn flatten(v: &Value, leave_out: &[&str]) -> BTreeMap<String, Value> {
             match v {
                 Value::Object(inner) => {
                     for (ik, iv) in inner {
-                        out.insert(format!("{k}.{ik}"), iv.clone());
+                        let key = format!("{k}.{ik}");
+                        if !leave_out.contains(&key.as_str()) {
+                            out.insert(key, iv.clone());
+                        }
                     }
                 }
                 _ => {
@@ -540,6 +549,36 @@ mod tests {
         let kept: i64 =
             pc_db.query_row("SELECT power FROM fighters WHERE rowid = (SELECT MIN(rowid) FROM fighters)", [], |r| r.get(0)).unwrap();
         assert_eq!(kept, 10, "a value the PC already had stays");
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    #[test]
+    fn a_setting_inside_an_object_can_stay_local() {
+        let v = json!({"auto_bet": {"enabled": true, "min_chance": 0.7, "arm_at_start": true}, "backfill": {"on": true}});
+        let flat = flatten(&v, &["backfill", "auto_bet.enabled", "auto_bet.arm_at_start"]);
+        assert_eq!(flat.keys().collect::<Vec<_>>(), ["auto_bet.min_chance"]);
+    }
+
+    #[test]
+    fn an_update_that_starts_syncing_a_setting_keeps_what_was_set() {
+        // both computers already sync the voice; an update adds auto bet's minimum. The Mac set it to 70%, the PC
+        // left it at 65%, the default. The PC updating later mustn't push its untouched default over the Mac's 70%
+        let folder = temp("added");
+        let (mac_db, pc_db) = (db::open_memory().unwrap(), db::open_memory().unwrap());
+        let (mut mac, mut pc) = (computer("Mac", &folder), computer("PC", &folder));
+        let before = flatten(&json!({"default_voice": "Yoda"}), &[]);
+        mac.sync(&mac_db, &before, "macOS", "0.1.0", 1_000);
+        pc.sync(&pc_db, &before, "Windows", "0.1.0", 2_000);
+        let defaults = flatten(&json!({"default_voice": "Yoda", "auto_bet": {"min_chance": 0.65}}), &[]);
+        mac.defaults = defaults.clone();
+        pc.defaults = defaults;
+        mac.sync(&mac_db, &flatten(&json!({"default_voice": "Yoda", "auto_bet": {"min_chance": 0.7}}), &[]), "macOS", "0.2.0", 3_000);
+        let got =
+            pc.sync(&pc_db, &flatten(&json!({"default_voice": "Yoda", "auto_bet": {"min_chance": 0.65}}), &[]), "Windows", "0.2.0", 4_000);
+        assert_eq!(got.settings, BTreeMap::from([("auto_bet.min_chance".into(), json!(0.7))]), "the PC takes the Mac's 70%");
+        let got =
+            mac.sync(&mac_db, &flatten(&json!({"default_voice": "Yoda", "auto_bet": {"min_chance": 0.7}}), &[]), "macOS", "0.2.0", 5_000);
+        assert!(got.settings.is_empty(), "and the Mac keeps it");
         let _ = std::fs::remove_dir_all(folder);
     }
 

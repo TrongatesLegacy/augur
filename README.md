@@ -92,7 +92,7 @@ Augur updates itself from this repository's GitHub releases:
 - **The folder:** you pick a folder a sync app already moves. Augur finds OneDrive, iCloud Drive, Dropbox and Google Drive, or you can choose another folder. It creates `Augur Sync/` inside it.
 - **No clashes:** each computer writes only its own files there (`devices/<id>.json`, `calls/<id>.jsonl` and `autobets/<id>.jsonl`) and reads the others' every minute, and within seconds of the sync app bringing a change in. Nothing needs a lock, and the sync app never makes "conflicted copies".
 - **What syncs:** your settings (the latest change to each one wins) and Augur's calls (merged, never duplicated).
-- **What stays on each computer:** the sign-ins (PalDuels' is encrypted for that computer; Kick's is in its browser storage), launch at login, start in the tray, background fetching and auto betting (only one computer can have it on). Duels, species and your bets come from the site on each computer.
+- **What stays on each computer:** the sign-ins (PalDuels' is encrypted for that computer; Kick's is in its browser storage), launch at login, start in the tray, background fetching, and whether auto betting is on or arms when Augur starts (only one computer can have it on; its other settings sync). A setting an update starts syncing keeps the value you set on either computer, rather than taking another computer's untouched default. Duels, species and your bets come from the site on each computer.
 
 **Back up… and Import…** cover setting up a new computer:
 - **Back up…** saves a complete copy of the store (calls, duels, tapes, species, bets) wherever you choose, such as OneDrive.

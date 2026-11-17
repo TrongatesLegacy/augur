@@ -2,7 +2,11 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.17 (current)
+## 0.1.18 (current)
+- A call's breakdown says an auto bet once, under Your bet, instead of in a column of its own
+- Each call saves its staking settings, and Your bets shows what each staking setup made
+
+## 0.1.17
 - Open Augur works again with auto betting on; the Kick chat stops reloading, slow mode doesn't stop bets, and bets confirm more reliably
 - Auto betting can arm itself when Augur starts (Settings › Auto bet › Arm when Augur starts)
 - Numbers inside rings no longer touch the ring

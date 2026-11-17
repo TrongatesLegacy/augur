@@ -99,26 +99,36 @@ pub fn decide(s: &AutoBetSettings, m: &Moment) -> Decision {
     if !m.signed_in {
         return Decision::Skip("signed out of Kick".into());
     }
+    let waiting = waiting_on(s, m);
     if m.open_ms > s.latest_secs * 1000 {
-        return Decision::Skip(format!("too late: picks had been open over {}s", s.latest_secs));
+        // say what it was still waiting for: "too late" alone reads as a missed bet even when the call never qualified
+        return Decision::Skip(match waiting {
+            Some(why) => format!("too late: still waiting after {}s ({why})", s.latest_secs),
+            None => format!("too late: picks had been open over {}s", s.latest_secs),
+        });
     }
     if m.today.0 >= s.max_bets_per_day || m.today.1 + m.amount > s.max_credits_per_day {
         return Decision::Skip("today's auto bet limit".into());
     }
-    // these can change while picks are open, so they wait rather than skip
+    waiting.map_or(Decision::Go, Decision::Wait)
+}
+
+/// What the call has to change before it can be bet on. These can change while picks are open, so they wait rather
+/// than skip.
+fn waiting_on(s: &AutoBetSettings, m: &Moment) -> Option<String> {
     if m.amount == 0 {
-        return Decision::Wait("Augur says sit it out".into());
+        return Some("Augur says sit it out".into());
     }
     if m.prob < s.min_chance {
-        return Decision::Wait(format!("{:.0}% is under your {:.0}% minimum", m.prob * 100.0, s.min_chance * 100.0));
+        return Some(format!("{:.0}% is under your {:.0}% minimum", m.prob * 100.0, s.min_chance * 100.0));
     }
     if m.estimated && s.skip_hidden_stats {
-        return Decision::Wait("some stats are still hidden".into());
+        return Some("some stats are still hidden".into());
     }
     if m.held_ms < s.hold_secs * 1000 {
-        return Decision::Wait("letting the call settle".into());
+        return Some("letting the call settle".into());
     }
-    Decision::Go
+    None
 }
 
 // --- the record ---
@@ -472,6 +482,17 @@ mod tests {
         assert!(skip(Moment { already_bet: true, ..moment() }), "you bet yourself");
         assert!(skip(Moment { signed_in: false, ..moment() }));
         assert!(skip(Moment { open_ms: 181_000, ..moment() }), "too late");
+        // a fight it was still waiting on when time ran out says why, so it doesn't read as a missed bet
+        let late = Moment { open_ms: 181_000, ..moment() };
+        assert_eq!(
+            decide(&s, &Moment { estimated: true, ..late.clone() }),
+            Decision::Skip("too late: still waiting after 180s (some stats are still hidden)".into())
+        );
+        assert_eq!(
+            decide(&s, &Moment { prob: 0.61, ..late.clone() }),
+            Decision::Skip("too late: still waiting after 180s (61% is under your 65% minimum)".into())
+        );
+        assert_eq!(decide(&s, &late), Decision::Skip("too late: picks had been open over 180s".into()));
         assert!(skip(Moment { today: (40, 0), ..moment() }), "bets a day");
         assert!(skip(Moment { today: (3, 98_000), ..moment() }), "credits a day");
         assert_eq!(

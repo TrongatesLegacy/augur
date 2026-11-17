@@ -37,6 +37,34 @@ pub struct Line {
     /// overwritten after the fight, so left out of the money comparison; carried so every computer agrees
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub damaged: bool,
+    /// how the call came about, so a call made on another computer can be looked into here
+    #[serde(flatten)]
+    pub details: Details,
+}
+
+/// What a call's line says beyond the call itself: each left out when it isn't known (older calls, older files).
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Details {
+    /// some stats were hidden and filled in (from the owner's box, or guessed)
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub estimated: bool,
+    /// each factor's home win chance: stats, species records, the pals' head to head
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub factors: Option<[f64; 3]>,
+    /// when picks were seen to close (site clock, ms)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub closed_at: Option<i64>,
+    /// the call made again after the bell, once the stats were shown
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub late_pick: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub late_prob: Option<f64>,
+    /// where each side's stats came from ("home: shown; away: guessed")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stats_from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_version: Option<String>,
 }
 
 /// Writes every settled call with full fighter data. Returns how many.
@@ -49,6 +77,7 @@ pub fn export(conn: &Connection, path: &Path) -> crate::Result<usize> {
             .query_row("SELECT model, stake_cmd FROM predictions WHERE id = ?", [c.id], |r| Ok((r.get(0)?, r.get(1)?)))
             .unwrap_or_default();
         let model: Settings = model.and_then(|m| serde_json::from_str(&m).ok()).unwrap_or_default();
+        let details = details(conn, c.id)?;
         let line = Line {
             call: c.id,
             seen_at: c.seen_at,
@@ -66,6 +95,7 @@ pub fn export(conn: &Connection, path: &Path) -> crate::Result<usize> {
             stake_cmd,
             staking: c.staking,
             damaged: c.damaged,
+            details,
         };
         out.push_str(&serde_json::to_string(&line)?);
         out.push('\n');
@@ -106,7 +136,8 @@ fn import_lines(conn: &Connection, text: &str) -> crate::Result<db::Merged> {
                     rusqlite::params![l.home_owner, l.away_owner, l.seen_at],
                 )?;
             }
-            let mut gained = false;
+            let id = db::call_at(conn, &l.home_owner, &l.away_owner, l.seen_at)?.unwrap_or_default();
+            let mut gained = fill_details(conn, id, &l.details)?;
             for (side, f) in &l.fighters {
                 gained |= db::fill_fighter_blanks(conn, (&l.home_owner, &l.away_owner, l.seen_at), side, f)?;
             }
@@ -136,6 +167,7 @@ fn import_lines(conn: &Connection, text: &str) -> crate::Result<db::Merged> {
             version: String::new(),
         };
         let id = db::insert_call(conn, &call)?;
+        fill_details(conn, id, &l.details)?;
         if l.damaged {
             conn.execute("UPDATE predictions SET damaged = 1 WHERE id = ?", [id])?;
         }
@@ -148,6 +180,61 @@ fn import_lines(conn: &Connection, text: &str) -> crate::Result<db::Merged> {
         added += 1;
     }
     Ok(db::Merged { calls: added, filled, ..Default::default() })
+}
+
+fn details(conn: &Connection, id: i64) -> crate::Result<Details> {
+    Ok(conn.query_row(
+        "SELECT COALESCE(estimated, 0), p_stats, p_species, p_h2h, closed_at, late_pick, late_prob, stats_from, app_version
+         FROM predictions WHERE id = ?",
+        [id],
+        |r| {
+            let factors = [r.get::<_, Option<f64>>(1)?, r.get(2)?, r.get(3)?];
+            let text = |i: usize| r.get::<_, Option<String>>(i).map(|s| s.filter(|s| !s.is_empty()));
+            Ok(Details {
+                estimated: r.get::<_, i64>(0)? == 1,
+                // all three 0: not known (a call imported from a file without them)
+                factors: match factors {
+                    [Some(a), Some(b), Some(c)] if [a, b, c].iter().any(|v| *v != 0.0) => Some([a, b, c]),
+                    _ => None,
+                },
+                closed_at: r.get(4)?,
+                late_pick: text(5)?,
+                late_prob: r.get(6)?,
+                stats_from: text(7)?,
+                app_version: text(8)?,
+            })
+        },
+    )?)
+}
+
+/// Fills in what a call here doesn't know yet from another computer's line, keeping what it has. Whether it gained
+/// anything.
+fn fill_details(conn: &Connection, id: i64, d: &Details) -> crate::Result<bool> {
+    let [ps, psp, ph] = d.factors.map_or([None; 3], |f| f.map(Some));
+    let n = conn.execute(
+        "UPDATE predictions SET
+             estimated = MAX(COALESCE(estimated, 0), ?2),
+             p_stats = CASE WHEN ?3 IS NOT NULL AND COALESCE(p_stats, 0) = 0 AND COALESCE(p_species, 0) = 0 AND COALESCE(p_h2h, 0) = 0
+                            THEN ?3 ELSE p_stats END,
+             p_species = CASE WHEN ?3 IS NOT NULL AND COALESCE(p_stats, 0) = 0 AND COALESCE(p_species, 0) = 0 AND COALESCE(p_h2h, 0) = 0
+                              THEN ?4 ELSE p_species END,
+             p_h2h = CASE WHEN ?3 IS NOT NULL AND COALESCE(p_stats, 0) = 0 AND COALESCE(p_species, 0) = 0 AND COALESCE(p_h2h, 0) = 0
+                          THEN ?5 ELSE p_h2h END,
+             closed_at = COALESCE(closed_at, ?6),
+             late_pick = COALESCE(late_pick, ?7),
+             late_prob = CASE WHEN late_pick IS NULL THEN ?8 ELSE late_prob END,
+             stats_from = COALESCE(NULLIF(stats_from, ''), ?9),
+             app_version = COALESCE(NULLIF(app_version, ''), ?10)
+         WHERE id = ?1 AND (
+             (?2 = 1 AND COALESCE(estimated, 0) = 0)
+             OR (?3 IS NOT NULL AND COALESCE(p_stats, 0) = 0 AND COALESCE(p_species, 0) = 0 AND COALESCE(p_h2h, 0) = 0)
+             OR (?6 IS NOT NULL AND closed_at IS NULL)
+             OR (?7 IS NOT NULL AND late_pick IS NULL)
+             OR (?9 IS NOT NULL AND COALESCE(stats_from, '') = '')
+             OR (?10 IS NOT NULL AND COALESCE(app_version, '') = ''))",
+        rusqlite::params![id, d.estimated as i64, ps, psp, ph, d.closed_at, d.late_pick, d.late_prob, d.stats_from, d.app_version],
+    )?;
+    Ok(n > 0)
 }
 
 #[cfg(test)]
@@ -212,6 +299,56 @@ mod tests {
         assert_eq!((m.calls, m.filled), (0, 1), "nothing added, the ranked call filled in");
         assert_eq!(rank(&older), rank(&mac));
         assert_eq!(import_all(&older, &out).unwrap().filled, 0, "nothing left to fill");
+        let _ = std::fs::remove_file(out);
+    }
+
+    /// How a call came about (hidden stats, its factors, when picks closed, the pick after the bell, where the stats
+    /// came from, the app version) travels with it, and fills in a computer that already had the call without it.
+    #[test]
+    fn how_a_call_came_about_travels_with_it() {
+        let fixture = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/calls.jsonl"));
+        let mac = db::open_memory().unwrap();
+        import(&mac, fixture).unwrap();
+        let id = db::settled(&mac).unwrap()[0].id;
+        mac.execute(
+            "UPDATE predictions SET estimated = 1, p_stats = 0.7, p_species = 0.4, p_h2h = 0.5, closed_at = seen_at + 300000,
+                 late_pick = 'away', late_prob = 0.61, stats_from = 'home: shown; away: guessed', app_version = '0.1.21' WHERE id = ?",
+            [id],
+        )
+        .unwrap();
+        let want = details(&mac, id).unwrap();
+        assert!(want.estimated && want.factors == Some([0.7, 0.4, 0.5]) && want.late_pick.as_deref() == Some("away"));
+        let out = std::env::temp_dir().join(format!("augur-details-{}.jsonl", std::process::id()));
+        export(&mac, &out).unwrap();
+        let key = |conn: &Connection| {
+            conn.query_row("SELECT home_owner, away_owner, seen_at FROM predictions WHERE id = ?", [id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+            })
+            .unwrap()
+        };
+        let (h, a, at) = key(&mac);
+        let found = |conn: &Connection| details(conn, db::call_at(conn, &h, &a, at).unwrap().unwrap()).unwrap();
+        // a computer that didn't have the call
+        let pc = db::open_memory().unwrap();
+        import(&pc, &out).unwrap();
+        assert_eq!(found(&pc), want);
+        // one that had it from an older file, without any of it
+        let older = db::open_memory().unwrap();
+        import(&older, fixture).unwrap();
+        assert_eq!(found(&older), Details::default());
+        assert_eq!(import_all(&older, &out).unwrap().filled, 1);
+        assert_eq!(found(&older), want);
+        assert_eq!(import_all(&older, &out).unwrap().filled, 0, "nothing left to fill");
+        // what a call already has stays: the other computer's line only fills blanks
+        let mine = db::open_memory().unwrap();
+        import(&mine, fixture).unwrap();
+        mine.execute("UPDATE predictions SET app_version = '0.1.20'", []).unwrap();
+        import_all(&mine, &out).unwrap();
+        assert_eq!(found(&mine).app_version.as_deref(), Some("0.1.20"));
+        // a line from before any of this leaves it all out
+        let plain = std::fs::read_to_string(fixture).unwrap();
+        let first: serde_json::Value = serde_json::from_str(plain.lines().next().unwrap()).unwrap();
+        assert!(first.get("estimated").is_none() && first.get("factors").is_none());
         let _ = std::fs::remove_file(out);
     }
 

@@ -55,8 +55,9 @@ impl Default for AutoBetSettings {
             skip_hidden_stats: true,
             hold_secs: 10,
             countdown_secs: 5,
-            // picks stay open about five minutes; three leaves room for a slow call and still beats the lock
-            latest_secs: 180,
+            // picks stay open about five minutes (the median of the calls seen open and close): four still beats the
+            // lock, where three gave up on calls that were ready with two minutes to go
+            latest_secs: 240,
             arm_at_start: false,
         }
     }
@@ -501,18 +502,18 @@ mod tests {
         // these rule the fight out
         assert!(skip(Moment { already_bet: true, ..moment() }), "you bet yourself");
         assert!(skip(Moment { signed_in: false, ..moment() }));
-        assert!(skip(Moment { open_ms: 181_000, ..moment() }), "too late");
+        assert!(skip(Moment { open_ms: 241_000, ..moment() }), "too late");
         // a fight it was still waiting on when time ran out says why, so it doesn't read as a missed bet
-        let late = Moment { open_ms: 181_000, ..moment() };
+        let late = Moment { open_ms: 241_000, ..moment() };
         assert_eq!(
             decide(&s, &Moment { estimated: true, ..late.clone() }),
-            Decision::Skip("some stats were still hidden 180s into picks, too late to bet".into())
+            Decision::Skip("some stats were still hidden 240s into picks, too late to bet".into())
         );
         assert_eq!(
             decide(&s, &Moment { prob: 0.61, ..late.clone() }),
-            Decision::Skip("61% was still under your 65% minimum 180s into picks, too late to bet".into())
+            Decision::Skip("61% was still under your 65% minimum 240s into picks, too late to bet".into())
         );
-        assert_eq!(decide(&s, &late), Decision::Skip("too late: picks had been open over 180s".into()));
+        assert_eq!(decide(&s, &late), Decision::Skip("too late: picks had been open over 240s".into()));
         // the past-tense reason it keeps while waiting, for the record if the fight goes first
         let Decision::Wait { now, was } = decide(&s, &Moment { prob: 0.58, ..moment() }) else { panic!("waits") };
         assert_eq!(now, "58% is under your 65% minimum");

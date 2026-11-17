@@ -267,21 +267,88 @@ fn point_chat(
     let mut pointed = shared.chat_channel.lock().unwrap();
     if let Some(w) = app.get_webview(CHAT) {
         if *pointed != channel {
-            let _ = w.navigate(url);
+            // the new channel first, so the navigation check below lets it through
             *pointed = channel.to_string();
+            let _ = w.navigate(url);
         }
         return Ok(w);
     }
     let window = crate::app::main_window(app).ok_or("no main window")?;
-    let builder = WebviewBuilder::new(CHAT, WebviewUrl::External(url)).on_page_load(|w, p| {
-        // a page that isn't Kick's chat (a link clicked in it) goes back to the chat
-        if p.event() == PageLoadEvent::Finished && p.url().host_str().is_some_and(|h| h != "kick.com" && !h.ends_with(".kick.com")) {
-            let _ = w.eval("history.back()");
-        }
-    });
+    let handle = app.clone();
+    let builder = WebviewBuilder::new(CHAT, WebviewUrl::External(url))
+        .initialization_script(STAY_PUT)
+        // a raid sends the chat to the raided channel's: refused, so it stays on the stream's (the lock is only busy
+        // while Augur points the chat somewhere itself, so then it's let through)
+        .on_navigation(move |u| {
+            let shared = handle.state::<Arc<Shared>>();
+            let Ok(pointed) = shared.chat_channel.try_lock() else { return true };
+            pointed.is_empty() || !other_chat(u, &pointed)
+        })
+        .on_page_load(|w, p| {
+            // a page that isn't Kick's chat (a link clicked in it) goes back to the chat
+            if p.event() == PageLoadEvent::Finished && !on_kick(p.url()) {
+                let _ = w.eval("history.back()");
+            }
+        });
     let w = window.add_child(builder, pos, size).map_err(|e| e.to_string())?;
     *pointed = channel.to_string();
     Ok(w)
+}
+
+/// Kick's pages can move without loading a new one: the chat page isn't let move off the address it opened on (a
+/// raid moving it to the raided channel's chat, most of all).
+const STAY_PUT: &str = r#"(function () {
+  var path = function (u) { return u.pathname.toLowerCase().replace(/\/+$/, ''); };
+  var home = path(location);
+  if (!/^\/popout\/[^/]+\/chat$/.test(home)) return;
+  ['pushState', 'replaceState'].forEach(function (k) {
+    var f = history[k];
+    history[k] = function (state, title, url) {
+      try {
+        if (url != null) {
+          var to = new URL(url, location.href);
+          if (to.host === location.host && path(to) !== home) return;
+        }
+      } catch (e) {}
+      return f.apply(this, arguments);
+    };
+  });
+})();"#;
+
+/// How often the chat's address is checked for having wandered off the stream's chat.
+const STRAY_CHECK: Duration = Duration::from_secs(30);
+
+/// The backstop for a raid that got past the two guards above: a chat on another Kick page is sent back to the
+/// channel's chat. Called every second; looks every `STRAY_CHECK`.
+fn bring_chat_back(app: &AppHandle, shared: &Shared, last: &mut Instant) {
+    if last.elapsed() < STRAY_CHECK {
+        return;
+    }
+    *last = Instant::now();
+    let Some(w) = app.get_webview(CHAT) else { return };
+    let channel = shared.chat_channel.lock().unwrap().clone();
+    let Ok(at) = w.url() else { return };
+    if channel.is_empty() || !on_kick(&at) || is_chat(&at, &channel) {
+        return;
+    }
+    if let Ok(url) = tauri::Url::parse(&kick::popout_url(&channel)) {
+        let _ = w.navigate(url);
+    }
+}
+
+fn on_kick(u: &tauri::Url) -> bool {
+    u.host_str().is_some_and(|h| h == "kick.com" || h.ends_with(".kick.com"))
+}
+
+/// Is this `channel`'s popout chat?
+fn is_chat(u: &tauri::Url, channel: &str) -> bool {
+    on_kick(u) && u.path().trim_end_matches('/').eq_ignore_ascii_case(&format!("/popout/{}/chat", channel.trim()))
+}
+
+/// Is this another channel's popout (where a raid sends the chat)? Only these are refused: everything else the
+/// chat page loads (sign-in checks, frames) goes through the same check.
+fn other_chat(u: &tauri::Url, channel: &str) -> bool {
+    on_kick(u) && u.path().to_ascii_lowercase().starts_with("/popout/") && !is_chat(u, channel)
 }
 
 /// The main window closed to the tray: the chat is hidden with it, and bets go in with Kick's own request.
@@ -663,6 +730,7 @@ pub fn auto_loop(app: AppHandle, shared: Arc<Shared>) {
     let mut chat_since = Instant::now();
     // checks in a row that found the chat box greyed out
     let mut box_off = 0u32;
+    let mut stray_checked = Instant::now();
     // Arm when Augur starts: tried once this session (disarming later keeps it off)
     let started = Instant::now();
     let mut arm_at_start = shared.settings.lock().unwrap().auto_bet.arm_at_start;
@@ -679,6 +747,7 @@ pub fn auto_loop(app: AppHandle, shared: Arc<Shared>) {
             refresh(&app, &shared);
             last_refresh = Instant::now();
         }
+        bring_chat_back(&app, &shared, &mut stray_checked);
         let view = shared.auto.lock().unwrap().clone();
         if arm_at_start && !view.armed && started.elapsed() >= ARM_AT_START_AFTER {
             match can_arm(&view) {
@@ -1051,6 +1120,20 @@ mod tests {
         let test = AutoBetSettings { test_mode: true, ..s };
         assert_eq!(channel(&test, Some("TrongatesLegacy"), "x"), "trongateslegacy", "test mode: your own chat");
         assert_eq!(channel(&test, None, "MyName"), "myname", "your Kick name until the sign-in says");
+    }
+
+    #[test]
+    fn the_chat_stays_on_the_streams_own() {
+        let url = |s: &str| tauri::Url::parse(s).unwrap();
+        assert!(is_chat(&url(&kick::popout_url("The-Stream")), "the-stream"));
+        assert!(is_chat(&url("https://kick.com/popout/The-Stream/chat/"), "the-stream"), "case and a trailing slash");
+        assert!(!is_chat(&url("https://kick.com/popout/player-01/chat"), "the-stream"));
+        assert!(other_chat(&url("https://kick.com/popout/player-01/chat"), "the-stream"), "a raid: refused");
+        assert!(other_chat(&url("https://www.kick.com/popout/player-01/chat"), "the-stream"));
+        assert!(!other_chat(&url("https://kick.com/popout/the-stream/chat?x=1"), "the-stream"));
+        assert!(!other_chat(&url("https://kick.com/api/v2/channels/player-01"), "the-stream"), "the page's own loads");
+        assert!(!other_chat(&url("https://challenges.cloudflare.com/popout/x/chat"), "the-stream"), "not Kick's");
+        assert!(!on_kick(&url("https://notkick.com/popout/the-stream/chat")));
     }
 
     #[test]

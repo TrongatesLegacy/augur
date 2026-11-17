@@ -746,6 +746,22 @@ const MAIN_DRIVER: &str = r#"
       }
       out[tab] = document.getElementById('main').innerText;
       out.spills[tab] = spills();
+      // text faded nearly out, counting its boxes' opacity (a chart's rule once faded How Augur called it to 14%)
+      out.faded ||= {};
+      out.faded[tab] = [...document.querySelectorAll('#main *')]
+        .filter((el) => {
+          if (el.closest('svg') || !el.checkVisibility() || ![...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim())) return false;
+          let o = 1;
+          for (let e = el; e && e !== document.body; e = e.parentElement) o *= parseFloat(getComputedStyle(e).opacity);
+          return o < 0.3;
+        })
+        .map((el) => `${el.tagName.toLowerCase()}.${[...el.classList].join('.')}: ${el.textContent.trim().slice(0, 40)}`);
+      // who's ahead runs left to right: no step of its line goes back in time
+      out.wormBack ||= {};
+      out.wormBack[tab] = [...document.querySelectorAll('#main .wline')].filter((p) => {
+        const xs = [...p.getAttribute('d').matchAll(/[ML]([\d.]+) /g)].map((m) => +m[1]);
+        return xs.some((v, i) => i && v < xs[i - 1]);
+      }).length;
       if (tab === 'live' || tab === 'liveedge') {
         // the page fits the window: its panels scroll inside, the page doesn't
         out[tab + 'Fits'] = document.getElementById('main').scrollHeight <= document.getElementById('main').clientHeight + 1;
@@ -1040,6 +1056,12 @@ fn every_tab_renders_headless() {
     let data = fixture_data();
     let r = render(serve("index.html", &data, MAIN_DRIVER), "main", None);
     assert_eq!(r["errors"], json!([]), "script errors: {}", r["errors"]);
+    for (tab, faded) in r["faded"].as_object().unwrap() {
+        assert_eq!(faded, &json!([]), "{tab}: text faded nearly out");
+    }
+    for (tab, back) in r["wormBack"].as_object().unwrap() {
+        assert_eq!(back, &json!(0), "{tab}: who's ahead's line steps back in time");
+    }
     // compared lowercased: labels are styled uppercase and innerText reflects that
     let text = |tab: &str| r[tab].as_str().unwrap_or("").to_lowercase();
     assert!(text("live").contains("wumpo"), "Live: {}", text("live"));

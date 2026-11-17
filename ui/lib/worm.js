@@ -55,11 +55,14 @@ export function worm(fight, { names, proj = null, projAt = null, live = false, h
   // the line holds its value until each hit, then moves to the new gap (damage lands at once)
   let d = `M${x(0)} ${y(0)}`;
   let prev = 0;
+  let was = 0;
   for (const m of ms) {
     const g = gap(m);
     if (g === prev) continue;
-    d += ` L${x(Math.max(0, m.t - 0.6))} ${y(prev)} L${x(m.t)} ${y(g)}`;
+    // the ramp starts no earlier than the last hit, or hits under 0.6s apart draw the line back on itself
+    d += ` L${x(Math.max(was, m.t - 0.6))} ${y(prev)} L${x(m.t)} ${y(g)}`;
     prev = g;
+    was = m.t;
   }
   d += ` L${x(fight.ko ?? end)} ${y(prev)}`;
   const area = `${d} L${x(fight.ko ?? end)} ${mid} L${x(0)} ${mid} Z`;
@@ -70,12 +73,11 @@ export function worm(fight, { names, proj = null, projAt = null, live = false, h
   for (let t = 0; t <= end - step / 3; t += step) ticks.push(t);
   // stems at each hit, in the hitter's colour; the hits worth reading get their damage
   const worth = new Set(ms.filter((m) => m.tags.includes('Biggest') || m.pct >= 15).map((m) => m));
-  const stems = ms
-    .map((m) => {
-      const yv = y(gap(m));
-      const label = worth.has(m) ? `<g class="wl ${m.side}"><circle cx="${x(m.t)}" cy="${yv}" r="8.5"/><text x="${x(m.t)}" y="${yv + 3.2}" text-anchor="middle">${Math.round(m.pct)}</text></g>` : '';
-      return `<line class="ws ${m.side}" x1="${x(m.t)}" x2="${x(m.t)}" y1="${mid}" y2="${yv}"/>${label}`;
-    })
+  const stems = ms.map((m) => `<line class="ws ${m.side}" x1="${x(m.t)}" x2="${x(m.t)}" y1="${mid}" y2="${y(gap(m))}"/>`).join('');
+  // drawn over the line, filled in the hitter's colour, so the number reads wherever the line runs
+  const labels = ms
+    .filter((m) => worth.has(m))
+    .map((m) => `<g class="wlab ${m.side}"><circle cx="${x(m.t)}" cy="${y(gap(m))}" r="8.5"/><text x="${x(m.t)}" y="${y(gap(m)) + 3.2}" text-anchor="middle">${Math.round(m.pct)}</text></g>`)
     .join('');
   const ko = fight.ko != null ? `<line class="wko" x1="${x(fight.ko)}" x2="${x(fight.ko)}" y1="${T - 4}" y2="${H - B}"/><text class="wkot" x="${x(fight.ko) - 3}" y="${T + 6}" text-anchor="end">K.O. ${clock(fight.ko)}</text>` : '';
   const projLine =
@@ -88,12 +90,12 @@ export function worm(fight, { names, proj = null, projAt = null, live = false, h
     <defs><clipPath id="${id}h"><rect x="0" y="0" width="${W}" height="${mid}"/></clipPath><clipPath id="${id}a"><rect x="0" y="${mid}" width="${W}" height="${H - mid}"/></clipPath></defs>
     <g class="wg">${[half, -half].map((v) => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/>`).join('')}<line class="wmid" x1="${L}" x2="${W - R}" y1="${mid}" y2="${mid}"/></g>
     <text class="wside h" x="${L + 2}" y="${T + 9}">${esc(names[0])}</text><text class="wside a" x="${L + 2}" y="${H - B - 5}">${esc(names[1])}</text>
-    <g class="wt">${ticks.map((t) => `<text x="${x(t)}" y="${H - 5}" text-anchor="${t === 0 ? 'start' : 'middle'}">${clock(t)}</text>`).join('')}</g>
+    <g class="wtick">${ticks.map((t) => `<text x="${x(t)}" y="${H - 5}" text-anchor="${t === 0 ? 'start' : 'middle'}">${clock(t)}</text>`).join('')}</g>
     ${projLine}${ko}
-    <path class="wf h" d="${area}" clip-path="url(#${id}h)"/><path class="wf a" d="${area}" clip-path="url(#${id}a)"/>
+    <path class="warea h" d="${area}" clip-path="url(#${id}h)"/><path class="warea a" d="${area}" clip-path="url(#${id}a)"/>
     ${stems}
     <path class="wline h" d="${d}" clip-path="url(#${id}h)"/><path class="wline a" d="${d}" clip-path="url(#${id}a)"/>
-    ${live && !fight.ko ? `<circle class="wnow ${lead >= 0 ? 'h' : 'a'}" cx="${x(end)}" cy="${y(lead)}" r="4"/>` : ''}
+    ${labels}${live && !fight.ko ? `<circle class="wnow ${lead >= 0 ? 'h' : 'a'}" cx="${x(end)}" cy="${y(lead)}" r="4"/>` : ''}
     <line class="wx" x1="0" x2="0" y1="${T - 4}" y2="${H - B}" hidden/><circle class="wdot" r="4.5" cx="0" cy="0" hidden/>
     <rect class="whit" x="0" y="0" width="${W}" height="${H}"/></svg>`;
   const leader = lead === 0 ? '' : lead > 0 ? 'h' : 'a';

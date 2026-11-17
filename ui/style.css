@@ -1203,14 +1203,14 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 .wg .wmid { stroke: rgba(255,255,255,.2); stroke-dasharray: none; }
 .wside { font: 700 9px var(--sans); letter-spacing: .08em; text-transform: uppercase; opacity: .65; }
 .wside.h { fill: var(--home); } .wside.a { fill: var(--away); }
-.wt text { fill: var(--t3); font: 600 10px var(--sans); }
-.wf { stroke: none; opacity: .14; } .wf.h { fill: var(--home); } .wf.a { fill: var(--away); }
+.wtick text { fill: var(--t3); font: 600 10px var(--sans); }
+.warea { stroke: none; opacity: .14; } .warea.h { fill: var(--home); } .warea.a { fill: var(--away); }
 .wline { fill: none; stroke-width: 2.2; stroke-linejoin: round; }
 .wline.h { stroke: var(--home); filter: drop-shadow(0 0 4px rgba(79,227,255,.45)); }
 .wline.a { stroke: var(--away); filter: drop-shadow(0 0 4px rgba(255,92,168,.45)); }
 .ws { stroke-width: 1.2; opacity: .5; } .ws.home { stroke: var(--home); } .ws.away { stroke: var(--away); }
-.wl circle { fill: #15122a; stroke-width: 1.5; } .wl.home circle { stroke: var(--home); } .wl.away circle { stroke: var(--away); }
-.wl text { fill: var(--t1); font: 700 8.5px var(--sans); }
+.wlab circle { stroke: #15122a; stroke-width: 1.5; } .wlab.home circle { fill: var(--home); } .wlab.away circle { fill: var(--away); }
+.wlab text { fill: #15122a; font: 800 9.5px var(--sans); }
 .wko { stroke: rgba(255,207,107,.6); stroke-width: 1.2; stroke-dasharray: 3 3; }
 .wkot { fill: var(--gold); font: 700 9.5px var(--sans); }
 .wproj { fill: none; stroke: var(--gold); stroke-width: 1.5; stroke-dasharray: 4 4; opacity: .65; }

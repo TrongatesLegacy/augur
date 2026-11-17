@@ -190,6 +190,7 @@ pub fn bets_view(conn: &Connection, s: &StakeSettings, range: &str, now_secs: u6
     let mut comparison = bets::compare(&calls, &bets, s, &bets::odds(conn)?, synced_at.unwrap_or(0));
     let autos = autobet::all(conn)?;
     label_bets(conn, &mut comparison.fights, &autos)?;
+    mark_auto_skips(&mut comparison.fights, &autos);
     comparison.staking = bets::staking_periods(&comparison.fights);
     comparison.fights.truncate(200);
     let stored = conn.query_row("SELECT COUNT(*) FROM bets", [], |r| r.get::<_, i64>(0))? as usize;
@@ -210,6 +211,18 @@ fn label_bets(conn: &Connection, fights: &mut [bets::Fight], autos: &[autobet::A
         f.via = f.seq.and_then(|q| via.get(&q).cloned());
     }
     Ok(())
+}
+
+/// A call you missed that auto betting sat out says why, so History shows it wasn't simply let go.
+fn mark_auto_skips(fights: &mut [bets::Fight], autos: &[autobet::AutoBet]) {
+    for f in fights.iter_mut().filter(|f| f.label == bets::Label::Missed) {
+        // this computer's record by its call; another computer's by the duel
+        let skip = autos.iter().filter(|a| a.status == "skipped").find(|a| {
+            (a.device.is_none() && a.prediction_id.is_some() && a.prediction_id == f.call_id)
+                || (a.duel_id.is_some() && a.duel_id == f.duel_id)
+        });
+        f.auto_skipped = skip.map(|a| a.reason.clone().unwrap_or_else(|| "skipped".into()));
+    }
 }
 
 // --- You › Pals: your own box, what a reroll would do for each pal, and the reroll itself ---

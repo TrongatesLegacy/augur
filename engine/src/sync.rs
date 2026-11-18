@@ -20,6 +20,10 @@ pub const SUB: &str = "Augur Sync";
 const HISTORY_MAX: usize = 50;
 /// A computer not heard from in this long is left out of merges (it may come back with old values).
 const STALE_MS: u64 = 120 * 86_400_000;
+/// How often this computer's file is written when nothing in it changed, to say it's still there. Every write makes
+/// the other computers sync, so writing it every sync had two computers setting each other off for good. Well inside
+/// the 10 minutes auto bet allows before it stops counting another computer as betting.
+pub const HEARTBEAT_MS: u64 = 5 * 60_000;
 
 /// A setting's value and when it last changed (ms).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -72,6 +76,9 @@ pub struct SyncState {
     pub calls_mark: String,
     /// what the auto bets file last held
     pub autobets_mark: String,
+    /// what this computer's file last held (all but when), and when it was written
+    pub device_mark: String,
+    pub device_at: u64,
     /// auto betting is on here: said in this computer's file, so another computer won't turn it on too
     #[serde(skip)]
     pub auto_bet: bool,
@@ -225,9 +232,15 @@ impl SyncState {
             auto_bet: self.auto_bet,
         };
         let path = dir.join("devices").join(format!("{}.json", self.device));
+        let mark = format!("{:x}", fingerprint(&serde_json::to_string(&DeviceFile { at: 0, ..file.clone() })?));
+        if mark == self.device_mark && now.saturating_sub(self.device_at) < HEARTBEAT_MS && path.exists() {
+            return Ok(());
+        }
         std::fs::create_dir_all(path.parent().unwrap())?;
         // written in place: some sync apps mark a file renamed over another as uploaded without uploading it
         std::fs::write(path, serde_json::to_string(&file)?)?;
+        self.device_mark = mark;
+        self.device_at = now;
         Ok(())
     }
 
@@ -605,10 +618,11 @@ mod tests {
         let dir = mac.dir().unwrap();
         let copy = dir.join("devices/dev-Mac-Old Name.json");
         std::fs::copy(dir.join("devices/dev-Mac.json"), &copy).unwrap();
-        mac.sync(&mac_db, &none, "macOS", "0.1.0", 2_000);
-        let got = pc.sync(&pc_db, &none, "Windows", "0.1.0", 3_000);
+        let later = 1_000 + HEARTBEAT_MS;
+        mac.sync(&mac_db, &none, "macOS", "0.1.0", later);
+        let got = pc.sync(&pc_db, &none, "Windows", "0.1.0", later + 1_000);
         assert_eq!(got.others.len(), 1);
-        assert_eq!(got.others[0].at, 2_000, "the newest of the two");
+        assert_eq!(got.others[0].at, later, "the newest of the two");
         assert_eq!(pc.history[0].from, "Mac", "not \"2 computers\"");
         let _ = std::fs::remove_dir_all(folder);
     }
@@ -626,6 +640,31 @@ mod tests {
         assert_eq!(others_stamp(&dir, &pc.device), before, "its own files don't count");
         std::fs::write(dir.join("calls/dev-Mac.jsonl"), "").unwrap();
         assert_ne!(others_stamp(&dir, &pc.device), before, "the Mac's calls file changed");
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    /// Each write of a computer's file makes the others sync, so a sync that changes nothing mustn't write it, or two
+    /// computers keep setting each other off. It's still written now and then, to say the computer's there.
+    #[test]
+    fn a_sync_that_changes_nothing_leaves_this_computers_file_alone() {
+        let folder = temp("quiet");
+        let conn = crate::seed::store();
+        let mut pc = computer("PC", &folder);
+        let file = pc.dir().unwrap().join("devices/dev-PC.json");
+        let written_at = || serde_json::from_str::<DeviceFile>(&std::fs::read_to_string(&file).unwrap()).unwrap().at;
+        let (yoda, gollum) = (flatten(&json!({"default_voice": "Yoda"}), &[]), flatten(&json!({"default_voice": "Gollum"}), &[]));
+        pc.sync(&conn, &yoda, "Windows", "0.1.0", 1_000);
+        pc.sync(&conn, &yoda, "Windows", "0.1.0", 61_000);
+        assert_eq!(written_at(), 1_000, "nothing changed: not written");
+        pc.sync(&conn, &gollum, "Windows", "0.1.0", 62_000);
+        assert_eq!(written_at(), 62_000, "a changed setting is written straight away");
+        pc.sync(&conn, &gollum, "Windows", "0.1.0", 62_000 + HEARTBEAT_MS - 1);
+        assert_eq!(written_at(), 62_000);
+        pc.sync(&conn, &gollum, "Windows", "0.1.0", 62_000 + HEARTBEAT_MS);
+        assert_eq!(written_at(), 62_000 + HEARTBEAT_MS, "written now and then to say it's there");
+        std::fs::remove_file(&file).unwrap();
+        pc.sync(&conn, &gollum, "Windows", "0.1.0", 63_000 + HEARTBEAT_MS);
+        assert_eq!(written_at(), 63_000 + HEARTBEAT_MS, "a missing file is written again");
         let _ = std::fs::remove_dir_all(folder);
     }
 

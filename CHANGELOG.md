@@ -2,7 +2,10 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.22 (current)
+## 0.1.23 (current)
+- Two computers syncing no longer set each other off every minute
+
+## 0.1.22
 - Every fight auto bet sits out says why, not just the ones that ran out of time
 - Live's chat stays on the stream's chat when the stream raids another channel
 - Synced calls keep how they came about, and auto bet waits up to 240s into picks

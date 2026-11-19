@@ -189,20 +189,39 @@ pub struct Options {
 pub type BoxCard = (HashMap<String, StatLine>, Vec<String>);
 
 /// A hidden fighter's stats from its owner's pal box: the card shows what it fights with (stats, talent rolls and
-/// passives, the same numbers the duel shows at the bell). Only when the owner has exactly one of that pal.
-/// Returns the stats and passives (or None), and where they came from.
-pub fn box_stats(owned: Option<&[site::BoxPal]>, pal: &str) -> (Option<BoxCard>, String) {
-    let Some(owned) = owned else { return (None, "guessed (their box couldn't be read)".into()) };
-    let same: Vec<&site::BoxPal> = owned.iter().filter(|p| p.pal == pal).collect();
-    match same.as_slice() {
-        [one] if one.stats.len() == 3 => {
-            let stats =
-                one.stats.iter().map(|(k, (lv70, iv))| (k.clone(), StatLine { iv: Some(*iv), base: None, lv70: Some(*lv70) })).collect();
-            (Some((stats, one.passives.clone())), "from their box".into())
-        }
-        [] => (None, "guessed (not in their box)".into()),
-        many => (None, format!("guessed ({} in their box)", many.len())),
+/// passives, the same numbers the duel shows at the bell). Owners often have several of a pal (eggs hatch at random),
+/// each with its own stats, and the duel doesn't say which is fighting. It does show the passives while it hides the
+/// stats, so only the cards with those passives can be the one. Returns the cards it could be (one: its stats are
+/// known; more: the call is worked out for each, see `over_the_box`) and where the stats came from.
+pub fn box_stats(owned: Option<&[site::BoxPal]>, pal: &str, passives: &[String]) -> (Vec<BoxCard>, String) {
+    let Some(owned) = owned else { return (vec![], "guessed (their box couldn't be read)".into()) };
+    let same: Vec<&site::BoxPal> = owned.iter().filter(|p| p.pal == pal && p.stats.len() == 3).collect();
+    let n = same.len();
+    let known = !passives.iter().any(|p| p.contains("unknown"));
+    let matching: Vec<&site::BoxPal> = same.iter().copied().filter(|p| known && same_passives(&p.passives, passives)).collect();
+    // none matching means the passives read differently from the box's: better all of them than none
+    let narrowed = !matching.is_empty() && matching.len() < n;
+    let cards: Vec<BoxCard> = if matching.is_empty() { &same } else { &matching }.iter().map(|p| card(p)).collect();
+    let from = match cards.len() {
+        0 => "guessed (not in their box)".into(),
+        1 if n == 1 => "from their box".into(),
+        1 => format!("from their box (the only one of {n} with its passives)"),
+        m if narrowed => format!("guessed ({n} in their box, the chance over the {m} with its passives)"),
+        _ => format!("guessed ({n} in their box, the chance over all {n})"),
+    };
+    (cards, from)
+}
+
+/// The home win chance and the stats' share of it when a hidden side could be any of several box pals: the average
+/// over each pairing, so the call is only sure when it would be sure whichever one is fighting. Averaging the stats
+/// instead would make up a pal the owner doesn't have. None when each side is known (or guessed) as one fighter.
+pub fn over_the_box(s: &Settings, home: &[Fighter], away: &[Fighter], species_rec: [[f64; 2]; 2], pal_h2h: [f64; 2]) -> Option<(f64, f64)> {
+    if home.len() < 2 && away.len() < 2 {
+        return None;
     }
+    let all: Vec<Score> = home.iter().flat_map(|h| away.iter().map(move |a| model::score(s, h, a, species_rec, pal_h2h))).collect();
+    let n = all.len() as f64;
+    Some((all.iter().map(|x| x.p_home).sum::<f64>() / n, all.iter().map(|x| x.p_stats).sum::<f64>() / n))
 }
 
 /// The prediction for the duel in the state, or None when no duel is up.
@@ -248,41 +267,50 @@ pub fn predict(state: &State, opts: &Options) -> Option<Prediction> {
         (None, PalHeadToHead::default(), [HiddenMoves::default(), HiddenMoves::default()], [None, None])
     };
 
+    // a side, and the box pals a hidden side could be when there's more than one
     let build = |key: &str, me: &StateSide, op: &StateSide, hidden: HiddenMoves, owned: Option<Vec<site::BoxPal>>| {
         let (mut st, mut pas) = (stats.get(key).cloned().unwrap_or_default(), passives.get(key).cloned().unwrap_or_default());
+        let mut could_be = vec![];
         let stats_from = if shown(key) {
             "shown".to_string()
         } else if !opts.lookups {
             "guessed".to_string()
         } else {
-            let (card, from) = box_stats(owned.as_deref(), &me.pal);
-            if let Some((card, card_passives)) = card {
+            let (cards, from) = box_stats(owned.as_deref(), &me.pal, &pas);
+            if let [(card, card_passives)] = cards.as_slice() {
                 // the box has no base stats: keep the duel's for the report
                 for (k, line) in card {
-                    let base = st.get(&k).and_then(|l| l.base);
-                    st.insert(k, StatLine { base, ..line });
+                    let base = st.get(k).and_then(|l| l.base);
+                    st.insert(k.clone(), StatLine { base, ..line.clone() });
                 }
-                pas = card_passives;
+                pas = card_passives.clone();
+            } else {
+                could_be = cards;
             }
             from
         };
-        let (vals, est) = model::resolve(&st, &pas);
         let mv = skills.get(key).cloned().unwrap_or_default();
-        let fighter = Fighter {
-            pal: me.pal.clone(),
-            types: me.types.clone(),
-            hp: vals[0],
-            atk: vals[1],
-            def: vals[2],
-            skills: mv.clone(),
-            hidden_boost: (model::hidden_boost(hidden.share) * 1000.0).round() / 1000.0,
-            speed: (model::speed(&pas) * 1000.0).round() / 1000.0,
-            passives: pas,
-            pal_rank: ranks.get(key).cloned(),
+        let fighter_from = |st: &HashMap<String, StatLine>, pas: &[String]| {
+            let (vals, est) = model::resolve(st, pas);
+            let f = Fighter {
+                pal: me.pal.clone(),
+                types: me.types.clone(),
+                hp: vals[0],
+                atk: vals[1],
+                def: vals[2],
+                skills: mv.clone(),
+                hidden_boost: (model::hidden_boost(hidden.share) * 1000.0).round() / 1000.0,
+                speed: (model::speed(pas) * 1000.0).round() / 1000.0,
+                passives: pas.to_vec(),
+                pal_rank: ranks.get(key).cloned(),
+            };
+            (f, est)
         };
+        let (fighter, est) = fighter_from(&st, &pas);
+        let could_be: Vec<Fighter> = could_be.iter().map(|(card, card_passives)| fighter_from(card, card_passives).0).collect();
         let ivs = ["HP", "ATK", "DEF"].iter().map(|k| (k.to_string(), st.get(*k).and_then(|s| s.iv))).collect();
         let base = ["HP", "ATK", "DEF"].map(|k| st.get(k).and_then(|s| s.base));
-        Side {
+        let side = Side {
             owner: me.actor.clone(),
             owner_key: me.actor_key.clone(),
             pal: me.pal.clone(),
@@ -300,20 +328,21 @@ pub fn predict(state: &State, opts: &Options) -> Option<Prediction> {
             hidden,
             species_rate: 0.0,
             fighter: CallFighter { fighter, ivs },
-        }
+        };
+        (side, could_be)
     };
     let [hidden_home, hidden_away] = hidden;
     let [box_home, box_away] = boxes;
-    let mut home = build("home", h, a, hidden_home, box_home);
-    let mut away = build("away", a, h, hidden_away, box_away);
+    let (mut home, home_could_be) = build("home", h, a, hidden_home, box_home);
+    let (mut away, away_could_be) = build("away", a, h, hidden_away, box_away);
     // a real call: SPECIES_LIVE weighs the records
-    let score = model::score(
-        &opts.settings.for_calls(),
-        &home.fighter.fighter,
-        &away.fighter.fighter,
-        species_rec,
-        [pal_h2h.home_wins as f64, pal_h2h.away_wins as f64],
-    );
+    let (calls, h2h) = (opts.settings.for_calls(), [pal_h2h.home_wins as f64, pal_h2h.away_wins as f64]);
+    let mut score = model::score(&calls, &home.fighter.fighter, &away.fighter.fighter, species_rec, h2h);
+    let or_shown = |could_be: Vec<Fighter>, side: &Side| if could_be.is_empty() { vec![side.fighter.fighter.clone()] } else { could_be };
+    let (home_all, away_all) = (or_shown(home_could_be, &home), or_shown(away_could_be, &away));
+    if let Some((p_home, p_stats)) = over_the_box(&calls, &home_all, &away_all, species_rec, h2h) {
+        (score.p_home, score.p_stats) = (p_home, p_stats);
+    }
     home.species_rate = score.rates[0];
     away.species_rate = score.rates[1];
     let pick = if score.p_home >= 0.5 { "home" } else { "away" };
@@ -448,6 +477,26 @@ pub fn report(p: &Prediction) -> String {
     out.join("\n")
 }
 
+// --- the box ---
+
+fn card(p: &site::BoxPal) -> BoxCard {
+    let stats = p.stats.iter().map(|(k, (lv70, iv))| (k.clone(), StatLine { iv: Some(*iv), base: None, lv70: Some(*lv70) })).collect();
+    (stats, p.passives.clone())
+}
+
+/// The same passives, in any order, as the duel and the box word them ("DEF −10%" on one, "Defense -10%" on another).
+fn same_passives(a: &[String], b: &[String]) -> bool {
+    let words = |v: &[String]| {
+        let mut v: Vec<String> = v
+            .iter()
+            .map(|p| p.to_uppercase().replace('−', "-").replace("DEFENSE", "DEF").replace("DEFENCE", "DEF").replace("ATTACK", "ATK"))
+            .collect();
+        v.sort();
+        v
+    };
+    words(a) == words(b)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,10 +513,14 @@ mod tests {
     }
 
     fn boxed(pal: &str, hp: f64) -> site::BoxPal {
+        with_passives(pal, hp, &["COOLDOWN −15%"])
+    }
+
+    fn with_passives(pal: &str, hp: f64, passives: &[&str]) -> site::BoxPal {
         site::BoxPal {
             pal: pal.into(),
             stats: [("HP", (hp, 43.0)), ("ATK", (592.0, 34.0)), ("DEF", (1015.0, 2.0))].map(|(k, v)| (k.to_string(), v)).into(),
-            passives: vec!["COOLDOWN −15%".into()],
+            passives: passives.iter().map(|p| p.to_string()).collect(),
             ..Default::default()
         }
     }
@@ -476,14 +529,63 @@ mod tests {
     #[test]
     fn hidden_stats_come_from_the_box() {
         let owned = vec![boxed("Turtacle Terra", 5592.0), boxed("Lamball", 3000.0)];
-        let (card, from) = box_stats(Some(&owned), "Turtacle Terra");
-        let (stats, passives) = card.unwrap();
+        let (cards, from) = box_stats(Some(&owned), "Turtacle Terra", &["COOLDOWN −15%".into()]);
+        let [(stats, passives)] = cards.as_slice() else { panic!("one card") };
         assert_eq!((stats["HP"].lv70, stats["HP"].iv, stats["DEF"].lv70), (Some(5592.0), Some(43.0), Some(1015.0)));
-        assert_eq!((passives, from.as_str()), (vec!["COOLDOWN −15%".to_string()], "from their box"));
+        assert_eq!((passives.clone(), from.as_str()), (vec!["COOLDOWN −15%".to_string()], "from their box"));
         let two = vec![boxed("Lamball", 3000.0), boxed("Lamball", 3100.0)];
-        assert_eq!(box_stats(Some(&two), "Lamball").1, "guessed (2 in their box)");
-        assert_eq!(box_stats(Some(&owned), "Nyafia Terra").1, "guessed (not in their box)");
-        assert_eq!(box_stats(None, "Lamball").1, "guessed (their box couldn't be read)");
+        let (cards, from) = box_stats(Some(&two), "Lamball", &["COOLDOWN −15%".into()]);
+        assert_eq!((cards.len(), from.as_str()), (2, "guessed (2 in their box, the chance over all 2)"));
+        assert_eq!(box_stats(Some(&owned), "Nyafia Terra", &[]).1, "guessed (not in their box)");
+        assert_eq!(box_stats(None, "Lamball", &[]).1, "guessed (their box couldn't be read)");
+    }
+
+    /// Several of the same pal: the duel's passives say which it can be.
+    #[test]
+    fn passives_narrow_the_box() {
+        let owned = vec![
+            with_passives("Teafant", 4600.0, &[]),
+            with_passives("Teafant", 4700.0, &["DEF +10%"]),
+            with_passives("Teafant", 4800.0, &[]),
+            with_passives("Lamball", 3000.0, &["DEF +10%"]),
+        ];
+        let (cards, from) = box_stats(Some(&owned), "Teafant", &["DEF +10%".into()]);
+        assert_eq!((cards.len(), from.as_str()), (1, "from their box (the only one of 3 with its passives)"));
+        assert_eq!(cards[0].0["HP"].lv70, Some(4700.0));
+        let (cards, from) = box_stats(Some(&owned), "Teafant", &[]);
+        assert_eq!((cards.len(), from.as_str()), (2, "guessed (3 in their box, the chance over the 2 with its passives)"));
+        // the box words some passives differently
+        assert_eq!(
+            box_stats(
+                Some(&[with_passives("Teafant", 4700.0, &["Defense +10%", "ATK +10%"])]),
+                "Teafant",
+                &["ATK +10%".into(), "DEF +10%".into()]
+            )
+            .0
+            .len(),
+            1
+        );
+        // passives the duel doesn't show yet, or that match none of them: it could be any
+        let (cards, from) = box_stats(Some(&owned), "Teafant", &["unknown until the bell".into()]);
+        assert_eq!((cards.len(), from.as_str()), (3, "guessed (3 in their box, the chance over all 3)"));
+        assert_eq!(box_stats(Some(&owned), "Teafant", &["ATK +30%".into()]).0.len(), 3);
+    }
+
+    /// A strong and a weak copy: the call averages the two chances, so it's less sure than the strong one alone.
+    #[test]
+    fn the_call_is_over_every_pal_it_could_be() {
+        let state = crate::seed::state("state-leaflit-wumpo.json");
+        let p =
+            predict(&state, &Options { lookups: false, db_path: PathBuf::from("/nonexistent"), settings: Settings::default() }).unwrap();
+        let (h, a) = (p.home.fighter.fighter.clone(), p.away.fighter.fighter.clone());
+        let strong = Fighter { hp: h.hp * 1.5, atk: h.atk * 1.5, ..h.clone() };
+        let weak = Fighter { hp: h.hp * 0.6, atk: h.atk * 0.6, ..h.clone() };
+        let s = Settings::default().for_calls();
+        let one = |f: &Fighter| model::score(&s, f, &a, p.species_rec, [0.0, 0.0]).p_home;
+        let (p_home, _) = over_the_box(&s, &[strong.clone(), weak.clone()], std::slice::from_ref(&a), p.species_rec, [0.0, 0.0]).unwrap();
+        assert!((p_home - (one(&strong) + one(&weak)) / 2.0).abs() < 1e-12);
+        assert!(one(&weak) < p_home && p_home < one(&strong));
+        assert_eq!(over_the_box(&s, &[strong], &[a], p.species_rec, [0.0, 0.0]), None, "one fighter a side: the usual call");
     }
 
     /// Without lookups a hidden side is still guessed, and says so.

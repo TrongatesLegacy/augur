@@ -461,6 +461,10 @@ pub fn import(conn: &Connection, path: &std::path::Path, device: &str) -> Result
             ],
         )?;
     }
+    // a bet that's now known to have gone in, or now knows its duel: Augur's stake on that call is what it bet
+    if changed > 0 {
+        crate::revisions::match_auto_stakes(conn)?;
+    }
     Ok(changed)
 }
 

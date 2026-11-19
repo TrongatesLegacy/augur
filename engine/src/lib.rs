@@ -1,8 +1,8 @@
 //! Augur's engine: everything that isn't the desktop app. Fetching and parsing palduels.com (`site`), the
 //! prediction model (`model`), the SQLite store (`db`), a whole prediction from the live state (`predict`), the
 //! gentle background backfill (`backfill`), the chat voices (`voices`), the calls file (`calls`), and the developer's
-//! bets (`bets`) with the stake Augur suggests (`stake`), whether a pal's IVs are worth rerolling (`reroll`), and sync
-//! across computers (`sync`).
+//! bets (`bets`) with the stake Augur suggests (`stake`), whether a pal's IVs are worth rerolling (`reroll`), each call's history
+//! (`revisions`) and sync across computers (`sync`).
 
 pub mod error;
 pub mod model;
@@ -17,6 +17,7 @@ pub mod kick;
 pub mod learn;
 pub mod predict;
 pub mod reroll;
+pub mod revisions;
 pub mod site;
 pub mod stake;
 pub mod sync;

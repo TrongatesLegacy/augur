@@ -148,7 +148,7 @@ fn migrate(conn: &Connection) -> Result<()> {
         tx.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS one_call ON predictions (home_owner, away_owner, seen_at) WHERE seen_at > 0")?;
         tx.commit()?;
     }
-    Ok(())
+    crate::revisions::migrate(conn)
 }
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -161,6 +161,7 @@ pub fn open(path: &Path) -> Result<Connection> {
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.execute_batch(SCHEMA)?;
     conn.execute_batch(crate::autobet::SCHEMA)?;
+    conn.execute_batch(crate::revisions::SCHEMA)?;
     migrate(&conn)?;
     Ok(conn)
 }
@@ -169,6 +170,7 @@ pub fn open_memory() -> Result<Connection> {
     let conn = Connection::open_in_memory()?;
     conn.execute_batch(SCHEMA)?;
     conn.execute_batch(crate::autobet::SCHEMA)?;
+    conn.execute_batch(crate::revisions::SCHEMA)?;
     migrate(&conn)?;
     Ok(conn)
 }
@@ -435,8 +437,8 @@ fn call_values(c: &NewCall) -> Vec<rusqlite::types::Value> {
     ]
 }
 
-/// Record a call. Re-running the same open fight while picks are open updates it in place. Once picks have closed
-/// the call stands as it was: a re-call (stats shown at the bell) only updates the fighters, so the model learns from
+/// Record a call. Re-running the same open fight while picks are open updates it in place, until auto bet bets on it
+/// (its later versions go only to its history, `revisions`). Once picks have closed the call stands as it was: a re-call (stats shown at the bell) only updates the fighters, so the model learns from
 /// the real stats, and is kept as the "after the bell" pick. A fight first seen after picks closed is logged as late.
 pub fn add_call(conn: &Connection, c: &NewCall) -> Result<i64> {
     let existing: Option<i64> = conn
@@ -457,6 +459,10 @@ pub fn add_call(conn: &Connection, c: &NewCall) -> Result<i64> {
         return Ok(id);
     }
     if let Some(id) = existing {
+        // auto bet has bet on it: the call stands as it was bet (later versions go to its history)
+        if crate::revisions::bet_went_out(conn, id)? {
+            return Ok(id);
+        }
         let sets = CALL_COLS.split(", ").skip(1).enumerate().map(|(i, c)| format!("{c} = ?{}", i + 2)).collect::<Vec<_>>().join(", ");
         let mut vals = call_values(c);
         vals.push(id.into());
@@ -814,7 +820,10 @@ fn settled_where(conn: &Connection, and: &str, args: impl rusqlite::Params) -> R
 /// computer that didn't save them).
 pub fn set_call_stake(conn: &Connection, id: i64, amount: u64, command: &str, staking: Option<&StakeSettings>) -> Result<()> {
     let staking = staking.and_then(|s| serde_json::to_string(s).ok());
-    // once picks have closed the stake stands too
+    // once picks have closed, or auto bet has bet on it, the stake stands too
+    if crate::revisions::bet_went_out(conn, id)? {
+        return Ok(());
+    }
     conn.execute(
         "UPDATE predictions SET stake = ?1, stake_cmd = ?2, staking = ?3 WHERE id = ?4 AND COALESCE(closed, 0) = 0",
         params![amount as i64, command, staking, id],

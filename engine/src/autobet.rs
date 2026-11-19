@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::Result;
 use crate::kick::{self, Line};
 use crate::site::Pick;
+use crate::stake::{self, Stake, StakeSettings};
 
 /// Settings › Auto bet. Kept on each computer (not synced): only one computer should bet.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -30,8 +31,9 @@ pub struct AutoBetSettings {
     pub min_chance: f64,
     pub max_bets_per_day: u32,
     pub max_credits_per_day: u64,
-    /// sit out a call made while some of the stats were still hidden
-    pub skip_hidden_stats: bool,
+    /// bet on a call made while some stats are still hidden (they show only at the bell, after picks close) from this
+    /// chance up, at the default stake (None: never)
+    pub hidden_stats_from: Option<f64>,
     /// the call must stay the same this long before betting (it can change while picks are open)
     pub hold_secs: u64,
     /// the countdown on Live, with Cancel, before the bet goes in
@@ -52,7 +54,9 @@ impl Default for AutoBetSettings {
             min_chance: 0.65,
             max_bets_per_day: 40,
             max_credits_per_day: 100_000,
-            skip_hidden_stats: true,
+            // the guess runs about 8 points high (calls at 80%+ fell from 89% to 81% once the stats showed), so the bar
+            // sits 10 above the usual minimum
+            hidden_stats_from: Some(0.75),
             hold_secs: 10,
             countdown_secs: 5,
             // picks stay open about five minutes (the median of the calls seen open and close): four still beats the
@@ -115,6 +119,20 @@ pub fn decide(s: &AutoBetSettings, m: &Moment) -> Decision {
     waiting.map_or(Decision::Go, |(now, was)| Decision::Wait { now, was })
 }
 
+/// The stake auto betting puts on a call: Staking's suggestion, but no more than the default bet while some stats are
+/// hidden, since the guess can be wrong.
+pub fn stake_for(stake: &Stake, pick: &str, estimated: bool, s: &StakeSettings) -> Stake {
+    if !estimated || stake.amount <= s.default_bet {
+        return stake.clone();
+    }
+    Stake {
+        amount: s.default_bet,
+        command: stake::command(pick, s.default_bet, s),
+        why: "Default bet: some stats are hidden".into(),
+        edge: stake.edge,
+    }
+}
+
 /// How a fight auto betting was still waiting on went without a bet.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Ended {
@@ -142,8 +160,17 @@ fn waiting_on(s: &AutoBetSettings, m: &Moment) -> Option<(String, String)> {
     } else if m.prob < s.min_chance {
         let (p, min) = (m.prob * 100.0, s.min_chance * 100.0);
         (format!("{p:.0}% is under your {min:.0}% minimum"), format!("{p:.0}% was still under your {min:.0}% minimum"))
-    } else if m.estimated && s.skip_hidden_stats {
-        ("some stats are still hidden".into(), "some stats were still hidden".into())
+    } else if m.estimated && s.hidden_stats_from.is_none_or(|from| m.prob < from) {
+        match s.hidden_stats_from {
+            None => ("some stats are still hidden".into(), "some stats were still hidden".into()),
+            Some(from) => {
+                let (p, from) = (m.prob * 100.0, from * 100.0);
+                (
+                    format!("{p:.0}% with hidden stats is under your {from:.0}% for hidden stats"),
+                    format!("{p:.0}% with hidden stats was still under your {from:.0}% for hidden stats"),
+                )
+            }
+        }
     } else if m.held_ms < s.hold_secs * 1000 {
         ("letting the call settle".into(), "the call was still changing".into())
     } else {
@@ -498,7 +525,7 @@ mod tests {
         assert!(wait(Moment { held_ms: 3_000, ..moment() }), "the call hasn't settled");
         assert!(wait(Moment { amount: 0, ..moment() }), "Augur says sit it out");
         assert!(wait(Moment { prob: 0.55, ..moment() }), "under the minimum");
-        assert!(wait(Moment { estimated: true, ..moment() }), "stats still hidden");
+        assert!(wait(Moment { estimated: true, ..moment() }), "hidden stats under the bar");
         // these rule the fight out
         assert!(skip(Moment { already_bet: true, ..moment() }), "you bet yourself");
         assert!(skip(Moment { signed_in: false, ..moment() }));
@@ -507,7 +534,7 @@ mod tests {
         let late = Moment { open_ms: 241_000, ..moment() };
         assert_eq!(
             decide(&s, &Moment { estimated: true, ..late.clone() }),
-            Decision::Skip("some stats were still hidden 240s into picks, too late to bet".into())
+            Decision::Skip("72% with hidden stats was still under your 75% for hidden stats 240s into picks, too late to bet".into())
         );
         assert_eq!(
             decide(&s, &Moment { prob: 0.61, ..late.clone() }),
@@ -518,15 +545,58 @@ mod tests {
         let Decision::Wait { now, was } = decide(&s, &Moment { prob: 0.58, ..moment() }) else { panic!("waits") };
         assert_eq!(now, "58% is under your 65% minimum");
         assert_eq!(sat_out(&was, Ended::PicksClosed), "58% was still under your 65% minimum when picks closed");
-        let Decision::Wait { was, .. } = decide(&s, &Moment { estimated: true, ..moment() }) else { panic!("waits") };
-        assert_eq!(sat_out(&was, Ended::Gone), "some stats were still hidden when the fight left the site");
+        let Decision::Wait { now, was } = decide(&s, &Moment { estimated: true, ..moment() }) else { panic!("waits") };
+        assert_eq!(now, "72% with hidden stats is under your 75% for hidden stats");
+        assert_eq!(
+            sat_out(&was, Ended::Gone),
+            "72% with hidden stats was still under your 75% for hidden stats when the fight left the site"
+        );
         assert_eq!(sat_out("Augur still said sit it out", Ended::NextFight), "Augur still said sit it out when the next fight came up");
         assert!(skip(Moment { today: (40, 0), ..moment() }), "bets a day");
         assert!(skip(Moment { today: (3, 98_000), ..moment() }), "credits a day");
+    }
+
+    #[test]
+    fn hidden_stats_need_the_higher_bar() {
+        let s = AutoBetSettings::default();
+        let hidden = Moment { estimated: true, ..moment() };
+        assert_eq!(decide(&s, &Moment { prob: 0.75, ..hidden.clone() }), Decision::Go, "at the bar");
+        assert_eq!(decide(&s, &Moment { prob: 0.90, ..hidden.clone() }), Decision::Go);
+        // the usual minimum still comes first
+        let Decision::Wait { now, .. } = decide(&s, &Moment { prob: 0.60, ..hidden.clone() }) else { panic!("waits") };
+        assert_eq!(now, "60% is under your 65% minimum");
+        // never: hidden stats wait whatever the chance, and say so
+        let never = AutoBetSettings { hidden_stats_from: None, ..s.clone() };
+        let Decision::Wait { now, was } = decide(&never, &Moment { prob: 0.95, ..hidden.clone() }) else { panic!("waits") };
+        assert_eq!((now.as_str(), was.as_str()), ("some stats are still hidden", "some stats were still hidden"));
         assert_eq!(
-            decide(&AutoBetSettings { skip_hidden_stats: false, ..s.clone() }, &Moment { estimated: true, ..moment() }),
-            Decision::Go
+            decide(&never, &Moment { open_ms: 241_000, ..hidden }),
+            Decision::Skip("some stats were still hidden 240s into picks, too late to bet".into())
         );
+    }
+
+    #[test]
+    fn hidden_stats_setting_round_trips() {
+        // a settings file from before it had the old on/off switch: it takes the new default
+        let old: AutoBetSettings = serde_json::from_str(r#"{"min_chance": 0.7, "skip_hidden_stats": true}"#).unwrap();
+        assert_eq!((old.min_chance, old.hidden_stats_from), (0.7, Some(0.75)));
+        // never is saved (and synced) as null, and stays never
+        let never = AutoBetSettings { hidden_stats_from: None, ..AutoBetSettings::default() };
+        let json = serde_json::to_value(&never).unwrap();
+        assert!(json["hidden_stats_from"].is_null());
+        assert_eq!(serde_json::from_value::<AutoBetSettings>(json).unwrap().hidden_stats_from, None);
+    }
+
+    #[test]
+    fn hidden_stats_bet_the_default() {
+        let s = StakeSettings { strategy: stake::Strategy::DefaultOrMax, ..StakeSettings::default() };
+        let max = stake::suggest("away", 0.82, &s, &stake::Odds::default());
+        assert_eq!((max.amount, max.command.as_str()), (5000, "!a all"));
+        let capped = stake_for(&max, "away", true, &s);
+        assert_eq!((capped.amount, capped.command.as_str()), (500, "!a"));
+        assert_eq!(stake_for(&max, "away", false, &s), max, "shown stats keep Staking's stake");
+        let small = stake::suggest("home", 0.66, &s, &stake::Odds::default());
+        assert_eq!(stake_for(&small, "home", true, &s), small, "already at the default");
     }
 
     fn bet(prediction_id: i64) -> AutoBet {

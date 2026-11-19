@@ -1099,7 +1099,8 @@ fn every_tab_renders_headless() {
     assert!(
         text("autobet").contains("signed in as player-01")
             && text("autobet").contains("test mode")
-            && text("autobet").contains("2:08 (median of 61 calls)"),
+            && text("autobet").contains("2:08 (median of 61 calls)")
+            && text("autobet").contains("hidden until the bell, at the default stake; blank: never"),
         "Settings › Auto bet: {}",
         text("autobet")
     );

@@ -828,6 +828,7 @@ pub fn auto_loop(app: AppHandle, shared: Arc<Shared>) {
             set_phase(&app, &shared, "idle", "Waiting for the next fight", "", None, None);
             continue;
         };
+        let stake = autobet::stake_for(&stake, &p.pick, p.estimated(), &settings.staking);
         let Ok(Some(call_id)) = db::open_call(&conn, &p.home.owner, &p.away.owner) else { continue };
         if let Some(b) = autobet::for_call(&conn, call_id).ok().flatten() {
             let msg = match b.status.as_str() {

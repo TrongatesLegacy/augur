@@ -2,7 +2,11 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.24 (current)
+## 0.1.25 (current)
+- Test data: the saved box page no longer has real chatter names
+- Calls with hidden stats use the owner's box even when they have several of that pal: narrowed by the passives the duel shows, and averaged over the ones it could be
+
+## 0.1.24
 - Auto bet can bet on calls with hidden stats from a chance you set (75% by default), at the default stake
 
 ## 0.1.23

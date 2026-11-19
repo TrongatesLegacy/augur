@@ -58,8 +58,8 @@ function notes(d) {
   SIDES.forEach((s, i) => {
     const from = d.stats_from[i];
     if (!from || from === 'shown') return;
-    const text = `${esc(pal(c, s))}'s stats are hidden until the bell: ${esc(from.replace(/^from their box$/, 'taken from its owner’s box'))}`;
-    out.push(pending(c) ? (/^guessed/.test(from) ? `<span class="gold">${text}</span>` : text) : `${esc(pal(c, s))}'s hidden stats: ${esc(from.replace(/^from their box$/, 'taken from its owner’s box'))}`);
+    const text = `${esc(pal(c, s))}'s stats are hidden until the bell: ${esc(from.replace(/^from their box/, 'taken from its owner’s box'))}`;
+    out.push(pending(c) ? (/^guessed/.test(from) ? `<span class="gold">${text}</span>` : text) : `${esc(pal(c, s))}'s hidden stats: ${esc(from.replace(/^from their box/, 'taken from its owner’s box'))}`);
   });
   if (d.estimated && !d.stats_from.some((x) => x && x !== 'shown')) out.push('Some stats were hidden until the bell and guessed');
   return out.length ? `<div class="cnotes">${out.map((n) => `<span title="${esc(n.replace(/<[^>]+>/g, ''))}">${n}</span>`).join('')}</div>` : '';

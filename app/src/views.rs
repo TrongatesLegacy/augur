@@ -956,6 +956,14 @@ mod tests {
     use augur_engine::stake::StakeSettings;
 
     #[test]
+    fn where_the_stats_came_from_splits_by_side() {
+        assert_eq!(
+            super::split_stats_from("home: guessed (3 in their box, the chance over the 2 with its passives); away: shown"),
+            ["guessed (3 in their box, the chance over the 2 with its passives)".to_string(), "shown".to_string()]
+        );
+    }
+
+    #[test]
     fn off_air_lists_the_latest_calls_newest_first() {
         let conn = augur_engine::seed::store();
         let o = super::off_air(&conn, &Default::default()).unwrap();

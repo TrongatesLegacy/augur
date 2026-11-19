@@ -65,6 +65,10 @@ pub struct Details {
     pub stats_from: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app_version: Option<String>,
+    /// each version of the call while its fight was up (`revisions`); rebuilt ones stay on the computer that
+    /// rebuilt them, since every computer can rebuild them
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub revisions: Vec<crate::revisions::Revision>,
 }
 
 /// Writes every settled call with full fighter data. Returns how many.
@@ -177,13 +181,17 @@ fn import_lines(conn: &Connection, text: &str) -> crate::Result<db::Merged> {
         if let (Some(duel), Some(winner)) = (l.duel, l.winner) {
             db::settle_call(conn, id, duel, &l.home_owner, &l.away_owner, &winner)?;
         }
+        // a call from a computer that didn't keep its history: what can be rebuilt of it
+        crate::revisions::backfill_call(conn, id)?;
         added += 1;
     }
     Ok(db::Merged { calls: added, filled, ..Default::default() })
 }
 
 fn details(conn: &Connection, id: i64) -> crate::Result<Details> {
-    Ok(conn.query_row(
+    let revisions: Vec<_> = crate::revisions::of_call(conn, id)?;
+    let revisions = if revisions.iter().any(|r| r.backfilled()) { vec![] } else { revisions };
+    let mut d = conn.query_row(
         "SELECT COALESCE(estimated, 0), p_stats, p_species, p_h2h, closed_at, late_pick, late_prob, stats_from, app_version
          FROM predictions WHERE id = ?",
         [id],
@@ -202,9 +210,12 @@ fn details(conn: &Connection, id: i64) -> crate::Result<Details> {
                 late_prob: r.get(6)?,
                 stats_from: text(7)?,
                 app_version: text(8)?,
+                revisions: vec![],
             })
         },
-    )?)
+    )?;
+    d.revisions = revisions;
+    Ok(d)
 }
 
 /// Fills in what a call here doesn't know yet from another computer's line, keeping what it has. Whether it gained
@@ -234,7 +245,8 @@ fn fill_details(conn: &Connection, id: i64, d: &Details) -> crate::Result<bool> 
              OR (?10 IS NOT NULL AND COALESCE(app_version, '') = ''))",
         rusqlite::params![id, d.estimated as i64, ps, psp, ph, d.closed_at, d.late_pick, d.late_prob, d.stats_from, d.app_version],
     )?;
-    Ok(n > 0)
+    let history = crate::revisions::merge(conn, id, &d.revisions)?;
+    Ok(n > 0 || history)
 }
 
 #[cfg(test)]
@@ -272,6 +284,54 @@ mod tests {
         let _ = std::fs::remove_file(out);
         let staked: Vec<_> = db::settled(&pc).unwrap().into_iter().filter(|c| c.stake.is_some()).collect();
         assert!(!staked.is_empty() && staked.iter().all(|c| c.staking.as_ref() == Some(&max)), "every staked call keeps its settings");
+    }
+
+    /// A call's history travels with it to another computer: a live one replaces the history rebuilt there, and a
+    /// rebuilt one stays where it was rebuilt.
+    #[test]
+    fn the_history_travels_with_the_calls() {
+        use crate::revisions::{self, Revision};
+        let fixture = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/calls.jsonl"));
+        let pc = db::open_memory().unwrap();
+        import(&pc, fixture).unwrap();
+        let calls = db::settled(&pc).unwrap();
+        let (live, rebuilt) = (calls[0].id, calls[1].id);
+        assert!(revisions::of_call(&pc, rebuilt).unwrap().iter().all(Revision::backfilled), "an imported call without one gets it rebuilt");
+        let history = vec![
+            Revision {
+                n: 1,
+                at: 1_000,
+                phase: "picks".into(),
+                trigger: "seen".into(),
+                cause: "first".into(),
+                pick: "home".into(),
+                prob: 0.7,
+                ..Default::default()
+            },
+            Revision {
+                n: 2,
+                at: 9_000,
+                phase: "picks".into(),
+                trigger: "bet".into(),
+                cause: "bet".into(),
+                pick: "home".into(),
+                prob: 0.7,
+                ..Default::default()
+            },
+        ];
+        assert!(revisions::merge(&pc, live, &history).unwrap());
+        let out = std::env::temp_dir().join(format!("augur-history-{}.jsonl", std::process::id()));
+        export(&pc, &out).unwrap();
+        let text = std::fs::read_to_string(&out).unwrap();
+        assert_eq!(text.matches("\"revisions\"").count(), 1, "only the live history goes in the file");
+        // a computer with the same calls, their histories rebuilt there
+        let mac = db::open_memory().unwrap();
+        import(&mac, fixture).unwrap();
+        let m = import_all(&mac, &out).unwrap();
+        let _ = std::fs::remove_file(out);
+        assert_eq!((m.calls, m.filled), (0, 1));
+        let here = |seen_at: i64| db::call_at(&mac, &calls[0].home_owner, &calls[0].away_owner, seen_at).unwrap().unwrap();
+        assert_eq!(revisions::of_call(&mac, here(calls[0].seen_at)).unwrap(), history);
     }
 
     /// The pal ranks a call read travel with it: to the calls file and into another computer's store.

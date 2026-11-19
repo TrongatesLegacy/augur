@@ -8,11 +8,12 @@ use crate::views::{self, civil_date, BetsView, HistoryView, LastResult, LiveView
 use augur_engine::backfill::{self, Progress};
 use augur_engine::bets;
 use augur_engine::history::{self, Backtest};
-use augur_engine::predict;
+use augur_engine::predict::{self, Prediction};
+use augur_engine::revisions::{self, Revision, Trigger};
 use augur_engine::site::{self, State};
 use augur_engine::stake::{self, Stake};
 use augur_engine::sync::{DeviceFile, SyncState};
-use augur_engine::{db, learn, model, rusqlite};
+use augur_engine::{autobet, db, learn, model, rusqlite};
 use base64::Engine;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -110,9 +111,12 @@ pub fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
-/// The stake for a call: the staking settings, the payout the developer's wins have had and their last balance.
-fn stake_for(conn: &rusqlite::Connection, settings: &AppSettings, pick: &str, prob: f64) -> Stake {
-    stake::suggest(pick, prob, &settings.staking, &bets::odds(conn).unwrap_or_default())
+/// The stake for a call: the staking settings, the payout the developer's wins have had and their last balance. No
+/// more than the default bet while some stats are hidden, the same as auto bet bets, so what Augur says it bets is
+/// what it bets.
+fn stake_for(conn: &rusqlite::Connection, settings: &AppSettings, p: &Prediction) -> Stake {
+    let st = stake::suggest(&p.pick, p.prob, &settings.staking, &bets::odds(conn).unwrap_or_default());
+    autobet::stake_for(&st, &p.pick, p.estimated(), &settings.staking)
 }
 
 /// A 32px tray icon: a gold ring filled to the chance around a dot in the favourite's colour (cyan home, pink away).
@@ -160,9 +164,11 @@ pub fn restake(app: &AppHandle, shared: &Shared) {
     let settings = shared.settings.lock().unwrap().clone();
     let mut live = shared.live.lock().unwrap();
     if let Some(p) = live.prediction.clone() {
-        let st = stake_for(&conn, &settings, &p.pick, p.prob);
+        let st = stake_for(&conn, &settings, &p);
         if let Ok(Some(id)) = db::open_call(&conn, &p.home.owner, &p.away.owner) {
             let _ = db::set_call_stake(&conn, id, st.amount, &st.command, Some(&settings.staking));
+            let at = live.site_now.map_or(p.seen_at, |n| n + now_ms().saturating_sub(live.synced_at));
+            let _ = revisions::record(&conn, id, Revision::of(&p, Some(&st), Trigger::Restake, at));
         }
         live.stake = Some(st);
     }
@@ -284,10 +290,13 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
                             &state,
                             &predict::Options { lookups: true, db_path: settings::db_path(&shared.dir), settings: shared.model() },
                         );
-                        let stake = p.as_ref().map(|p| stake_for(&conn, &settings, &p.pick, p.prob));
+                        let stake = p.as_ref().map(|p| stake_for(&conn, &settings, p));
                         if let (Some(p), Some(st)) = (&p, &stake) {
                             if let Ok(id) = db::add_call(&conn, &p.to_call()) {
                                 let _ = db::set_call_stake(&conn, id, st.amount, &st.command, Some(&settings.staking));
+                                // nothing called yet since Augur started: it may have called this fight before
+                                let why = if last_key.is_empty() { Trigger::Launch } else { Trigger::Seen };
+                                let _ = revisions::record(&conn, id, Revision::of(p, Some(st), why, p.seen_at));
                             }
                             if settings.notify_new_pick && !last_key.starts_with(&format!("{}|{}|", p.home.owner, p.away.owner)) {
                                 let bet = if st.command.is_empty() { String::new() } else { format!(" · {}", st.command) };

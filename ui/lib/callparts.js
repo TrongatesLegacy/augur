@@ -49,11 +49,14 @@ function side(d, s) {
       ${f ? `<div class="els">${f.types.map((t) => `<span class="el">${esc(t)}</span>`).join('')}</div>` : ''}</div></div>`;
 }
 
-// what's worth knowing about how the call was made: a re-call after the bell, hidden stats, a late call
-function notes(d) {
+// what's worth knowing about how the call was made: a re-call after the bell, hidden stats, a late call. lead: a
+// line to put first (History: how the call changed)
+function notes(d, lead = '') {
   const c = d.call;
   const out = [];
-  if (c.late && c.late[0] !== c.pick) out.push(`<span class="gold">After the bell</span> (real stats, not counted): ${esc(pal(c, c.late[0]))} ${pct(c.late[1])}`);
+  // the history's line under the dial says the bell's call already
+  const bellShown = (d.revisions || []).length > 1 && d.revisions.some((r) => r.phase === 'bell');
+  if (c.late && c.late[0] !== c.pick && !bellShown) out.push(`<span class="gold">After the bell</span> (real stats, not counted): ${esc(pal(c, c.late[0]))} ${pct(c.late[1])}`);
   if (c.late_only) out.push(pending(c) ? 'Called after picks closed: it won’t count in the tally' : 'First called after picks closed: not in the tally');
   SIDES.forEach((s, i) => {
     const from = d.stats_from[i];
@@ -62,13 +65,14 @@ function notes(d) {
     out.push(pending(c) ? (/^guessed/.test(from) ? `<span class="gold">${text}</span>` : text) : `${esc(pal(c, s))}'s hidden stats: ${esc(from.replace(/^from their box/, 'taken from its owner’s box'))}`);
   });
   if (d.estimated && !d.stats_from.some((x) => x && x !== 'shown')) out.push('Some stats were hidden until the bell and guessed');
-  return out.length ? `<div class="cnotes">${out.map((n) => `<span title="${esc(n.replace(/<[^>]+>/g, ''))}">${n}</span>`).join('')}</div>` : '';
+  return out.length || lead ? `<div class="cnotes">${lead}${out.map((n) => `<span title="${esc(n.replace(/<[^>]+>/g, ''))}">${n}</span>`).join('')}</div>` : '';
 }
 
 // Both pals face to face, Augur's pick and its chance in the middle. verdict goes under the pick's name (History:
-// right or missed; Live: the bet), line under the dial (History: how it ended; Live: why the bet), then the notes.
+// right or missed; Live: the bet), line under the dial (History: how it ended; Live: why the bet), then the notes
+// (lead first).
 // chance: the dial's, when it isn't the call's own (Live shows the chance as it stands)
-export function headline(d, { verdict = '', line = '', extra = '', chance } = {}) {
+export function headline(d, { verdict = '', line = '', extra = '', lead = '', chance } = {}) {
   const c = d.call;
   // each pal's art fades in from its own side; before the bell the side Augur didn't pick is dimmed, after it the loser
   const lit = (s) => (pending(c) ? c.pick === s : c.winner === s);
@@ -76,7 +80,7 @@ export function headline(d, { verdict = '', line = '', extra = '', chance } = {}
   return `<div class="stage cstage${pending(c) ? ' pending' : ''}">${backdrop}${side(d, 'home')}
     <div class="cmid"><div class="cverdict">${dial(chance ?? c.prob, 80)}<div>
       <div class="cpick"><span class="label">${pending(c) ? 'Augur calls' : 'Augur called'}</span><b>${esc(pal(c, c.pick))}</b></div>${verdict}</div></div>
-      ${line ? `<div class="cwon">${line}</div>` : ''}${extra}${notes(d)}</div>
+      ${line ? `<div class="cwon">${line}</div>` : ''}${extra}${notes(d, lead)}</div>
     ${side(d, 'away')}</div>`;
 }
 

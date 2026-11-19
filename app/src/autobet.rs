@@ -15,7 +15,7 @@ use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUr
 use crate::app::{notify, now_ms, Shared};
 use augur_engine::autobet::{self, AutoBet, AutoBetSettings, Decision, Ended, Moment};
 use augur_engine::kick::{self, Line};
-use augur_engine::{db, rusqlite};
+use augur_engine::{db, revisions, rusqlite};
 
 /// The chat webview inside the main window, and the sign-in window.
 const CHAT: &str = "kickchat";
@@ -885,18 +885,21 @@ pub fn auto_loop(app: AppHandle, shared: Arc<Shared>) {
         }
         let user = view.user.clone().unwrap_or_default();
         let site_now = live.site_now.map(|n| n + now.saturating_sub(live.synced_at)).unwrap_or(now);
-        let since = p.seen_at.saturating_sub(2_000);
+        // from when the fight was first seen: the prediction is stamped when it was last worked out, so a call that
+        // changed would have restarted the clock and slipped past the latest time to bet
+        let first = revisions::first_at(&conn, call_id).ok().flatten().map_or(p.seen_at, |f| f.min(p.seen_at));
+        let since = first.saturating_sub(2_000);
         let m = Moment {
             picks_open: true,
             prob: p.prob,
             amount: stake.amount,
             estimated: p.estimated(),
             held_ms: now.saturating_sub(t.held_since),
-            open_ms: site_now.saturating_sub(p.seen_at),
+            open_ms: site_now.saturating_sub(first),
             today: autobet::spent_since(&conn, midnight(now)).unwrap_or_default(),
             signed_in: signed,
             already_bet: (!user.is_empty() && autobet::own_bet(&t.lines, &user, since, None).is_some())
-                || bet_in_picks(&conn, &p.home.owner, &p.away.owner, now.saturating_sub(site_now.saturating_sub(p.seen_at))),
+                || bet_in_picks(&conn, &p.home.owner, &p.away.owner, now.saturating_sub(site_now.saturating_sub(first))),
         };
         match autobet::decide(&s, &m) {
             Decision::Wait { now, was } => {
@@ -914,8 +917,13 @@ pub fn auto_loop(app: AppHandle, shared: Arc<Shared>) {
                     set_phase(&app, &shared, "countdown", "Betting in a moment", &stake.command, Some(until), None);
                     continue;
                 }
+                // the call's stake is the one going in: from the claim on, the call stands as it's bet
+                let _ = db::set_call_stake(&conn, call_id, stake.amount, &stake.command, Some(&settings.staking));
                 // the claim: from here this fight can never be bet on again, whatever happens next
                 let Ok(Some(id)) = autobet::claim(&conn, &record(&p, &stake, call_id, &view, "sending", None)) else { continue };
+                if !view.test {
+                    let _ = revisions::record_bet(&conn, call_id, site_now, &p.pick, p.prob, &stake);
+                }
                 set_phase(&app, &shared, "sending", "Typing it into the chat", &stake.command, None, None);
                 let lines = std::mem::take(&mut t.lines);
                 bet_now(&app, &shared, &conn, id, &view, &p, &stake.command, lines);

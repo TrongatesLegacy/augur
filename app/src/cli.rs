@@ -1,7 +1,7 @@
 //! `augur <command>`: the engine from the command line, sharing the app's data folder. The Claude skills use this.
 
 use crate::settings::{self, AppSettings};
-use augur_engine::{backfill, bets, calls, db, history, learn, model, predict, rusqlite, site, stake};
+use augur_engine::{autobet, backfill, bets, calls, db, history, learn, model, predict, revisions, rusqlite, site, stake};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -47,6 +47,13 @@ pub enum Command {
     Export { file: PathBuf },
     /// The tally of real calls, calibration, the history test and the species leaning on unlisted moves.
     Analyse,
+    /// How calls changed while their fights were up: how often, how late and why, what happened after auto bet's
+    /// bets and at the bell, and what holding longer before betting would have done.
+    Changes {
+        /// print it as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Re-test model settings on the real calls: SETTING=v1,v2 ... (TYPE_BONUS, TYPE_RESIST, POWER_EXP,
     /// STATS_STEEPNESS, SPECIES_WEIGHT, PAL_H2H_WEIGHT). Changes nothing.
     Tune { grid: Vec<String> },
@@ -87,9 +94,11 @@ pub fn run(cli: Cli) -> CliResult {
                 None => println!("No duel up right now ({}).", if state.title.is_empty() { "idle" } else { &state.title }),
                 Some(p) => {
                     let st = stake::suggest(&p.pick, p.prob, &app.staking, &bets::odds(&conn)?);
+                    let st = autobet::stake_for(&st, &p.pick, p.estimated(), &app.staking);
                     if saved.is_none() || save {
                         let id = db::add_call(&conn, &p.to_call())?;
                         db::set_call_stake(&conn, id, st.amount, &st.command, Some(&app.staking))?;
+                        revisions::record(&conn, id, revisions::Revision::of(&p, Some(&st), revisions::Trigger::Command, p.seen_at))?;
                     }
                     if json {
                         println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "prediction": p, "stake": st })).unwrap());
@@ -135,6 +144,15 @@ pub fn run(cli: Cli) -> CliResult {
             Ok(())
         }
         Command::Analyse => analyse(&conn, &model),
+        Command::Changes { json } => {
+            let c = revisions::changes(&conn, &app.auto_bet)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&c)?);
+            } else {
+                println!("{}", revisions::report(&c, &app.auto_bet));
+            }
+            Ok(())
+        }
         Command::Tune { grid } => tune(&conn, &model, &grid),
         Command::Learn { dry_run } => {
             let from = learn::load(&conn).map(|l| l.settings).unwrap_or_default();

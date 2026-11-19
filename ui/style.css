@@ -876,6 +876,10 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 .lv em { font-style: normal; font-weight: 700; } .lv em.ok { color: var(--ok); } .lv em.bad { color: var(--bad); } .lv em.muted { color: var(--t3); }
 .lv em small { font-weight: 500; }
 .ledger + .cnotes { margin-top: 3px; font-size: 11px; line-height: 1.35; }
+/* how the call changed while its fight was up: one line of steps, what changed each on hover */
+.ctl { display: flex; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: 0 6px; max-width: 100%; }
+.ctl .ts { white-space: nowrap; cursor: help; } .ctl .ts b { font: inherit; font-weight: 700; color: var(--t2); }
+.ctl .ts.tbet, .ctl .ts.tbet b { color: var(--gold); } .ctl .ts.after { opacity: .8; } .ctl i { font-style: normal; opacity: .6; }
 .ctags { display: flex; gap: 5px; margin-bottom: 6px; } .fx.r .ctags { justify-content: flex-end; }
 .ctag { font: 700 9.5px var(--sans); letter-spacing: .1em; padding: 3px 7px; border-radius: 5px; text-transform: uppercase; }
 .ctag.pick { background: rgba(255,207,107,.15); color: var(--gold); }

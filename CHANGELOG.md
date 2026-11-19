@@ -2,7 +2,10 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.23 (current)
+## 0.1.24 (current)
+- Auto bet can bet on calls with hidden stats from a chance you set (75% by default), at the default stake
+
+## 0.1.23
 - Two computers syncing no longer set each other off every minute
 
 ## 0.1.22

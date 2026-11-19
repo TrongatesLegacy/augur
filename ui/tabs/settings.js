@@ -180,7 +180,7 @@ function autobetPage(s, v) {
     <div style="display:grid;gap:14px;align-content:start">
       <div class="panel"><div class="ph"><h3>When to bet</h3></div>
         ${num('min_chance', 'Lowest chance', 'sit out calls under this', '%', 50, 99, true)}
-        ${row('Skip hidden stats', 'wait while some stats are still hidden until the bell', toggle('data-ab="skip_hidden_stats"', a.skip_hidden_stats, 'Skip hidden stats'))}
+        ${row('Hidden stats', 'bet from this chance while some stats are hidden until the bell, at the default stake; blank: never', `<div class="st3"><input type="number" data-abn="hidden_stats_from" data-pct="1" data-blank="1" min="50" max="99" value="${a.hidden_stats_from == null ? '' : Math.round(a.hidden_stats_from * 100)}" placeholder="never" aria-label="Hidden stats"><span class="muted">%</span></div>`)}
         ${num('hold_secs', 'Let the call settle', 'the pick and stake must stay the same this long', 'seconds', 0, 120)}
         ${num('countdown_secs', 'Countdown', 'on Live, with Cancel, before it bets', 'seconds', 0, 30)}
         ${num('latest_secs', 'No later than', 'after picks open, so it doesn’t miss the lock', 'seconds', 10, 600)}
@@ -188,7 +188,7 @@ function autobetPage(s, v) {
       <div class="panel"><div class="ph"><h3>Limits a day</h3></div>
         ${num('max_bets_per_day', 'Bets', 'auto bets at most', 'a day', 1, 500)}
         ${num('max_credits_per_day', 'Credits', 'staked by auto bets at most', 'a day', 100, 100000000)}
-        <div class="small foot">The stake is Staking’s suggestion. Test bets don’t count.${v?.today?.[0] ? ` Today: ${fmt(v.today[0])} bet${v.today[0] === 1 ? '' : 's'}, ${fmt(v.today[1])} credits.` : ''}</div></div>
+        <div class="small foot">The stake is Staking’s suggestion, or the default bet when stats are hidden. Test bets don’t count.${v?.today?.[0] ? ` Today: ${fmt(v.today[0])} bet${v.today[0] === 1 ? '' : 's'}, ${fmt(v.today[1])} credits.` : ''}</div></div>
     </div>
   </div>`;
 }
@@ -380,6 +380,7 @@ export async function render(app) {
       const k = input.dataset.abn;
       const v = input.value.trim();
       if (k === 'channel') s.auto_bet.channel = v.replace(/^https?:\/\/(www\.)?kick\.com\//i, '').replace(/[/?#].*$/, '').toLowerCase();
+      else if (input.dataset.blank && v === '') s.auto_bet[k] = null;
       else if (input.dataset.pct) s.auto_bet[k] = Math.min(99, Math.max(50, +v || 60)) / 100;
       else if (v !== '') s.auto_bet[k] = Math.min(+input.max, Math.max(+input.min, Math.round(+v)));
       save(true);

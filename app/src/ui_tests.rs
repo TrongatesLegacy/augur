@@ -5,6 +5,7 @@
 
 use crate::settings::AppSettings;
 use crate::views;
+use augur_engine::revisions::Revision;
 use augur_engine::seed::{page, root};
 use augur_engine::stake::{self, StakeSettings};
 use augur_engine::{bets, learn, model, predict, seed, site};
@@ -128,6 +129,29 @@ pub fn fixture_data() -> Value {
         .unwrap();
         let mut d = views::call_detail(&conn, newest.id, &StakeSettings::default()).unwrap().unwrap();
         d.call.late = history.calls.first().and_then(|c| c.late.clone());
+        // how the call changed while its fight was up (made up): called with the home side guessed, its owner's box
+        // read 12s in, auto bet's bet, then the bell
+        let (pick, prob, cmd) = (d.call.pick.clone(), d.call.prob, d.bet.as_ref().map(|b| b.augur_command.clone()));
+        let other = if pick == "home" { "away" } else { "home" };
+        let (late_pick, late_prob) = d.call.late.clone().unwrap_or((other.into(), 0.57));
+        let v = |n: u32, secs: u64, phase: &str, trigger: &str, cause: &str, detail: &str, pick: &str, prob: f64| Revision {
+            n,
+            at: 1_000_000 + secs * 1000,
+            phase: phase.into(),
+            trigger: trigger.into(),
+            cause: cause.into(),
+            detail: detail.into(),
+            pick: pick.into(),
+            prob,
+            stake_cmd: cmd.clone(),
+            ..Default::default()
+        };
+        d.revisions = vec![
+            v(1, 0, "picks", "seen", "first", "", &pick, prob - 0.04),
+            v(2, 12, "picks", "seen", "stats_source", "home: guessed → from their box", &pick, prob),
+            v(3, 18, "picks", "bet", "bet", "", &pick, prob),
+            v(4, 300, "bell", "seen", "bell,stats_shown", "home's stats shown; pick flipped", &late_pick, late_prob),
+        ];
         d
     };
     let model_view = {
@@ -1206,7 +1230,8 @@ fn every_tab_renders_headless() {
         call.contains("tale of the tape") && call.contains("augur 0.1.5") && call.contains("type edge"),
         "the tape and the settings: {call}"
     );
-    assert!(call.contains("after the bell") && call.contains("taken from its owner’s box"), "how the call was made: {call}");
+    assert!(call.contains("taken from its owner’s box"), "how the call was made: {call}");
+    assert!(!call.contains("after the bell"), "the bell's call is in the history's line, not said twice: {call}");
     // the site's pal rank: each side's tier with its tags, and a row in the tale of the tape
     assert!(call.contains("#88\npal rank\n#171"), "the pal ranks in the tale of the tape: {call}");
     assert!(text("live").contains("#154\npal rank\n#98"), "Live reads the pal ranks from the feed: {}", text("live"));
@@ -1219,6 +1244,14 @@ fn every_tab_renders_headless() {
     let side = if bet["backed"] == "home" { "!h" } else { "!a" };
     let yours = format!("your bet\n{label}\n{side} {}\n", bet["stake"].as_u64().unwrap());
     assert!(call.contains(&format!("augur’s bet\n{cmd}\n")) && call.contains(&yours), "the money on it, Augur's and yours: {call}");
+    // how the call changed: each version's chance, auto bet's bet, the bell's (on another pal)
+    let late = d["call"]["late"][0].as_str().map(|s| if s == "home" { &home } else { &away }).cloned().unwrap_or_default();
+    let steps = format!(
+        "called {}%\n›\n0:12 {}%\n›\nbet {cmd}\n›\nbell {late} ",
+        ((d["call"]["prob"].as_f64().unwrap() - 0.04) * 100.0).round(),
+        (d["call"]["prob"].as_f64().unwrap() * 100.0).round()
+    );
+    assert!(call.contains(&steps), "how the call changed, in a line ({steps:?}): {call}");
     assert_eq!(r["chart"]["lines"], json!(2), "the gap's line, coloured above and below the middle");
     assert_eq!(r["chart"]["hits"].as_u64().unwrap() as usize, d["fight"]["hits"].as_array().unwrap().len(), "a stem per hit");
     assert_eq!(r["chart"]["ko"], json!(true), "the K.O. is marked");

@@ -3,7 +3,7 @@
 // log-odds scale, the tale of the tape and the settings it used). Opened from a row in Augur's calls or Your bets.
 import { AUTO_STATUS, viaChip } from '../lib/auto.js';
 import { invoke } from '../lib/bridge.js';
-import { esc, fmt, signed } from '../lib/format.js';
+import { esc, fmt, pct, signed } from '../lib/format.js';
 import { SIDES, headline as callHeadline, modelFooter, pal, tape, waterfall } from '../lib/callparts.js';
 import { BET_LABELS } from '../lib/stake.js';
 import { projectedGap, wireWorm, worm } from '../lib/worm.js';
@@ -16,7 +16,64 @@ function headline(d) {
   const c = d.call;
   const right = c.winner === c.pick;
   const verdict = `<div class="cres ${right ? 'ok' : 'bad'}"><span class="res ${right ? 'o' : 'x'}">${right ? '✓' : '✕'}</span>${right ? 'Right' : 'Missed'}</div>`;
-  return callHeadline(d, { verdict, extra: ledger(d) });
+  return callHeadline(d, { verdict, extra: ledger(d), lead: timeline(d) });
+}
+
+// what changed a version of the call, in words (revisions::cause_words)
+const CAUSES = {
+  first: 'first call',
+  stats_shown: 'stats shown',
+  stats_source: 'where the stats came from',
+  stats: 'stats',
+  records: 'species records',
+  pal_h2h: 'pal head-to-head',
+  moves: 'moves',
+  model: 'model settings',
+  stake: 'stake',
+  bell: 'the bell',
+  bet: 'auto bet',
+  unknown: 'not known',
+};
+const WENT_OUT = ['sending', 'sent', 'seen', 'confirmed', 'unconfirmed'];
+// the most steps the line shows: the first, then the latest
+const STEPS = 5;
+
+// How the call changed while its fight was up, in a line: each version's chance (and its pal, when it called the
+// other side), auto bet's bet, and the call at the bell. What changed each one is on hover. Nothing for a call that
+// never changed.
+function timeline(d) {
+  const c = d.call;
+  const revs = d.revisions || [];
+  if (!revs.length) return '';
+  const rebuilt = revs.some((r) => r.trigger === 'backfill');
+  const t0 = revs[0].at;
+  const when = (r) => (rebuilt || r.phase === 'bell' ? '' : `${clock(Math.max(0, r.at - t0) / 1000)} `);
+  const chance = (r) => `${r.pick === c.pick ? '' : `${esc(pal(c, r.pick))} `}<b>${pct(r.prob)}</b>`;
+  const why = (r) => [r.cause.split(',').filter(Boolean).map((k) => CAUSES[k] || 'other').join(', '), r.detail].filter(Boolean).join(': ');
+  const a = d.auto_bet;
+  const bet = (r) => `<span class="ts tbet" title="${esc(`Auto bet bet ${r.stake_cmd || ''} at ${pct(r.prob)}`)}">bet <b>${esc(r.stake_cmd || '')}</b></span>`;
+  const steps = [];
+  let betShown = false;
+  revs.forEach((r) => {
+    if (r.trigger === 'bet') {
+      steps.push(bet(r));
+      betShown = true;
+      return;
+    }
+    // another computer's bet, or one from before the history was kept: it went in on the call as it stood
+    if (!betShown && r.phase !== 'picks' && a && !a.test && WENT_OUT.includes(a.status)) {
+      steps.push(bet({ stake_cmd: a.command, prob: a.prob }));
+      betShown = true;
+    }
+    const label = r.phase === 'bell' ? 'bell ' : r.n === 1 ? 'called ' : when(r);
+    const tone = r.phase === 'picks' ? '' : ' after';
+    steps.push(`<span class="ts${tone}" title="${esc(why(r))}${r.phase === 'after_bet' ? ' (after the bet: not the call)' : r.phase === 'bell' ? ' (after picks closed: not the call)' : ''}">${label}${chance(r)}</span>`);
+  });
+  if (!betShown && a && !a.test && WENT_OUT.includes(a.status)) steps.push(bet({ stake_cmd: a.command, prob: a.prob }));
+  if (steps.length < 2) return '';
+  const shown = steps.length > STEPS ? [steps[0], `<span class="ts more">+${steps.length - STEPS + 1}</span>`, ...steps.slice(-(STEPS - 2))] : steps;
+  const title = rebuilt ? 'Rebuilt from what the call saved: changes before the last one weren’t kept then' : 'Each version of the call while its fight was up';
+  return `<div class="ctl" title="${esc(title)}">${shown.join('<i>›</i>')}</div>`;
 }
 
 // Under the dial, a column each: how it ended, then the money on it as Your bets lines it up (Augur's bet and what it

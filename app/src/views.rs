@@ -9,6 +9,7 @@ use augur_engine::bets::{self, Comparison};
 use augur_engine::history::{self, Backtest};
 use augur_engine::predict::{self, Prediction};
 use augur_engine::reroll::{self, Advice};
+use augur_engine::revisions;
 use augur_engine::site::{self, BoxPal, QueueItem, RerollPanel};
 use augur_engine::stake::{Stake, StakeSettings};
 use augur_engine::{db, learn, model, rusqlite};
@@ -468,6 +469,8 @@ pub struct CallDetail {
     pub bets_read: bool,
     /// auto betting on this call: what it did and why
     pub auto_bet: Option<autobet::AutoBet>,
+    /// each version of the call while its fight was up, first first (empty for a call that's up)
+    pub revisions: Vec<revisions::Revision>,
 }
 
 /// The duel as it was fought.
@@ -760,6 +763,7 @@ pub fn call_detail(conn: &Connection, id: i64, staking: &StakeSettings) -> R<Opt
         bet,
         bets_read: synced_at.is_some(),
         auto_bet,
+        revisions: revisions::of_call(conn, id)?,
         call,
     }))
 }
@@ -813,6 +817,7 @@ pub fn live_detail(p: &Prediction, stake: Option<&Stake>) -> CallDetail {
         bet: None,
         bets_read: false,
         auto_bet: None,
+        revisions: vec![],
         call,
     }
 }

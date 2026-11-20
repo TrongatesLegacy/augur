@@ -766,10 +766,9 @@ async fn reroll_send(shared: tauri::State<'_, Arc<Shared>>, id: String, form: us
     let result = site::reroll_send(&chosen, &cookie).map_err(|e| e.to_string())?;
     let mut own = shared.own.lock().unwrap();
     own.panels.insert(id.clone(), (Instant::now(), result.clone()));
-    // a finished reroll changes the pal's IVs and its next price: read the box again when it's next shown
-    if chosen.op() != "roll" || result.done {
-        own.stale = true;
-    }
+    // whatever was sent (a roll spends credits and doubles the price; a choice changes the IVs), the box as last read
+    // is out of date: read it again when it's next asked for
+    own.stale = true;
     drop(own);
     Ok(views::reroll_sheet(&shared.db()?, &shared.model(), &id, &pal, result))
 }

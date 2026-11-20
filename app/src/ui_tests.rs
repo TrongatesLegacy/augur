@@ -495,7 +495,7 @@ window.onerror = (m, s, l) => window.__errors.push(m + ' @' + s + ':' + l);
 window.addEventListener('unhandledrejection', (e) => window.__errors.push('rejection: ' + (e.reason && e.reason.message || e.reason)));
 const DATA = {data};
 window.__TAURI__ = {{
-  core: {{ invoke: (cmd) => cmd in DATA ? Promise.resolve(JSON.parse(JSON.stringify(DATA[cmd]))) : Promise.reject(new Error('no stand-in for ' + cmd)) }},
+  core: {{ invoke: (cmd) => (window.__calls = [...(window.__calls || []), cmd], cmd in DATA) ? Promise.resolve(JSON.parse(JSON.stringify(DATA[cmd]))) : Promise.reject(new Error('no stand-in for ' + cmd)) }},
   event: {{ listen: () => Promise.resolve(() => {{}}) }},
 }};
 </script>"#
@@ -583,7 +583,7 @@ const MAIN_DRIVER: &str = r#"
       .map((el) => `${el.tagName.toLowerCase()}.${[...el.classList].join('.')} (${el.clientWidth}px, needs ${el.scrollWidth}px): ${el.textContent.trim().replace(/\s+/g, ' ').slice(0, 50)}`);
   if (!window.augur) window.__errors.push('the page never started (a module failed to load)');
   else {
-    for (const tab of only ? [only] : ['live', 'liveedge', 'history', 'call', 'bets', 'pals', 'players', 'playersfew', 'you', 'titles', 'titlesone', 'mypals', 'mypalsone', 'mypalsroll', 'mypalsbusy', 'mypalskept', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'changelog', 'updates', 'offair', 'liveauto', 'autobet', 'betsauto', 'livefight']) {
+    for (const tab of only ? [only] : ['live', 'liveedge', 'history', 'call', 'bets', 'pals', 'players', 'playersfew', 'you', 'titles', 'titlesone', 'mypals', 'mypalsone', 'mypalssend', 'mypalsroll', 'mypalsbusy', 'mypalskept', 'model', 'settings', 'staking', 'ownmodel', 'sync', 'changelog', 'updates', 'offair', 'liveauto', 'autobet', 'betsauto', 'livefight']) {
       // "liveauto" is Live with auto betting armed and counting down, signed in to Kick; "autobet" is its Settings
       // page; "betsauto" is Your bets once Augur has auto bet
       DATA.auto_off ||= DATA.auto_view;
@@ -737,11 +737,19 @@ const MAIN_DRIVER: &str = r#"
       }
       const visible = () => [...document.querySelectorAll('.tgrp')].filter((g) => !g.hidden).map((g) => g.querySelector('h4').textContent);
       if (tab.startsWith('mypals') && tab !== 'mypals') {
-        [...document.querySelectorAll('.bxp.own')].find((c) => c.innerText.includes(tab === 'mypalsone' ? 'Jellroy' : 'Swee'))?.click();
+        const confirm = ['mypalsone', 'mypalssend'].includes(tab);
+        [...document.querySelectorAll('.bxp.own')].find((c) => c.innerText.includes(confirm ? 'Jellroy' : 'Swee'))?.click();
         await sleep(300);
-        if (tab === 'mypalsone') document.getElementById('mrr-roll')?.click();
+        if (confirm) document.getElementById('mrr-roll')?.click();
         await sleep(100);
         out.scrollers[tab] = scrolling();
+        // "mypalssend": the credits spent, and the box is read again
+        if (tab === 'mypalssend') {
+          window.__calls = [];
+          document.querySelector('.mrr [data-form][data-price]')?.click();
+          await sleep(300);
+          out.afterSend = window.__calls;
+        }
       }
       if (tab === 'titlesone') {
         document.querySelector('.tcat[data-tg="1"]')?.click();
@@ -1359,6 +1367,7 @@ fn every_tab_renders_headless() {
         one.contains("jellroy") && one.contains("spend 250 credits") && one.contains("cancel"),
         "a roll waits for its second click: {one}"
     );
+    assert_eq!(r["afterSend"], json!(["reroll_send", "own_box"]), "a roll sent reads the box again, so the cards catch up");
     let roll = text("mypalsroll");
     assert!(roll.contains("keep new") && roll.contains("stay with old") && roll.contains("augur’s pick"), "a roll made: {roll}");
     assert!(roll.contains("57.0%") && roll.contains("28.0%"), "each roll's win chance: {roll}");

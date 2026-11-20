@@ -61,9 +61,9 @@ function overview(v) {
     </div></div>`;
 }
 
-// a set of rolls as three big dice
+// a set of rolls as three big dice; a stat Augur couldn't read (null) shows as "—", not a 0
 const dice = (ivs) =>
-  `<div class="mrr-dice">${STATS.map((k, i) => `<div style="--c:${ivTone(ivs[i])};--v:${ivs[i]}%"><span>${k}</span><b>${fmt(ivs[i])}</b><i></i></div>`).join('')}</div>`;
+  `<div class="mrr-dice">${STATS.map((k, i) => (ivs[i] == null ? `<div style="--c:var(--t3);--v:0%" title="Augur couldn't read this one"><span>${k}</span><b>—</b><i></i></div>` : `<div style="--c:${ivTone(ivs[i])};--v:${ivs[i]}%"><span>${k}</span><b>${fmt(ivs[i])}</b><i></i></div>`)).join('')}</div>`;
 
 // How new rolls' win chances spread (every possible roll, the share of them at each win chance), with a line at
 // each mark ({at, label, cls}): the bars right of "now" are rolls that would help, the rest you'd keep yours over.
@@ -195,19 +195,18 @@ async function send(app, form, price) {
   app.main.querySelectorAll('.mrr button').forEach((b) => (b.disabled = true));
   try {
     sheet = await invoke('reroll_send', { id, form, price: price ?? null });
-    confirming = false;
-    // a choice made (or a roll finished): the box has changed, so read it again
-    const p = sheet.panel;
-    if (!(p.busy || p.sync || p.wait) && (p.done || p.rolls.length < 2)) view = await invoke('own_box', { prices: false });
   } catch (e) {
     app.flash(e);
-    confirming = false;
     try {
       sheet = await invoke('reroll_open', { id });
     } catch {
       /* the flash already says what went wrong */
     }
   }
+  confirming = false;
+  // anything sent may have changed the box (a roll spends credits and doubles the price, even one that went wrong
+  // partway), so read it again: the cards then show what the site has now
+  view = (await invoke('own_box', { prices: false }).catch(() => null)) || view;
   draw(app);
   keepPolling(app);
 }

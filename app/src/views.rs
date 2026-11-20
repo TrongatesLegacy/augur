@@ -283,30 +283,43 @@ pub struct RerollSheet {
     pub recommend: Option<String>,
 }
 
-pub fn reroll_sheet(conn: &Connection, s: &model::Settings, id: &str, pal: &BoxPal, panel: RerollPanel) -> RerollSheet {
+pub fn reroll_sheet(conn: &Connection, s: &model::Settings, id: &str, pal: &BoxPal, mut panel: RerollPanel) -> RerollSheet {
     let m = reroll::matchups(conn, pal).ok().flatten();
     // a reroll just kept: the panel has the new IVs before the box is read again, so the advice goes by them
     let ivs = ["HP", "ATK", "DEF"].map(|k| pal.stats.get(k).map_or(0.0, |s| s.1));
+    // a stat the panel's reader couldn't make out, on the roll labelled as the IVs you have, is the box's. Any other
+    // roll's (a new roll, one just kept before the box is read again) can't be known: that roll gets no win chance,
+    // and Augur doesn't pick between it and another
+    if let Some((_, have)) = old_roll(&panel).and_then(|i| panel.rolls.get_mut(i)) {
+        for (v, k) in have.iter_mut().zip(["HP", "ATK", "DEF"]) {
+            if let (true, Some(st)) = (v.is_nan(), pal.stats.get(k)) {
+                *v = st.1;
+            }
+        }
+    }
+    let read = |ivs: &[f64; 3]| ivs.iter().all(|v| v.is_finite());
     let m = match (&panel.rolls[..], m) {
         ([(_, now)], Some(m)) if *now != ivs && now.iter().all(|v| *v > 0.0) => Some(m.with_ivs(*now)),
         (_, m) => m,
     };
-    let wins: Vec<Option<f64>> = panel.rolls.iter().map(|(_, ivs)| m.as_ref().map(|m| m.win(s, *ivs))).collect();
+    let wins: Vec<Option<f64>> = panel.rolls.iter().map(|(_, ivs)| m.as_ref().filter(|_| read(ivs)).map(|m| m.win(s, *ivs))).collect();
     // after a roll: the roll you have (labelled "now", or the first) against the new one
     let ops: Vec<&str> = panel.forms.iter().map(|f| f.op()).collect();
-    let recommend = (panel.rolls.len() >= 2 && ops.contains(&"keep") && ops.contains(&"stay")).then(|| {
-        let old = panel
-            .rolls
-            .iter()
-            .position(|(l, _)| ["now", "old", "current", "before"].iter().any(|w| l.to_lowercase().contains(w)))
-            .unwrap_or(0);
-        let new = if old == panel.rolls.len() - 1 { 0 } else { panel.rolls.len() - 1 };
-        let score = |i: usize| wins[i].unwrap_or_else(|| panel.rolls[i].1.iter().sum::<f64>() / 300.0);
-        if score(new) > score(old) { "keep" } else { "stay" }.to_string()
-    });
+    let old = old_roll(&panel).unwrap_or(0);
+    let recommend = (panel.rolls.len() >= 2 && ops.contains(&"keep") && ops.contains(&"stay") && panel.rolls.iter().all(|(_, r)| read(r)))
+        .then(|| {
+            let new = if old == panel.rolls.len() - 1 { 0 } else { panel.rolls.len() - 1 };
+            let score = |i: usize| wins[i].unwrap_or_else(|| panel.rolls[i].1.iter().sum::<f64>() / 300.0);
+            if score(new) > score(old) { "keep" } else { "stay" }.to_string()
+        });
     let price = panel.price();
     let advice = m.map(|m| m.advise(s, price));
     RerollSheet { id: id.into(), pal: OwnPal { pal: pal.clone(), price, advice }, panel, wins, recommend }
+}
+
+/// Which of the panel's rolls is labelled as the IVs you have ("Your IVs now").
+fn old_roll(panel: &RerollPanel) -> Option<usize> {
+    panel.rolls.iter().position(|(l, _)| ["now", "old", "current", "before"].iter().any(|w| l.to_lowercase().contains(w)))
 }
 
 /// The You tab: your signed-in profile as the picks list import last read it, and your bets next to Augur's.
@@ -1075,6 +1088,22 @@ mod tests {
         worse.rolls[0].0 = "Your IVs now".into();
         worse.rolls[1].0 = "Your new roll".into();
         assert_eq!(super::reroll_sheet(&conn, &s, "x", &pal, worse).recommend.as_deref(), Some("stay"));
+    }
+
+    /// A stat the panel's reader couldn't make out: on the IVs you have it's the box's; on a new roll it's unknown, so
+    /// that roll gets no win chance and Augur doesn't pick (it would have scored it as a 0).
+    #[test]
+    fn an_unread_stat_is_never_scored_as_a_0() {
+        let conn = augur_engine::seed::store();
+        let s = augur_engine::model::Settings::default();
+        let mut panel = augur_engine::site::parse_reroll_panel(&augur_engine::seed::page("reroll-reveal.json")).unwrap();
+        (panel.rolls[0].1[1], panel.rolls[1].1[1]) = (f64::NAN, f64::NAN);
+        let stats = [("HP", (0.0, 11.0)), ("ATK", (0.0, 31.0)), ("DEF", (0.0, 14.0))].map(|(k, v)| (k.to_string(), v)).into();
+        let pal = augur_engine::site::BoxPal { pal: "Swee".into(), id: Some("x".into()), stats, ..Default::default() };
+        let sheet = super::reroll_sheet(&conn, &s, "x", &pal, panel);
+        assert_eq!(sheet.panel.rolls[0].1, [11.0, 31.0, 14.0], "the IVs you have come from the box");
+        assert!(sheet.panel.rolls[1].1[1].is_nan() && sheet.wins[1].is_none());
+        assert_eq!(sheet.recommend, None);
     }
 
     #[test]

@@ -683,6 +683,7 @@ impl RerollForm {
 /// again soon) or has finished one (done).
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct RerollPanel {
+    /// a stat Augur couldn't read is NaN (null in JSON), never 0
     pub rolls: Vec<(String, [f64; 3])>,
     pub forms: Vec<RerollForm>,
     /// the site's flash message after a step, its status line ("Rolling your IVs…", "Kept! …"), its verdict on a
@@ -731,17 +732,18 @@ pub fn parse_reroll_panel(body: &str) -> Result<RerollPanel> {
             .last()
             .map(|l| text(&l[1]))
             .unwrap_or_default();
-        let (mut had, mut now, mut moved) = ([0.0; 3], [0.0; 3], false);
-        for die in m[2].split(r#"<li class="rr-die""#).skip(1) {
-            let Some(k) =
-                regex!(r#"rr-die-k">(\w+)</span>"#).captures(die).and_then(|k| ["HP", "ATK", "DEF"].iter().position(|s| *s == &k[1]))
+        let (mut had, mut now, mut moved) = ([f64::NAN; 3], [f64::NAN; 3], false);
+        for die in regex!(r#"(?s)<li class="rr-die(?:\s[^"]*)?"[^>]*>(.*?)</li>"#).captures_iter(&m[2]) {
+            let Some(k) = regex!(r#"(?s)rr-die-k[^"]*"[^>]*>(.*?)</span>"#)
+                .captures(&die[1])
+                .and_then(|k| ["HP", "ATK", "DEF"].iter().position(|s| *s == text(&k[1])))
             else {
                 continue;
             };
-            if let Some(c) = regex!(r"(\d+) to (\d+)").captures(die) {
-                (had[k], now[k], moved) = (c[1].parse().unwrap_or(0.0), c[2].parse().unwrap_or(0.0), true);
-            } else if let Some(v) = regex!(r#"<b class="rr-die-v">(\d+)</b>"#).captures(die) {
-                (had[k], now[k]) = (v[1].parse().unwrap_or(0.0), v[1].parse().unwrap_or(0.0));
+            if let Some(c) = regex!(r"(\d+|MAX) to (\d+|MAX)").captures(&die[1]) {
+                (had[k], now[k], moved) = (iv(&c[1]), iv(&c[2]), true);
+            } else if let Some(v) = regex!(r#"(?s)<b class="rr-die-v[^"]*"[^>]*>(.*?)</b>"#).captures(&die[1]) {
+                (had[k], now[k]) = (iv(&text(&v[1])), iv(&text(&v[1])));
             }
         }
         if moved {
@@ -785,6 +787,16 @@ pub fn parse_reroll_panel(body: &str) -> Result<RerollPanel> {
         wait: flag("wait"),
         done: flag("done"),
     })
+}
+
+/// One die's number. A maxed stat may be marked up differently or read "MAX"; anything else unreadable is NaN
+/// (null in JSON), never 0, which would score the roll as a real 0.
+fn iv(s: &str) -> f64 {
+    let s = s.trim();
+    if s.eq_ignore_ascii_case("max") {
+        return 100.0;
+    }
+    regex!(r"\d+").find(s).and_then(|n| n.as_str().parse().ok()).unwrap_or(f64::NAN)
 }
 
 /// A pal's reroll panel, read as the site's own page reads it when you open it. Changes nothing.
@@ -1416,6 +1428,21 @@ mod tests {
         assert_eq!(roll.field("pal"), Some("00000000-0000-4000-8000-000000000001"));
         assert!(p.note.contains("price doubles"));
         assert!(!(p.busy || p.sync || p.wait || p.done));
+    }
+
+    /// A maxed stat is marked up differently (made up from the site's look: extra classes, a note inside the
+    /// number); it still reads as 100, and a die that can't be read at all is NaN, never 0.
+    #[test]
+    fn reroll_panel_with_a_maxed_stat() {
+        let p = parse_reroll_panel(&page("reroll-maxed.json")).unwrap();
+        assert_eq!(p.rolls, [("Your IVs now".to_string(), [72.0, 100.0, 25.0])]);
+        assert!(p.note.starts_with("Careful: ATK is already 100"));
+
+        let html = r#"<ul class="rr-dice"><li class="rr-die"><span class="rr-die-k">HP</span><b class="rr-die-v">MAX</b></li><li class="rr-die"><span class="rr-die-k">ATK</span><b class="rr-die-v">?</b></li><li class="rr-die"><span class="rr-die-k">DEF</span><b class="rr-die-v">MAX to 61</b></li></ul>"#;
+        let odd = parse_reroll_panel(&serde_json::json!({ "html": html }).to_string()).unwrap();
+        let [(_, had), (_, now)] = &odd.rolls[..] else { panic!("a moved die makes two rolls: {:?}", odd.rolls) };
+        assert_eq!((had[0], had[2], now[0], now[2]), (100.0, 100.0, 100.0, 61.0));
+        assert!(had[1].is_nan() && now[1].is_nan(), "an unreadable die isn't a 0");
     }
 
     /// A real reroll, step by step (one pal's, its id made up): the dice spinning, the new roll against the old with the

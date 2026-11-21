@@ -2,7 +2,10 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.26 (current)
+## 0.1.27 (current)
+- The reroll panel reads a maxed stat as 100, and sending a reroll refreshes your pals
+
+## 0.1.26
 - Augur's bet on a call is the one auto bet made, the call stands once it's bet, and each call keeps a history of how it changed while picks were open
 
 ## 0.1.25

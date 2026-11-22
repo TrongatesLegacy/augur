@@ -3,7 +3,8 @@
 //! 429s in a row wait longer and longer, then end the run (the next one tries again); it pauses while a duel is up on
 //! stream, and resumes where it left off. Each page is checked against the store just
 //! before it's fetched, so an import part-way through (a backup from another computer) stops the work it covers.
-//! At launch a short catch-up fetches the duels fought while Augur was closed first, slowly but without pausing.
+//! At launch a short catch-up fetches the duels fought while Augur was closed first, slowly but without pausing, then
+//! reads again any duel stored with a date but no time (a site banner's date, taken for the fight's).
 
 use crate::db;
 use crate::error::Error;
@@ -188,7 +189,7 @@ pub fn duels(conn: &Connection, latest: u64, pacer: &mut Pacer, ctl: &Control) -
         .chain((1..TAPES_FROM.min(latest + 1)).rev())
         .filter(|i| !have.contains(i) && !missing.contains(i))
         .collect();
-    fetch_duels(conn, order, "duels", true, pacer, ctl)
+    fetch_duels(conn, order, "duels", true, false, pacer, ctl)
 }
 
 /// The most duels a catch-up fetches: about a day of streaming. More than that waits for the full run.
@@ -205,7 +206,11 @@ pub fn catch_up_ids(have: &HashSet<u64>, missing: &BTreeSet<u64>, latest: u64) -
 /// a duel is up, so the caller gives it a slow pace.
 pub fn catch_up(conn: &Connection, latest: u64, pacer: &mut Pacer, ctl: &Control) -> crate::Result<usize> {
     let order = catch_up_ids(&db::duel_ids(conn)?, &missing_duels(conn)?, latest);
-    fetch_duels(conn, order, "catchup", false, pacer, ctl)
+    let fetched = fetch_duels(conn, order, "catchup", false, false, pacer, ctl)?;
+    if ctl.stop.load(Ordering::Relaxed) || pacer.gave_up {
+        return Ok(fetched);
+    }
+    Ok(fetched + fetch_duels(conn, db::misdated_duels(conn)?, "catchup", false, true, pacer, ctl)?)
 }
 
 /// The whole backfill: species first (the Pals tab and the model need them; every species is read again once a
@@ -239,8 +244,17 @@ fn missing_duels(conn: &Connection) -> crate::Result<BTreeSet<u64>> {
     Ok(db::meta_get(conn, "missing_duels")?.and_then(|m| serde_json::from_str(&m).ok()).unwrap_or_default())
 }
 
-/// Fetches and stores each duel in `order`, reporting progress under `phase`; `pause` waits while a duel is up.
-fn fetch_duels(conn: &Connection, order: Vec<u64>, phase: &str, pause: bool, pacer: &mut Pacer, ctl: &Control) -> crate::Result<usize> {
+/// Fetches and stores each duel in `order`, reporting progress under `phase`; `pause` waits while a duel is up, and
+/// `again` reads stored duels again rather than skipping them.
+fn fetch_duels(
+    conn: &Connection,
+    order: Vec<u64>,
+    phase: &str,
+    pause: bool,
+    again: bool,
+    pacer: &mut Pacer,
+    ctl: &Control,
+) -> crate::Result<usize> {
     let mut missing = missing_duels(conn)?;
     let mut p = Progress { phase: phase.into(), total: order.len(), delay_ms: pacer.delay.as_millis() as u64, ..Default::default() };
     (ctl.progress)(&p);
@@ -248,7 +262,7 @@ fn fetch_duels(conn: &Connection, order: Vec<u64>, phase: &str, pause: bool, pac
         if (pause && !wait_while_busy(ctl, &mut p)) || ctl.stop.load(Ordering::Relaxed) {
             break;
         }
-        if db::has_duel(conn, id)? {
+        if !again && db::has_duel(conn, id)? {
             p.done += 1;
             continue;
         }

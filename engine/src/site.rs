@@ -570,7 +570,8 @@ pub fn parse_duel(page: &str) -> Duel {
             }
         }
     }
-    d.fought_at = regex!(r#"<time datetime="([^"]+)""#).captures(page).map(|c| c[1].to_string());
+    // the fight's own time is marked data-d="at": banners carry dates of their own ("Frost Fest starts Dec 1")
+    d.fought_at = regex!(r#"<time datetime="([^"]+)" data-d="at""#).captures(page).map(|c| c[1].to_string());
     d.ko = regex!(r#"<span class="stat-v">([\d:]+)</span><span class="stat-k">K.O. at</span>"#).captures(page).map(|c| c[1].to_string());
     d.winner_hp_left = regex!(r"HP (\d+)%").captures(&text(page)).and_then(|c| c[1].parse().ok());
     d
@@ -1375,6 +1376,7 @@ mod tests {
         assert_eq!(d.ko.as_deref(), Some("0:31"));
         assert_eq!(d.hits.len(), 24);
         assert_eq!(d.winner_hp_left, Some(11));
+        assert_eq!(d.fought_at.as_deref(), Some("2026-11-11T21:10:58Z"), "the fight's time, not the Frost Fest banner's date");
     }
 
     #[test]

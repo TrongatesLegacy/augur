@@ -345,6 +345,13 @@ pub fn get_duel(conn: &Connection, id: u64) -> Result<Option<Duel>> {
 }
 
 /// Whether a duel is stored (an import may have filled it in since a backfill made its list).
+/// Duels stored with a date but no time: a site banner's date was taken for the fight's (Frost Fest, Nov 2026).
+pub fn misdated_duels(conn: &Connection) -> Result<Vec<u64>> {
+    let mut st = conn.prepare("SELECT id FROM duels WHERE fought_at IS NOT NULL AND fought_at NOT LIKE '%T%' ORDER BY id DESC")?;
+    let ids = st.query_map([], |r| r.get::<_, i64>(0))?;
+    Ok(ids.map(|r| r.map(|i| i as u64)).collect::<Rq<_>>()?)
+}
+
 pub fn has_duel(conn: &Connection, id: u64) -> Result<bool> {
     Ok(conn.query_row("SELECT COUNT(*) FROM duels WHERE id = ?", [id as i64], |r| r.get::<_, i64>(0))? > 0)
 }
@@ -1123,6 +1130,17 @@ mod tests {
             stats_from: String::new(),
             version: String::new(),
         }
+    }
+
+    #[test]
+    fn duels_dated_without_a_time_are_read_again() {
+        let conn = open_memory().unwrap();
+        let at = |t: Option<&str>| Duel { fought_at: t.map(String::from), home_pal: Some("A".into()), ..Default::default() };
+        save_duel(&conn, 1, &at(Some("2026-11-21T20:50:06Z"))).unwrap();
+        save_duel(&conn, 2, &at(Some("2026-12-01"))).unwrap();
+        save_duel(&conn, 3, &at(Some("2026-12-01"))).unwrap();
+        save_duel(&conn, 4, &at(None)).unwrap();
+        assert_eq!(misdated_duels(&conn).unwrap(), [3, 2], "newest first; a duel with no date at all is left alone");
     }
 
     #[test]

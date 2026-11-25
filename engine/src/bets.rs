@@ -66,8 +66,46 @@ pub fn import(
             break; // nothing older came back: stop rather than loop
         }
     }
+    link_unclipped(conn)?;
     db::meta_set(conn, "bets_synced_at", &now_ms.to_string())?;
     Ok(out)
+}
+
+/// How far a fight can be from when its bet was first read and still be that bet's (ms). The list is read around
+/// every fight, so a few hours is generous; it keeps a first import's old bets from landing on a recent rematch.
+const LINK_WINDOW_MS: i64 = 6 * 3_600_000;
+
+/// Gives settled bets with no duel link one from the stored duels. The picks list names a bet's duel only in its
+/// clip link, and a fight without a clip (they can come late, or not at all) leaves the bet unlinked, so views by
+/// date lose it. A duel is the bet's when it has the same owners, pals and winner, was fought within
+/// `LINK_WINDOW_MS` of the bet being read, isn't another bet's, and sits between the duels of the bets before and
+/// after it (bets and duels are both numbered in order). More than one such duel: left alone, not guessed.
+/// Returns how many were linked.
+pub fn link_unclipped(conn: &Connection) -> Result<usize> {
+    let mut st = conn.prepare(
+        "SELECT b.seq, d.id,
+                (SELECT MAX(o.duel_id) FROM bets o WHERE o.seq < b.seq),
+                (SELECT MIN(o.duel_id) FROM bets o WHERE o.seq > b.seq)
+         FROM bets b JOIN duels d
+           ON d.home_owner = b.home_owner AND d.away_owner = b.away_owner AND d.home_pal = b.home_pal
+          AND d.away_pal = b.away_pal AND d.winner = b.winner AND d.fought_at LIKE '%T%'
+          AND ABS(CAST(strftime('%s', d.fought_at) AS INTEGER) * 1000 - b.seen_at) <= ?1
+         WHERE b.duel_id IS NULL AND b.result IS NOT NULL AND b.seen_at > 0
+           AND d.id NOT IN (SELECT duel_id FROM bets WHERE duel_id IS NOT NULL)
+         ORDER BY b.seq, d.id",
+    )?;
+    let found: Vec<(i64, i64, Option<i64>, Option<i64>)> =
+        st.query_map([LINK_WINDOW_MS], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?;
+    let mut taken = std::collections::HashSet::new();
+    for bet in found.chunk_by(|a, b| a.0 == b.0) {
+        let in_order: Vec<i64> =
+            bet.iter().filter(|(_, d, before, after)| before.is_none_or(|b| b < *d) && after.is_none_or(|a| *d < a)).map(|f| f.1).collect();
+        let [duel] = in_order[..] else { continue };
+        if taken.insert(duel) {
+            conn.execute("UPDATE bets SET duel_id = ?1 WHERE seq = ?2 AND duel_id IS NULL", [duel, bet[0].0])?;
+        }
+    }
+    Ok(taken.len())
 }
 
 fn read(
@@ -376,6 +414,111 @@ mod tests {
         assert_eq!(balance(&conn), Some(248_000));
         let (account, at) = account_page(&conn).unwrap();
         assert_eq!((account.balance, account.titles_earned, at), (Some(248_120), Some((16, 52)), 1_794_400_100_000));
+    }
+
+    /// A duel between two made-up owners' pals, fought `mins` after the seed's picks list was read.
+    fn duel(conn: &Connection, id: i64, mins: i64, winner: &str) {
+        let at: String = conn
+            .query_row(
+                "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', ?1, 'unixepoch')",
+                [crate::seed::BETS_READ_AT as i64 / 1000 + mins * 60],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO duels (id, fought_at, home_owner, away_owner, home_pal, away_pal, winner)
+             VALUES (?1, ?2, 'player-01', 'player-02', 'Lamball', 'Cattiva', ?3)",
+            rusqlite::params![id, at, winner],
+        )
+        .unwrap();
+    }
+
+    /// A settled bet on that pairing as the picks list shows it, with or without a clip.
+    fn pick(seq: u64, winner: &str, duel_id: Option<u64>) -> Pick {
+        Pick {
+            seq,
+            duel_id,
+            home_owner: "player-01".into(),
+            away_owner: "player-02".into(),
+            home_pal: "Lamball".into(),
+            away_pal: "Cattiva".into(),
+            backed: "home".into(),
+            winner: Some(winner.into()),
+            stake: 500,
+            result: Some(if winner == "home" { 150 } else { -500 }),
+            ..Default::default()
+        }
+    }
+
+    fn link_of(conn: &Connection, seq: u64) -> Option<u64> {
+        db::bets(conn).unwrap().iter().find(|b| b.seq == seq).unwrap().duel_id
+    }
+
+    #[test]
+    fn a_row_with_no_clip_names_no_duel() {
+        let page = crate::seed::page("picks-page-1.html");
+        let no_clips = regex::Regex::new(r#"(?s)<a class="clip-i".*?</a>"#).unwrap().replace_all(&page, "");
+        let (with, without) = (site::parse_picks(&page).unwrap().picks, site::parse_picks(&no_clips).unwrap().picks);
+        assert!(with.iter().all(|p| p.duel_id.is_some()) && without.iter().all(|p| p.duel_id.is_none()));
+        let unlinked: Vec<Pick> = with.iter().cloned().map(|p| Pick { duel_id: None, ..p }).collect();
+        assert_eq!(without, unlinked, "the rest of the row reads the same");
+    }
+
+    #[test]
+    fn a_bet_with_no_clip_takes_its_duels_id_and_keeps_it() {
+        let conn = seeded();
+        let now = crate::seed::BETS_READ_AT + 60_000;
+        duel(&conn, 9101, -2, "home");
+        assert_eq!(db::save_picks(&conn, &[pick(14, "home", None)], now).unwrap(), 1);
+        assert_eq!((link_unclipped(&conn).unwrap(), link_of(&conn, 14)), (1, Some(9101)));
+        // read again, still with no clip: nothing new, and the link stays
+        assert_eq!(db::save_picks(&conn, &[pick(14, "home", None)], now + 1).unwrap(), 0);
+        assert_eq!((link_unclipped(&conn).unwrap(), link_of(&conn, 14)), (0, Some(9101)));
+        // the site's own link, once the clip is there, is the one kept
+        assert_eq!(db::save_picks(&conn, &[pick(14, "home", Some(9102))], now + 2).unwrap(), 1);
+        assert_eq!(link_of(&conn, 14), Some(9102));
+    }
+
+    #[test]
+    fn a_rematch_is_never_guessed() {
+        let conn = seeded();
+        let now = crate::seed::BETS_READ_AT + 60_000;
+        for (id, mins, winner) in [(9101, -90, "home"), (9102, -50, "away"), (9103, -2, "home")] {
+            duel(&conn, id, mins, winner);
+        }
+        db::save_picks(&conn, &[pick(14, "home", None), pick(15, "away", None)], now).unwrap();
+        // the lost one has one fight it can be; the won one has two
+        assert_eq!(link_unclipped(&conn).unwrap(), 1);
+        assert_eq!((link_of(&conn, 14), link_of(&conn, 15)), (None, Some(9102)));
+        // which leaves the earlier win as the only one before it
+        assert_eq!((link_unclipped(&conn).unwrap(), link_of(&conn, 14)), (1, Some(9101)));
+        // and a later bet on the third fight can't take a duel that's another bet's
+        db::save_picks(&conn, &[pick(16, "home", None)], now).unwrap();
+        assert_eq!((link_unclipped(&conn).unwrap(), link_of(&conn, 16)), (1, Some(9103)));
+    }
+
+    #[test]
+    fn old_bets_and_far_off_fights_stay_unlinked() {
+        let conn = seeded();
+        // seq 3 is one of the seed's old bets with no link; the bets after it are on duels 8001 and up
+        let old = db::bets(&conn).unwrap().into_iter().find(|b| b.seq == 3).unwrap();
+        assert_eq!(old.duel_id, None);
+        conn.execute(
+            "INSERT INTO duels (id, fought_at, home_owner, away_owner, home_pal, away_pal, winner)
+             SELECT 9500, strftime('%Y-%m-%dT%H:%M:%SZ', seen_at / 1000 - 60, 'unixepoch'), home_owner, away_owner, home_pal, away_pal, winner
+             FROM bets WHERE seq = 3",
+            [],
+        )
+        .unwrap();
+        assert_eq!((link_unclipped(&conn).unwrap(), link_of(&conn, 3)), (0, None), "a newer duel than the next bet's");
+        duel(&conn, 9101, -7 * 60, "home");
+        db::save_picks(&conn, &[pick(14, "home", None)], crate::seed::BETS_READ_AT).unwrap();
+        assert_eq!((link_unclipped(&conn).unwrap(), link_of(&conn, 14)), (0, None), "fought 7 hours before the read");
+        // a bet whose fight is still on has no winner to check yet
+        let conn = seeded();
+        duel(&conn, 9102, -1, "home");
+        db::save_picks(&conn, &[Pick { result: None, winner: None, ..pick(15, "home", None) }], crate::seed::BETS_READ_AT).unwrap();
+        assert_eq!((link_unclipped(&conn).unwrap(), link_of(&conn, 15)), (0, None));
     }
 
     #[test]

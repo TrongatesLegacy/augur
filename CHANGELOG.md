@@ -2,7 +2,10 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.28 (current)
+## 0.1.29 (current)
+- Your bets counts a bet under Today even when its fight has no clip yet
+
+## 0.1.28
 - History counts each call on the day it was fought, not 1 December
 
 ## 0.1.27

@@ -870,13 +870,14 @@ pub fn save_picks(conn: &Connection, picks: &[Pick], now_ms: u64) -> Result<usiz
     for p in picks {
         let before: Option<(Option<i64>, Option<i64>)> =
             conn.query_row("SELECT result, duel_id FROM bets WHERE seq = ?", [p.seq as i64], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
-        if before.is_some_and(|(result, duel)| result == p.result && duel.map(|d| d as u64) == p.duel_id) {
+        // a row with no clip names no duel: that's no news, not a link to drop (`bets::link_unclipped` may have made one)
+        if before.is_some_and(|(result, duel)| result == p.result && (p.duel_id.is_none() || duel.map(|d| d as u64) == p.duel_id)) {
             continue;
         }
         conn.execute(
             "INSERT INTO bets (seq, duel_id, home_owner, away_owner, home_pal, away_pal, backed, winner, stake, result, seen_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) ON CONFLICT (seq) DO UPDATE SET
-             duel_id = excluded.duel_id, winner = excluded.winner, result = excluded.result",
+             duel_id = COALESCE(excluded.duel_id, bets.duel_id), winner = excluded.winner, result = excluded.result",
             params![
                 p.seq as i64,
                 p.duel_id.map(|d| d as i64),

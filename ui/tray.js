@@ -73,7 +73,7 @@ function render() {
     const auto = besideCopy(state.auto);
     const bet = view.stake ? stakeLine(view.stake) : `<div class="bet"><div><b>${esc(command)}</b></div></div>`;
     el.innerHTML = `<div class="hd"><span><i></i>${view.live ? 'FIGHT ON' : 'PICKS OPEN'}</span><span class="c">${p.home.estimated || p.away.estimated ? 'STATS GUESSED' : esc(p.tale.verdict)}</span></div>${card}
-      <div class="call"><div><div class="who">${esc(fav.pal)}</div><div class="vs">over <b>${esc(dog.pal)}</b></div><div class="small">${esc(p.home.owner)} vs ${esc(p.away.owner)}</div><div class="why">${esc(whyLine(p))}</div></div>${dial(p.prob, 84)}</div>
+      <div class="call"><div><div class="who">${esc(fav.pal)}</div><div class="vs">over <b>${esc(dog.pal)}</b></div><div class="small">${esc(p.home.owner)} vs ${esc(p.away.owner)}</div><div class="why">${esc(whyLine(p))}</div></div>${dial(p.prob, 84, state.auto?.enabled ? state.auto.bars : [])}</div>
       <div class="stats">${tapeRows(p)}</div>
       <div class="betrow">${bet}${auto.note}${command ? `<button class="btn ghost${auto.dim ? ' dim' : ''}" id="cb"${auto.dim ? ' title="Auto bet already in for this fight: copying would bet it twice"' : ''}>Copy bet</button>` : ''}</div>
       ${settings?.chat_lines === false ? '' : `<div class="say"><div class="vo" id="vb">${voices.map((v) => `<button class="${v === voice ? 'on' : ''}" data-v="${esc(v)}">${esc(SHORT[v] || v)}</button>`).join('')}</div>

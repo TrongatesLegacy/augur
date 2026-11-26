@@ -1,6 +1,6 @@
 // Pieces both windows draw: a pal's orb, the chance dial, the tale of the tape, the reason line and the voices.
 import { invoke } from './bridge.js';
-import { esc, fmt, initials, pct } from './format.js';
+import { chanceText, esc, fmt, initials, pct } from './format.js';
 
 export const VOICES = ['Yoda', 'Gollum', 'Dr. Rockso', 'Scooby-Doo', 'Daffy Duck'];
 export const SHORT = { Yoda: 'Yoda', Gollum: 'Gollum', 'Dr. Rockso': 'Rockso', 'Scooby-Doo': 'Scooby', 'Daffy Duck': 'Daffy' };
@@ -42,12 +42,17 @@ async function loadArt([cmd, args], id) {
   if (url && el) el.querySelector('span:not(.crown)')?.replaceWith(Object.assign(document.createElement('img'), { src: url, alt: '' }));
 }
 
-export function dial(p, size) {
+export function dial(p, size, bars = []) {
   const r = 50;
   const c = 2 * Math.PI * r;
-  // the chance sized to the dial, smaller for 100%, so it keeps clear of the ring
-  const fit = Math.min(0.31, 0.95 / pct(p).length).toFixed(3);
-  return `<div class="dialw" style="width:${size}px;height:${size}px;--s:${size}px;--f:${fit}"><svg width="${size}" height="${size}" viewBox="0 0 120 120" aria-label="${pct(p)} chance"><circle cx="60" cy="60" r="${r}" fill="none" stroke="rgba(255,92,168,.22)" stroke-width="8"/><circle cx="60" cy="60" r="${r}" fill="none" stroke="#ffcf6b" stroke-width="8" stroke-linecap="round" stroke-dasharray="${(c * p).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 60 60)"/></svg><b>${pct(p)}</b></div>`;
+  const text = chanceText(p, bars);
+  // a tenth (74.9%) is set smaller than the whole percent, so the number stays big and the tenth reads as the detail
+  const [whole, tenth] = text.replace('%', '').split('.');
+  const shown = tenth == null ? text : `${whole}<i>.${tenth}</i>%`;
+  // the chance sized to the dial, smaller for 100% or a tenth, so it keeps clear of the ring (the tenth's two
+  // characters count about two thirds each at their smaller size)
+  const fit = Math.min(0.31, 0.95 / (whole.length + 1 + (tenth == null ? 0 : 1.3))).toFixed(3);
+  return `<div class="dialw" style="width:${size}px;height:${size}px;--s:${size}px;--f:${fit}"><svg width="${size}" height="${size}" viewBox="0 0 120 120" aria-label="${text} chance"><circle cx="60" cy="60" r="${r}" fill="none" stroke="rgba(255,92,168,.22)" stroke-width="8"/><circle cx="60" cy="60" r="${r}" fill="none" stroke="#ffcf6b" stroke-width="8" stroke-linecap="round" stroke-dasharray="${(c * p).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 60 60)"/></svg><b>${shown}</b></div>`;
 }
 
 // The tale of the tape rows: home value, bar, label, bar, away value.

@@ -4,6 +4,11 @@ const ENTITIES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '
 
 export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ENTITIES[c]);
 export const pct = (p) => `${Math.round(p * 100)}%`;
+// A call's chance: a whole percent, or to a tenth (rounded down) when it's within half a point of one of `bars`, the
+// chances auto bet holds calls to, so a call just under a bar never shows as the bar. The engine's
+// `autobet::chance_text` has the same rule.
+export const chanceText = (p, bars = []) =>
+  (bars || []).some((b) => Math.abs(p - b) < 0.005) ? `${(Math.floor(p * 1000 + 1e-6) / 10).toFixed(1)}%` : pct(p);
 export const fmt = (n) => (n == null ? '—' : Number(n).toLocaleString('en-GB', { maximumFractionDigits: 0 }));
 // "just now", "5 min ago", "3h ago", "2d ago" for a time in ms ("never" without one)
 export function ago(ms) {

@@ -76,13 +76,13 @@ function notes(d, lead = '', stream = '') {
 // right or missed; Live: the bet), line under the dial (History: how it ended; Live: why the bet), then the notes
 // (lead first).
 // chance: the dial's, when it isn't the call's own (Live shows the chance as it stands)
-export function headline(d, { verdict = '', line = '', extra = '', lead = '', stream = '', chance } = {}) {
+export function headline(d, { verdict = '', line = '', extra = '', lead = '', stream = '', chance, bars = [] } = {}) {
   const c = d.call;
   // each pal's art fades in from its own side; before the bell the side Augur didn't pick is dimmed, after it the loser
   const lit = (s) => (pending(c) ? c.pick === s : c.winner === s);
   const backdrop = SIDES.map((s, i) => art(pal(c, s), d.slugs[i], `${s}${lit(s) ? '' : ' off'}`)).join('');
   return `<div class="stage cstage${pending(c) ? ' pending' : ''}">${backdrop}${side(d, 'home')}
-    <div class="cmid"><div class="cverdict">${dial(chance ?? c.prob, 80)}<div>
+    <div class="cmid"><div class="cverdict">${dial(chance ?? c.prob, 80, pending(c) ? bars : [])}<div>
       <div class="cpick"><span class="label">${pending(c) ? 'Augur calls' : 'Augur called'}</span><b>${esc(pal(c, c.pick))}</b></div>${verdict}</div></div>
       ${line ? `<div class="cwon">${line}</div>` : ''}${extra}${notes(d, lead, stream)}</div>
     ${side(d, 'away')}</div>`;

@@ -47,6 +47,13 @@ pub struct AutoBetSettings {
     pub read_stream: bool,
 }
 
+impl AutoBetSettings {
+    /// The chances a call is held to: the lowest chance, and the one for hidden stats when that's set.
+    pub fn bars(&self) -> Vec<f64> {
+        std::iter::once(self.min_chance).chain(self.hidden_stats_from).collect()
+    }
+}
+
 impl Default for AutoBetSettings {
     fn default() -> Self {
         AutoBetSettings {
@@ -167,18 +174,18 @@ fn waiting_on(s: &AutoBetSettings, m: &Moment) -> Option<(String, String)> {
     let (now, was) = if m.amount == 0 {
         ("Augur says sit it out".into(), "Augur still said sit it out".into())
     } else if m.prob < s.min_chance {
-        let (p, min) = (m.prob * 100.0, s.min_chance * 100.0);
-        (format!("{p:.0}% is under your {min:.0}% minimum"), format!("{p:.0}% was still under your {min:.0}% minimum"))
+        let (p, min) = (chance_text(m.prob, &s.bars()), s.min_chance * 100.0);
+        (format!("{p} is under your {min:.0}% minimum"), format!("{p} was still under your {min:.0}% minimum"))
     } else if m.estimated && m.stream_pending && m.open_ms + STREAM_FALLBACK_MS < s.latest_secs * 1000 {
         ("waiting for the stream to show the hidden stats".into(), "the stream hadn't shown the hidden stats".into())
     } else if m.estimated && s.hidden_stats_from.is_none_or(|from| m.prob < from) {
         match s.hidden_stats_from {
             None => ("some stats are still hidden".into(), "some stats were still hidden".into()),
             Some(from) => {
-                let (p, from) = (m.prob * 100.0, from * 100.0);
+                let (p, from) = (chance_text(m.prob, &s.bars()), from * 100.0);
                 (
-                    format!("{p:.0}% with hidden stats is under your {from:.0}% for hidden stats"),
-                    format!("{p:.0}% with hidden stats was still under your {from:.0}% for hidden stats"),
+                    format!("{p} with hidden stats is under your {from:.0}% for hidden stats"),
+                    format!("{p} with hidden stats was still under your {from:.0}% for hidden stats"),
                 )
             }
         }
@@ -189,6 +196,21 @@ fn waiting_on(s: &AutoBetSettings, m: &Moment) -> Option<(String, String)> {
     };
     Some((now, was))
 }
+
+/// A chance as Augur shows it: a whole percent, or to a tenth when it's within `NEAR_BAR` of one of `bars` (the
+/// chances auto bet compares it with). The tenth is rounded down, so a call just under a bar never shows as the bar:
+/// 74.96% shows as 74.9%, not 75%. `ui/lib/format.js` has the same rule as `chanceText`.
+pub fn chance_text(p: f64, bars: &[f64]) -> String {
+    if bars.iter().any(|b| (p - b).abs() < NEAR_BAR) {
+        // a hair over, so 0.29 (28.999… in floating point) stays 29.0
+        format!("{:.1}%", ((p * 1000.0) + 1e-6).floor() / 10.0)
+    } else {
+        format!("{:.0}%", p * 100.0)
+    }
+}
+
+/// How near a bar a chance has to be to show its tenth: half a point, where a whole percent could land either side.
+pub const NEAR_BAR: f64 = 0.005;
 
 // --- the record ---
 
@@ -612,6 +634,22 @@ mod tests {
     }
 
     #[test]
+    fn a_chance_near_a_bar_shows_its_tenth() {
+        let bars = [0.65, 0.75];
+        assert_eq!(chance_text(0.7496, &bars), "74.9%", "just under the bar never shows as the bar");
+        assert_eq!(chance_text(0.75, &bars), "75.0%");
+        assert_eq!(chance_text(0.7531, &bars), "75.3%");
+        assert_eq!(chance_text(0.6461, &bars), "64.6%");
+        assert_eq!(chance_text(0.744, &bars), "74%", "half a point off or more: a whole percent");
+        assert_eq!(chance_text(0.81, &bars), "81%");
+        assert_eq!(chance_text(0.29, &[0.29]), "29.0%", "floating point doesn't knock it down a tenth");
+        assert_eq!(chance_text(0.7496, &[]), "75%", "no bars: whole percents");
+        let s = AutoBetSettings { min_chance: 0.7, hidden_stats_from: Some(0.75), ..Default::default() };
+        assert_eq!(s.bars(), [0.7, 0.75]);
+        assert_eq!(AutoBetSettings { hidden_stats_from: None, ..s }.bars(), [0.7]);
+    }
+
+    #[test]
     fn hidden_stats_need_the_higher_bar() {
         let s = AutoBetSettings::default();
         let hidden = Moment { estimated: true, ..moment() };
@@ -620,6 +658,9 @@ mod tests {
         // the usual minimum still comes first
         let Decision::Wait { now, .. } = decide(&s, &Moment { prob: 0.60, ..hidden.clone() }) else { panic!("waits") };
         assert_eq!(now, "60% is under your 65% minimum");
+        // just under the bar: the tenth shows, so it doesn't read "75% is under your 75%"
+        let Decision::Wait { now, .. } = decide(&s, &Moment { prob: 0.7496, ..hidden.clone() }) else { panic!("waits") };
+        assert_eq!(now, "74.9% with hidden stats is under your 75% for hidden stats");
         // never: hidden stats wait whatever the chance, and say so
         let never = AutoBetSettings { hidden_stats_from: None, ..s.clone() };
         let Decision::Wait { now, was } = decide(&never, &Moment { prob: 0.95, ..hidden.clone() }) else { panic!("waits") };

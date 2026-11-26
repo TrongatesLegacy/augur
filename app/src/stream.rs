@@ -24,8 +24,13 @@ use augur_engine::{db, rusqlite};
 const STREAM: &str = "kickstream";
 /// How often a frame is read while a hidden side's stats are wanted.
 const READ_EVERY: Duration = Duration::from_secs(5);
-/// Further behind live than this (seconds), twice running, and the player is loaded again, which starts it at live.
-const LAG_MAX: f64 = 8.0;
+/// How often the player is asked how far behind live it is, whenever it's open.
+const LAG_EVERY: Duration = Duration::from_secs(3);
+
+/// Whether a webview is the stream's player (its storage is its own: see `player`).
+pub fn is_player(label: &str) -> bool {
+    label == STREAM
+}
 
 /// What Live shows about the stream reader.
 #[derive(Clone, Debug, Default, Serialize)]
@@ -36,8 +41,9 @@ pub struct StreamView {
     /// the hidden side it's reading, and what it read
     pub side: Option<String>,
     pub stats: Option<[u32; 3]>,
-    /// how far behind live the player is (seconds), at the last frame
+    /// how far behind live the player is (seconds) and the height of what it's playing (1080), as last asked
     pub latency: Option<f64>,
+    pub height: Option<u32>,
     /// the fights with hidden stats in a row it couldn't read, and the warning once that's `MISSES_TO_WARN`
     pub misses: u32,
     pub warning: Option<String>,
@@ -52,7 +58,9 @@ pub struct StreamState {
     /// where Live wants the player, when it's showing
     pub spot: Option<(LogicalPosition<f64>, LogicalSize<f64>)>,
     attempt: Option<Attempt>,
-    lagging: u32,
+    lag_asked: Option<Instant>,
+    /// the fight the player was last loaded for: it's loaded again once a fight, between duels
+    loaded_for: String,
 }
 
 #[derive(Clone, Debug)]
@@ -74,6 +82,7 @@ struct Attempt {
     why: String,
     shot: Option<String>,
     latency: Option<f64>,
+    height: Option<u32>,
     last: Option<Instant>,
 }
 
@@ -138,6 +147,7 @@ pub fn stream_loop(app: AppHandle, shared: Arc<Shared>) {
             set_view(&app, &shared, |v| (v.status, v.message, v.side, v.stats) = (status.into(), String::new(), None, None));
             continue;
         }
+        let existed = app.get_webview(STREAM).is_some();
         let w = match player(&app, &shared, &s.channel) {
             Ok(w) => w,
             Err(e) => {
@@ -145,6 +155,30 @@ pub fn stream_loop(app: AppHandle, shared: Arc<Shared>) {
                 continue;
             }
         };
+        // once between duels: Kick's player drifts behind live, and loading it again starts it at live (one just
+        // made is fresh already)
+        let reload = {
+            let mut st = shared.stream.lock().unwrap();
+            let new_fight = !key.is_empty() && st.loaded_for != key;
+            if new_fight || !existed {
+                st.loaded_for = key.clone();
+            }
+            new_fight && existed
+        };
+        if reload {
+            if let Ok(url) = tauri::Url::parse(&player_url(&s.channel)) {
+                let _ = w.navigate(url);
+            }
+        }
+        // each time it's loaded, it's checked to be logged out
+        if (reload || !existed) && !logged_out(&w) {
+            let _ = w.close();
+            set_view(&app, &shared, |v| {
+                (v.status, v.message) = ("idle".into(), "The stream's player had a Kick sign-in, so it was closed".into())
+            });
+            continue;
+        }
+        ask_lag(&app, &shared, &w);
         let (Some(p), Some(side)) = (p, hidden) else {
             // the read stays up for the fight it was for
             let read = reading_for(&shared, &key).is_some();
@@ -168,6 +202,7 @@ pub fn stream_loop(app: AppHandle, shared: Arc<Shared>) {
                     why: "the stream hadn't been read yet".into(),
                     shot: None,
                     latency: None,
+                    height: None,
                     last: None,
                 });
             }
@@ -195,6 +230,7 @@ struct Frame {
     crop: Crop,
     shot: Option<Vec<u8>>,
     latency: Option<f64>,
+    height: Option<u32>,
 }
 
 /// Grabs a frame from the player: the panel's part scaled to 1080p, and the whole frame (smaller) to keep.
@@ -207,7 +243,12 @@ fn capture(w: &tauri::Webview) -> Result<Frame, String> {
     let rgba = b64.decode(v["panel"].as_str().unwrap_or("")).map_err(|e| e.to_string())?;
     let (_, _, pw, ph) = stream::PANEL;
     let shot = v["shot"].as_str().and_then(|s| s.split_once(',')).and_then(|(_, data)| b64.decode(data).ok());
-    Ok(Frame { crop: Crop { w: pw as usize, h: ph as usize, rgba }, shot, latency: v["latency"].as_f64() })
+    Ok(Frame {
+        crop: Crop { w: pw as usize, h: ph as usize, rgba },
+        shot,
+        latency: v["latency"].as_f64(),
+        height: v["height"].as_u64().map(|h| h as u32),
+    })
 }
 
 fn read_frame(
@@ -221,8 +262,8 @@ fn read_frame(
 ) {
     let shown_key = if side == "home" { "away" } else { "home" };
     let shown = stats_of(if side == "home" { &p.away } else { &p.home });
-    let (why, shot, latency) = match frame {
-        Err(e) => (format!("no picture from the stream ({e})"), None, None),
+    let (why, shot, latency, height) = match frame {
+        Err(e) => (format!("no picture from the stream ({e})"), None, None, None),
         Ok(f) => {
             let check = stream::check(stream::read(&f.crop).as_ref(), (shown_key, shown));
             let why = match &check {
@@ -245,56 +286,41 @@ fn read_frame(
                             stats: stream::stats_text(*stats),
                             detail: String::new(),
                             latency: f.latency,
+                            height: f.height,
                             shot,
                         },
                     );
                     let mut st = shared.stream.lock().unwrap();
                     st.reading = Some(Reading { key: key.into(), side: side.into(), stats: *stats, call_id, compared: false });
                     st.attempt = None;
-                    st.lagging = 0;
                     drop(st);
                     set_view(app, shared, |v| {
                         v.status = "read".into();
                         v.message = format!("Read the {side} side's stats off the stream: {}", stream::stats_text(*stats));
                         (v.side, v.stats) = (Some(side.into()), Some(*stats));
-                        v.latency = f.latency;
                         (v.misses, v.warning) = (0, None);
                     });
                     return;
                 }
             };
-            (why, f.shot, f.latency)
+            // a low-quality picture is worth knowing about a miss
+            let why = match f.height.filter(|h| *h < 720) {
+                Some(h) => format!("{why} (the stream was only {h}p)"),
+                None => why,
+            };
+            (why, f.shot, f.latency, f.height)
         }
     };
     // still trying: keep how it went (and the frame) for the record if picks close without a read
-    let behind = latency.is_some_and(|l| l > LAG_MAX);
-    let reload = {
-        let mut st = shared.stream.lock().unwrap();
-        st.lagging = if behind { st.lagging + 1 } else { 0 };
-        if let Some(a) = st.attempt.as_mut() {
-            a.why = why.clone();
-            a.latency = latency;
-            a.last = Some(Instant::now());
-            if let Some(b) = shot {
-                a.shot = Some(base64::engine::general_purpose::STANDARD.encode(b));
-            }
+    if let Some(a) = shared.stream.lock().unwrap().attempt.as_mut() {
+        a.why = why.clone();
+        (a.latency, a.height) = (latency, height);
+        a.last = Some(Instant::now());
+        if let Some(b) = shot {
+            a.shot = Some(base64::engine::general_purpose::STANDARD.encode(b));
         }
-        st.lagging >= 2
-    };
-    if reload {
-        // the player fell behind live: loading it again starts it at live
-        if let Some(w) = app.get_webview(STREAM) {
-            let channel = shared.settings.lock().unwrap().auto_bet.channel.clone();
-            if let Ok(url) = tauri::Url::parse(&player_url(&channel)) {
-                let _ = w.navigate(url);
-            }
-        }
-        shared.stream.lock().unwrap().lagging = 0;
     }
-    set_view(app, shared, |v| {
-        v.message = format!("Watching the stream for the hidden stats: {why}");
-        v.latency = latency;
-    });
+    set_view(app, shared, |v| v.message = format!("Watching the stream for the hidden stats: {why}"));
 }
 
 /// Picks closed (or the fight went) without a read: into the call's history with why and the last frame, and Live
@@ -316,6 +342,7 @@ fn missed(app: &AppHandle, shared: &Shared, conn: &rusqlite::Connection, a: &Att
             stats: String::new(),
             detail: a.why.clone(),
             latency: a.latency,
+            height: a.height,
             shot,
         },
     );
@@ -357,13 +384,27 @@ fn compare_at_bell(shared: &Shared, conn: &rusqlite::Connection, p: &Prediction,
             } else {
                 format!("the stream showed {}, the site {}", stream::stats_text(r.stats), stream::stats_text(site))
             },
-            latency: None,
+            latency: shared.stream.lock().unwrap().view.latency,
+            height: shared.stream.lock().unwrap().view.height,
             shot: None,
         },
     );
     if let Some(x) = shared.stream.lock().unwrap().reading.as_mut() {
         x.compared = true;
     }
+}
+
+/// Asks the player every few seconds how far behind live it is and what quality it's playing, for Live and the
+/// reads' record.
+fn ask_lag(app: &AppHandle, shared: &Shared, w: &tauri::Webview) {
+    let due = shared.stream.lock().unwrap().lag_asked.is_none_or(|at| at.elapsed() >= LAG_EVERY);
+    if !due {
+        return;
+    }
+    shared.stream.lock().unwrap().lag_asked = Some(Instant::now());
+    let v = eval(w, LAG.to_string(), Duration::from_secs(2)).unwrap_or_default();
+    let (latency, height) = (v["latency"].as_f64(), v["height"].as_u64().map(|h| h as u32));
+    set_view(app, shared, |view| (view.latency, view.height) = (latency.map(|l| (l * 10.0).round() / 10.0), height));
 }
 
 // --- the player ---
@@ -383,13 +424,20 @@ fn player(app: &AppHandle, shared: &Shared, channel: &str) -> Result<tauri::Webv
     let window = crate::app::main_window(app).ok_or("no main window")?;
     let url = tauri::Url::parse(&player_url(channel)).map_err(|e| e.to_string())?;
     let builder = WebviewBuilder::new(STREAM, WebviewUrl::External(url))
-        // its own browser storage, gone when it closes: never signed in to Kick
+        // its own browser storage, gone when it closes, apart from the chat's and the sign-in's: never signed in to
+        // Kick (checked each time it's used: `logged_out`)
         .incognito(true)
         .initialization_script(KEEP_PLAYING);
     let (pos, size) = spot.unwrap_or(SPECK);
     let w = window.add_child(builder, pos, size).map_err(|e| e.to_string())?;
     put(&w, spot);
     Ok(w)
+}
+
+/// The player must watch logged out (it would count as your Kick account, against Pear Drops' watching): its own
+/// storage never has a Kick sign-in. If it ever does, it's closed rather than used.
+fn logged_out(w: &tauri::Webview) -> bool {
+    !crate::autobet::signed_in_here(w)
 }
 
 /// Where the player waits while Live isn't showing it: two pixels in the window's corner.
@@ -402,8 +450,9 @@ fn put(w: &tauri::Webview, spot: Option<(LogicalPosition<f64>, LogicalSize<f64>)
     let _ = w.show();
 }
 
-/// Run in the player's page: keeps it playing, at its best quality (Kick's embed caps itself at 720p; its Amazon IVS
-/// player, found from the <video> as Stream Multiview finds it, takes a higher cap), and keeps the player to hand.
+/// Run in the player's page: keeps it playing, pinned to its best quality (Kick's embed caps itself at 720p; its Amazon
+/// IVS player, found from the <video> as Stream Multiview finds it, takes a quality set outright), and keeps the
+/// player to hand.
 const KEEP_PLAYING: &str = r#"(function () {
   var isPlayer = function (o) { return !!o && typeof o === 'object' && typeof o.setAutoMaxQuality === 'function' && typeof o.getQualities === 'function'; };
   var find = function () {
@@ -428,12 +477,11 @@ const KEEP_PLAYING: &str = r#"(function () {
       var p = window.__augurPlayer && window.__augurPlayer.getQualities ? window.__augurPlayer : find();
       if (!p) return;
       window.__augurPlayer = p;
+      // pinned to the best it has (it stops choosing for itself, so it never drops to a picture too small to read);
+      // set again whenever it isn't playing that, as Kick's player puts its own choice back when it loads again
       var all = (p.getQualities() || []).slice().sort(function (a, b) { return b.height - a.height; });
-      if (all.length && p.__augurCap !== all[0].name) {
-        if (p.setAutoQualityMode && p.isAutoQualityMode && !p.isAutoQualityMode()) p.setAutoQualityMode(true);
-        p.setAutoMaxQuality(all[0]);
-        p.__augurCap = all[0].name;
-      }
+      var now = p.getQuality && p.getQuality();
+      if (all.length && (!now || now.name !== all[0].name || (p.isAutoQualityMode && p.isAutoQualityMode()))) p.setQuality(all[0], false);
     } catch (e) {}
   }, 3000);
 })();"#;
@@ -456,10 +504,18 @@ const CAPTURE: &str = r#"(function () {
     shot.getContext('2d').drawImage(v, 0, 0, 960, 540);
     var p = window.__augurPlayer, latency = null;
     try { latency = p && p.getLiveLatency ? p.getLiveLatency() : null; } catch (e) {}
-    return { ok: true, latency: latency, panel: btoa(s), shot: shot.toDataURL('image/jpeg', 0.8) };
+    return { ok: true, latency: latency, height: v.videoHeight, panel: btoa(s), shot: shot.toDataURL('image/jpeg', 0.8) };
   } catch (e) {
     return { ok: false, err: String(e) };
   }
+})()"#;
+
+/// Run in the player's page: how far behind live it is (the player's own measure: what it's showing against the newest
+/// of the stream it has been sent) and the height of the picture.
+const LAG: &str = r#"(function () {
+  var v = document.querySelector('video'), p = window.__augurPlayer, latency = null;
+  try { latency = p && p.getLiveLatency ? p.getLiveLatency() : null; } catch (e) {}
+  return { latency: latency, height: v && v.videoHeight ? v.videoHeight : null };
 })()"#;
 
 fn capture_js() -> String {

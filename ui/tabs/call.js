@@ -27,7 +27,8 @@ function streamReads(d) {
   const first = rs.find((r) => r.outcome === 'read' || r.outcome === 'missed');
   if (!first) return '';
   const bell = rs.find((r) => r.outcome === 'agreed' || r.outcome === 'differed');
-  const behind = first.latency != null ? ` (${first.latency.toFixed(1)}s behind live)` : '';
+  const how = [first.height ? `${first.height}p` : '', first.latency != null ? `${first.latency.toFixed(1)}s behind live` : ''].filter(Boolean).join(', ');
+  const behind = how ? ` (${how})` : '';
   const read = first.outcome === 'read';
   const said = read ? `Read the ${first.side} side off the stream: ${first.stats}${behind}` : `Couldn't read the ${first.side} side off the stream: ${first.detail}${behind}`;
   const atBell = !bell ? '' : bell.outcome === 'agreed' ? '. The site agreed at the bell' : `. At the bell ${bell.detail}`;

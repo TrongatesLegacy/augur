@@ -329,6 +329,7 @@ pub fn fixture_data() -> Value {
             message: "Read the away side's stats off the stream: 5072/661/677".into(),
             side: Some("away".into()),
             stats: Some([5072, 661, 677]),
+            height: Some(1080),
             latency: Some(1.6),
             ..Default::default()
         },

@@ -98,11 +98,21 @@ fn has_session(cookies: &[tauri::webview::Cookie<'static>]) -> bool {
     cookies.iter().any(|c| c.name() == "session_token" && !c.value().is_empty())
 }
 
-/// Reads Kick's cookies from any of Augur's webviews (they share one store). Never on the UI thread: that deadlocks
-/// WebView2.
+/// Any of Augur's webviews that share the signed-in browser storage: all but the stream's player, which has storage
+/// of its own so it watches logged out.
+fn signed_in_view(app: &AppHandle) -> Option<tauri::Webview> {
+    app.webviews().into_iter().find(|(label, _)| !crate::stream::is_player(label)).map(|(_, w)| w)
+}
+
+/// Reads Kick's cookies from the signed-in browser storage. Never on the UI thread: that deadlocks WebView2.
 fn kick_cookies(app: &AppHandle) -> Vec<tauri::webview::Cookie<'static>> {
     let url = tauri::Url::parse(KICK).unwrap();
-    app.webviews().values().next().and_then(|w| w.cookies_for_url(url).ok()).unwrap_or_default()
+    signed_in_view(app).and_then(|w| w.cookies_for_url(url).ok()).unwrap_or_default()
+}
+
+/// Whether a webview's own storage has a Kick sign-in (the stream's player must never).
+pub(crate) fn signed_in_here(w: &tauri::Webview) -> bool {
+    w.cookies_for_url(tauri::Url::parse(KICK).unwrap()).is_ok_and(|c| has_session(&c))
 }
 
 /// Whether this computer is signed in to Kick, checked at most every 30 seconds.
@@ -207,7 +217,7 @@ pub async fn kick_sign_in(app: AppHandle) -> Cmd<()> {
 pub async fn kick_sign_out(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>) -> Cmd<()> {
     let handle = app.clone();
     std::thread::spawn(move || {
-        if let Some(w) = handle.webviews().values().next() {
+        if let Some(w) = signed_in_view(&handle) {
             for c in kick_cookies(&handle) {
                 let _ = w.delete_cookie(c);
             }

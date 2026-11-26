@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS stream_reads (  -- the stream read for a call with hi
     stats TEXT,                        -- what the stream showed for it: "6270/464/797"
     detail TEXT,                       -- in words: why it missed, or what differed
     latency REAL,                      -- how far the player was behind live (seconds)
+    height INTEGER,                    -- the frame's height (1080 for 1080p), as the player sent it
     shot TEXT                          -- the frame, a file in the data folder's stream folder
 );
 CREATE INDEX IF NOT EXISTS stream_reads_call ON stream_reads (prediction_id);
@@ -124,20 +125,21 @@ pub struct StreamRead {
     pub stats: String,
     pub detail: String,
     pub latency: Option<f64>,
+    pub height: Option<u32>,
     pub shot: Option<String>,
 }
 
 pub fn record(conn: &Connection, call_id: i64, r: &StreamRead) -> Result<()> {
     conn.execute(
-        "INSERT INTO stream_reads (prediction_id, at, outcome, side, stats, detail, latency, shot) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        params![call_id, r.at as i64, r.outcome, r.side, r.stats, r.detail, r.latency, r.shot],
+        "INSERT INTO stream_reads (prediction_id, at, outcome, side, stats, detail, latency, height, shot) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        params![call_id, r.at as i64, r.outcome, r.side, r.stats, r.detail, r.latency, r.height, r.shot],
     )?;
     Ok(())
 }
 
 pub fn of_call(conn: &Connection, call_id: i64) -> Result<Vec<StreamRead>> {
     let mut st = conn.prepare_cached(
-        "SELECT at, outcome, side, stats, detail, latency, shot FROM stream_reads WHERE prediction_id = ? ORDER BY at, rowid",
+        "SELECT at, outcome, side, stats, detail, latency, height, shot FROM stream_reads WHERE prediction_id = ? ORDER BY at, rowid",
     )?;
     let rows = st.query_map([call_id], |r| {
         let text = |i: usize| r.get::<_, Option<String>>(i).map(Option::unwrap_or_default);
@@ -148,7 +150,8 @@ pub fn of_call(conn: &Connection, call_id: i64) -> Result<Vec<StreamRead>> {
             stats: text(3)?,
             detail: text(4)?,
             latency: r.get(5)?,
-            shot: r.get(6)?,
+            height: r.get(6)?,
+            shot: r.get(7)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)

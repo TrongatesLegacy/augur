@@ -64,7 +64,8 @@ function streamLine(v) {
   if (!v || v.status === 'off') return '';
   if (v.warning) return `<div class="kstr"><span class="ast bad">Stream</span><span class="bad">${esc(v.warning)}</span></div>`;
   if (v.status !== 'watching' && v.status !== 'read') return '';
-  const behind = v.latency != null ? `<small>${v.latency.toFixed(1)}s behind live</small>` : '';
+  const how = [v.height ? `${v.height}p` : '', v.latency != null ? `${v.latency.toFixed(1)}s behind live` : ''].filter(Boolean).join(' · ');
+  const behind = how ? `<small>${how}</small>` : '';
   const side = v.side ? `${esc(v.side)} side` : 'the hidden side';
   if (v.status === 'read' && v.stats) {
     const nums = v.stats.map((n) => `<b>${fmt(n)}</b>`).join('<i>/</i>');

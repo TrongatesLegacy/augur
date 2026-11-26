@@ -124,6 +124,8 @@ const ADDED: &[(&str, &str, &str)] = &[
     ("fighters", "pal_rank", "INTEGER"),
     ("fighters", "rank_of", "INTEGER"),
     ("fighters", "power", "INTEGER"),
+    // the stream frame's height, to tell a read from a low-quality picture
+    ("stream_reads", "height", "INTEGER"),
 ];
 
 fn migrate(conn: &Connection) -> Result<()> {

@@ -332,6 +332,46 @@ pub fn all(conn: &Connection) -> Result<Vec<AutoBet>> {
     Ok(rows)
 }
 
+/// Copies an auto bet from a backup in, tied to the call here it was for (or none), unless it's here already. Its
+/// own bets come in marked as from `device` with their id there, so they're never sent out as this computer's.
+/// Whether it was new.
+pub fn insert_copy(conn: &Connection, b: &AutoBet, prediction_id: Option<i64>, device: &str) -> Result<bool> {
+    let (device, remote_id) = match (&b.device, b.remote_id) {
+        (Some(d), Some(r)) => (d.clone(), r),
+        _ => (device.to_string(), b.id),
+    };
+    let n = conn.execute(
+        "INSERT OR IGNORE INTO auto_bets (prediction_id, device, remote_id, home_owner, away_owner, home_pal, away_pal, side, amount,
+                                          command, prob, channel, test, status, reason, claimed_at, sent_at, done_at, line_id,
+                                          reply, duel_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+        params![
+            prediction_id,
+            device,
+            remote_id,
+            b.home_owner,
+            b.away_owner,
+            b.home_pal,
+            b.away_pal,
+            b.side,
+            b.amount as i64,
+            b.command,
+            b.prob,
+            b.channel,
+            b.test,
+            b.status,
+            b.reason,
+            b.claimed_at as i64,
+            b.sent_at.map(|v| v as i64),
+            b.done_at.map(|v| v as i64),
+            b.line_id,
+            b.reply,
+            b.duel_id.map(|v| v as i64),
+        ],
+    )?;
+    Ok(n > 0)
+}
+
 /// The auto bet on a call, if there is one.
 pub fn for_call(conn: &Connection, prediction_id: i64) -> Result<Option<AutoBet>> {
     Ok(conn

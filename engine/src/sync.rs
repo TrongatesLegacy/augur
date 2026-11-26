@@ -190,6 +190,8 @@ impl SyncState {
                     let _ = autobet::import(conn, &file, &o.device);
                 }
             }
+            // the frames their stream reads kept, from the folder's shared frames
+            let _ = pull_frames(conn, &dir);
             if out.calls > 0 {
                 let from = if others.len() == 1 { others[0].name.clone() } else { format!("{} computers", others.len()) };
                 self.remember(Change { at: now, from, summary: format!("{} call{}", out.calls, if out.calls == 1 { "" } else { "s" }) });
@@ -214,6 +216,9 @@ impl SyncState {
             std::fs::create_dir_all(calls_file.parent().unwrap())?;
             self.calls_written = calls::export(conn, &calls_file)?;
             self.calls_mark = mark;
+        }
+        if self.what.calls {
+            push_frames(conn, dir)?;
         }
         let bets_file = dir.join("autobets").join(format!("{}.jsonl", self.device));
         let bets_mark = autobet::mark_now(conn)?;
@@ -248,6 +253,42 @@ impl SyncState {
         self.history.insert(0, c);
         self.history.truncate(HISTORY_MAX);
     }
+}
+
+// --- the stream's frames ---
+
+/// The frames go in a folder of their own, a file each, written once: in the calls file they'd go up again whenever
+/// a call changed. Every computer writes the ones it has and takes the ones it lacks, so the names are the same
+/// everywhere (`stream::frame_name`).
+const FRAMES: &str = "frames";
+
+fn push_frames(conn: &Connection, dir: &Path) -> crate::Result<()> {
+    let folder = dir.join(FRAMES);
+    for name in crate::stream::frame_names(conn)?.into_iter().filter(|n| crate::stream::safe_name(n)) {
+        let path = folder.join(&name);
+        if path.exists() {
+            continue;
+        }
+        if let Some(jpeg) = crate::stream::frame(conn, &name)? {
+            std::fs::create_dir_all(&folder)?;
+            std::fs::write(path, jpeg)?;
+        }
+    }
+    Ok(())
+}
+
+fn pull_frames(conn: &Connection, dir: &Path) -> crate::Result<usize> {
+    let mut n = 0;
+    for name in crate::stream::frames_missing(conn)?.into_iter().filter(|n| crate::stream::safe_name(n)) {
+        // one still being written by a sync app is left for next time
+        if let Ok(jpeg) = std::fs::read(dir.join(FRAMES).join(&name)) {
+            if jpeg.starts_with(&[0xFF, 0xD8]) {
+                crate::stream::save_frame(conn, &name, &jpeg)?;
+                n += 1;
+            }
+        }
+    }
+    Ok(n)
 }
 
 /// The other computers' files, skipping half-synced and long-silent ones. One per computer: a sync app's leftover
@@ -519,6 +560,38 @@ mod tests {
         assert_eq!(counted(&mac_db).len(), 19, "the duel counts once");
         assert_eq!(counted(&mac_db), counted(&pc_db), "the same calls on both");
         assert_eq!(counted(&mac_db).last().unwrap().2, theirs.pick, "the first made: the PC's");
+        let _ = std::fs::remove_dir_all(folder);
+    }
+
+    /// A stream read and its frame on the Mac reach the PC: the read with its call, the frame from the folder.
+    #[test]
+    fn stream_reads_and_their_frames_reach_the_other_computer() {
+        use crate::stream::{self, StreamRead};
+        let folder = temp("frames");
+        let (mac_db, pc_db) = (crate::seed::store(), db::open_memory().unwrap());
+        let (mut mac, mut pc) = (computer("Mac", &folder), computer("PC", &folder));
+        let none = BTreeMap::new();
+        let c = db::settled(&mac_db).unwrap().pop().unwrap();
+        let name = stream::frame_name(1_234, stream::READ);
+        let read = StreamRead {
+            at: 1_234,
+            outcome: stream::READ.into(),
+            side: "away".into(),
+            stats: "5072/661/677".into(),
+            shot: Some(name.clone()),
+            ..Default::default()
+        };
+        stream::record(&mac_db, c.id, &read).unwrap();
+        stream::save_frame(&mac_db, &name, &[0xFF, 0xD8, 1, 2, 3]).unwrap();
+        mac.sync(&mac_db, &none, "macOS", "0.1.0", 1_000);
+        assert!(folder.join(SUB).join(FRAMES).join(&name).exists(), "the frame goes in the folder once");
+        pc.sync(&pc_db, &none, "Windows", "0.1.0", 2_000);
+        let here = db::call_at(&pc_db, &c.home_owner, &c.away_owner, c.seen_at).unwrap().unwrap();
+        assert_eq!(stream::of_call(&pc_db, here).unwrap(), [read], "the read comes with its call");
+        assert_eq!(stream::frame(&pc_db, &name).unwrap().as_deref(), Some(&[0xFF, 0xD8, 1, 2, 3][..]), "and its frame");
+        // again: nothing twice
+        pc.sync(&pc_db, &none, "Windows", "0.1.0", 3_000);
+        assert_eq!(stream::of_call(&pc_db, here).unwrap().len(), 1);
         let _ = std::fs::remove_dir_all(folder);
     }
 

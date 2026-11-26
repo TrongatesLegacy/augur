@@ -7,7 +7,7 @@
 //! frames). A read is only trusted when the side the site shows reads exactly as the site has it (`check`), which
 //! also proves the frame is of the duel being called.
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::db::Result;
@@ -103,6 +103,10 @@ CREATE TABLE IF NOT EXISTS stream_reads (  -- the stream read for a call with hi
     shot TEXT                          -- the frame, a file in the data folder's stream folder
 );
 CREATE INDEX IF NOT EXISTS stream_reads_call ON stream_reads (prediction_id);
+CREATE TABLE IF NOT EXISTS stream_frames (  -- the frames the stream reads kept, in the store so a backup has them
+    name TEXT PRIMARY KEY,             -- the read's shot: "<at>-<outcome>.jpg", the same on every computer
+    jpeg BLOB NOT NULL
+);
 "#;
 
 pub const READ: &str = "read";
@@ -164,6 +168,57 @@ pub fn misses_in_a_row(conn: &Connection) -> Result<u32> {
 
 /// The fights in a row the stream couldn't be read for before Live says so.
 pub const MISSES_TO_WARN: u32 = 3;
+
+/// Adds another computer's (or a backup's) reads for a call here: the ones it hasn't got (the same moment and
+/// outcome). Whether it gained any.
+pub fn merge(conn: &Connection, call_id: i64, incoming: &[StreamRead]) -> Result<bool> {
+    let here = of_call(conn, call_id)?;
+    let mut gained = false;
+    for r in incoming.iter().filter(|r| !here.iter().any(|h| h.at == r.at && h.outcome == r.outcome)) {
+        record(conn, call_id, r)?;
+        gained = true;
+    }
+    Ok(gained)
+}
+
+/// A frame's name: the moment it was kept and what it was kept for, so it's the same on every computer.
+pub fn frame_name(at: u64, outcome: &str) -> String {
+    format!("{at}-{outcome}.jpg")
+}
+
+/// Keeps a frame (a JPEG) under its name; one already kept stays as it is.
+pub fn save_frame(conn: &Connection, name: &str, jpeg: &[u8]) -> Result<()> {
+    conn.execute("INSERT OR IGNORE INTO stream_frames (name, jpeg) VALUES (?, ?)", params![name, jpeg])?;
+    Ok(())
+}
+
+pub fn frame(conn: &Connection, name: &str) -> Result<Option<Vec<u8>>> {
+    Ok(conn.query_row("SELECT jpeg FROM stream_frames WHERE name = ?", [name], |r| r.get(0)).optional()?)
+}
+
+/// Every kept frame's name.
+pub fn frame_names(conn: &Connection) -> Result<Vec<String>> {
+    let mut st = conn.prepare_cached("SELECT name FROM stream_frames ORDER BY name")?;
+    let rows = st.query_map([], |r| r.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// The frames reads here name that aren't kept here yet (their reads came from another computer).
+pub fn frames_missing(conn: &Connection) -> Result<Vec<String>> {
+    let mut st = conn.prepare_cached(
+        "SELECT DISTINCT shot FROM stream_reads WHERE COALESCE(shot, '') != '' AND shot NOT IN (SELECT name FROM stream_frames)",
+    )?;
+    let rows = st.query_map([], |r| r.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// A frame name that's safe to use as a file name in the sync folder.
+pub fn safe_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() < 100
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+        && !name.contains("..")
+}
 
 // --- the layout, in the panel's own pixels (1080p) ---
 
@@ -462,5 +517,25 @@ mod tests {
         record(&conn, 5, &line(READ)).unwrap();
         assert_eq!(misses_in_a_row(&conn).unwrap(), 0);
         assert_eq!(of_call(&conn, 2).unwrap().iter().map(|r| r.outcome.as_str()).collect::<Vec<_>>(), [READ, AGREED]);
+    }
+
+    #[test]
+    fn reads_and_frames_merge_without_repeats() {
+        let conn = crate::db::open_memory().unwrap();
+        conn.execute("INSERT INTO predictions (id, status) VALUES (1, 'settled')", []).unwrap();
+        let name = frame_name(1_000, READ);
+        let read = StreamRead { at: 1_000, outcome: READ.into(), side: "away".into(), shot: Some(name.clone()), ..Default::default() };
+        let agreed = StreamRead { at: 2_000, outcome: AGREED.into(), side: "away".into(), ..Default::default() };
+        assert!(merge(&conn, 1, std::slice::from_ref(&read)).unwrap());
+        assert!(merge(&conn, 1, &[read.clone(), agreed]).unwrap(), "the bell's check is new");
+        assert!(!merge(&conn, 1, &[read]).unwrap(), "nothing new the second time");
+        assert_eq!(of_call(&conn, 1).unwrap().len(), 2);
+        assert_eq!(frames_missing(&conn).unwrap(), std::slice::from_ref(&name), "the read names a frame not kept here yet");
+        save_frame(&conn, &name, b"jpeg").unwrap();
+        save_frame(&conn, &name, b"other").unwrap();
+        assert_eq!(frame(&conn, &name).unwrap().as_deref(), Some(&b"jpeg"[..]), "kept once");
+        assert!(frames_missing(&conn).unwrap().is_empty());
+        assert_eq!(frame_names(&conn).unwrap(), std::slice::from_ref(&name));
+        assert!(safe_name(&name) && !safe_name("../x.jpg") && !safe_name("a/b.jpg") && !safe_name(""));
     }
 }

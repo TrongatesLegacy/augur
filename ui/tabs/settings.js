@@ -441,7 +441,7 @@ export async function render(app) {
       const r = await invoke('import_file');
       if (!r) return;
       const m = r.merged;
-      const parts = [[m.calls, 'call'], [m.duels, 'duel'], [m.tapes, 'tape'], [m.species, 'species'], [m.bets, 'bet']]
+      const parts = [[m.calls, 'call'], [m.duels, 'duel'], [m.tapes, 'tape'], [m.species, 'species'], [m.bets, 'bet'], [m.auto_bets, 'auto bet'], [m.frames, 'stream frame']]
         .filter(([n]) => n)
         .map(([n, w]) => `${fmt(n)} ${w}${n === 1 || w === 'species' ? '' : 's'}`);
       const filled = m.filled ? `filled in what ${fmt(m.filled)} already here ${m.filled === 1 ? 'was' : 'were'} missing` : '';

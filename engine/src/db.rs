@@ -950,6 +950,12 @@ pub struct Merged {
     /// made before Augur read them)
     #[serde(default)]
     pub filled: usize,
+    /// auto bets from a backup
+    #[serde(default)]
+    pub auto_bets: usize,
+    /// frames of the stream from a backup
+    #[serde(default)]
+    pub frames: usize,
 }
 
 /// Adds what another store (a backup from another computer) has and this one doesn't: calls with their fighters,
@@ -959,10 +965,19 @@ pub fn merge_from(conn: &Connection, other: &Path) -> Result<Merged> {
     if !other.is_file() {
         return Err(crate::Error::Parse(format!("{}: not a file", other.display())));
     }
+    // calls already here before the merge: only they count as filled in
+    let before: i64 = conn.query_row("SELECT COALESCE(MAX(id), 0) FROM predictions", [], |r| r.get(0))?;
     conn.execute("ATTACH DATABASE ?1 AS other", [other.to_string_lossy()])?;
     let out = merge_attached(conn);
     let _ = conn.execute_batch("DETACH DATABASE other");
-    out
+    let mut m = out?;
+    // what the calls know beyond themselves (their history, stream reads, auto bets...), read from the backup as a
+    // store of its own, never written to
+    let theirs = Connection::open_with_flags(other, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let (gained, bets) = crate::calls::merge_backup(conn, &theirs, before)?;
+    m.filled += gained;
+    m.auto_bets = bets;
+    Ok(m)
 }
 
 fn merge_attached(conn: &Connection) -> Result<Merged> {
@@ -995,6 +1010,9 @@ fn merge_attached(conn: &Connection) -> Result<Merged> {
         "INSERT OR IGNORE INTO species_moves (pal, name, element, power, unlock_lv) SELECT pal, name, element, power, unlock_lv FROM other.species_moves",
         [],
     )?;
+    if has("stream_frames")? {
+        m.frames = tx.execute("INSERT OR IGNORE INTO stream_frames (name, jpeg) SELECT name, jpeg FROM other.stream_frames", [])?;
+    }
     if has("bets")? {
         m.bets = tx.execute(
             "INSERT OR IGNORE INTO bets (seq, duel_id, home_owner, away_owner, home_pal, away_pal, backed, winner, stake, result, seen_at)

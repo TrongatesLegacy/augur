@@ -2,7 +2,10 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.30 (current)
+## 0.1.31 (current)
+- Live's auto bet panel no longer wraps a word onto a line of its own
+
+## 0.1.30
 - The chat stays on the stream's chat when the stream raids another channel
 - Hidden stats are read off the stream, which now shows above the chat on Live
 - Backups and sync carry the stream's reads and frames, and a backup's call history and auto bets

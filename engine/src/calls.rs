@@ -260,15 +260,17 @@ pub(crate) fn fill_details(conn: &Connection, id: i64, d: &Details) -> crate::Re
 /// for each of its calls that's here (the same fight seen at the same moment), its details, history and stream
 /// reads, its marks (overwritten after the fight, closed, first called after picks closed) and staking. Then its auto
 /// bets, tied to the calls here. A backup from an older Augur lacks some of these, and they're skipped. Returns how
-/// many calls that were here already (ids up to `before`) gained something, and how many auto bets came in.
-pub fn merge_backup(conn: &Connection, other: &Connection, before: i64) -> crate::Result<(usize, usize)> {
-    let theirs: Vec<(i64, String, String, i64)> = other
+/// many calls that were here already (ids up to `before`) gained something, and how many auto bets came in. `who`:
+/// whose store it is and this computer's sync id (see `db::merge_from_as`).
+pub fn merge_backup(conn: &Connection, other: &Connection, before: i64, who: (&str, &str)) -> crate::Result<(usize, usize)> {
+    let (theirs, me) = who;
+    let their_calls: Vec<(i64, String, String, i64)> = other
         .prepare("SELECT id, home_owner, away_owner, seen_at FROM predictions WHERE seen_at > 0")?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
         .collect::<rusqlite::Result<_>>()?;
     let mut ids = HashMap::new();
     let mut gained = 0;
-    for (theirs_id, home, away, seen_at) in theirs {
+    for (theirs_id, home, away, seen_at) in their_calls {
         let Some(here) = db::call_at(conn, &home, &away, seen_at)? else { continue };
         ids.insert(theirs_id, here);
         let mut more = details(other, theirs_id).ok().map(|d| fill_details(conn, here, &d)).transpose()?.unwrap_or(false);
@@ -292,12 +294,16 @@ pub fn merge_backup(conn: &Connection, other: &Connection, before: i64) -> crate
     }
     let mut bets = 0;
     for b in crate::autobet::all(other).unwrap_or_default() {
+        // this computer's own, synced to them: here already
+        if !me.is_empty() && b.device.as_deref() == Some(me) {
+            continue;
+        }
         let call = b.prediction_id.and_then(|id| ids.get(&id).copied());
         // one tied to a call here that already has its auto bet is that bet
         if call.is_some_and(|id| crate::autobet::for_call(conn, id).ok().flatten().is_some()) {
             continue;
         }
-        bets += usize::from(crate::autobet::insert_copy(conn, &b, call, "backup")?);
+        bets += usize::from(crate::autobet::insert_copy(conn, &b, call, theirs)?);
     }
     Ok((gained, bets))
 }

@@ -91,8 +91,9 @@ Augur updates itself from this repository's GitHub releases:
 
 **Settings › Sync & data › Sync** works the way Stream Multiview's does:
 - **The folder:** you pick a folder a sync app already moves. Augur finds OneDrive, iCloud Drive, Dropbox and Google Drive, or you can choose another folder. It creates `Augur Sync/` inside it.
-- **No clashes:** each computer writes only its own files there (`devices/<id>.json`, `calls/<id>.jsonl` and `autobets/<id>.jsonl`; the stream's frames go in `frames/`, a file each, written once and the same on every computer) and reads the others' every minute, and within seconds of the sync app bringing a change in. Nothing needs a lock, and the sync app never makes "conflicted copies".
-- **What syncs:** your settings (the latest change to each one wins), Augur's calls with their history and stream reads (merged, never duplicated), the frames those reads kept, and auto bets.
+- **No clashes:** each computer writes only its own files there (`devices/<id>.json`, `calls/<id>.jsonl`, `autobets/<id>.jsonl` and `snapshots/<id>.db`) and reads the others' every minute, and within seconds of the sync app bringing a change in. Nothing needs a lock, and the sync app never makes "conflicted copies".
+- **What syncs:** your settings (the latest change to each one wins), Augur's calls with their history and stream reads (merged, never duplicated) and auto bets, within seconds.
+- **Snapshots:** each computer also writes a copy of its whole store there when a stream ends (20 minutes after the last duel) and once a day, keeping only the latest. The others merge it in the way **Import…** merges a backup. That brings across what the files above don't carry, such as the stream's frames, duels and tapes, and leaves an up-to-date backup in the folder.
 - **What stays on each computer:** the sign-ins (PalDuels' is encrypted for that computer; Kick's is in its browser storage), launch at login, start in the tray, background fetching, and whether auto betting is on or arms when Augur starts (only one computer can have it on; its other settings sync). A setting an update starts syncing keeps the value you set on either computer, rather than taking another computer's untouched default. Duels, species and your bets come from the site on each computer.
 
 **Back up… and Import…** cover setting up a new computer:

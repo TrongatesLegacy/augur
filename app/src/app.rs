@@ -228,6 +228,9 @@ pub(crate) fn notify(app: &AppHandle, title: &str, body: &str) {
 /// Polls the live state, settles finished calls, makes the call for each new duel and keeps the tray current.
 fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
     let mut last_key = String::new();
+    // when a duel was last up: once none has been for a while the stream has ended, and the sync writes this
+    // computer's snapshot (the frames it kept get across that way)
+    let mut last_duel: Option<Instant> = None;
     while !shared.stop.load(Ordering::Relaxed) {
         let poll = shared.settings.lock().unwrap().poll_wait(roll());
         let mut has_duel = false;
@@ -346,6 +349,13 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
         let view = shared.live.lock().unwrap().clone();
         let _ = app.emit("live", &view);
         update_tray(&app, &shared);
+        if has_duel {
+            last_duel = Some(Instant::now());
+        } else if last_duel.is_some_and(|at| at.elapsed() >= STREAM_ENDED_AFTER) {
+            last_duel = None;
+            shared.sync.lock().unwrap().snapshot_now = true;
+            shared.sync_now.store(true, Ordering::Relaxed);
+        }
         let wait = if has_duel { poll } else { Duration::from_secs(30) };
         let end = Instant::now() + wait;
         while Instant::now() < end && !shared.stop.load(Ordering::Relaxed) {
@@ -416,6 +426,9 @@ fn learn_loop(app: AppHandle, shared: Arc<Shared>) {
         }
     }
 }
+
+/// No duel up for this long after one was: the stream has ended.
+const STREAM_ENDED_AFTER: Duration = Duration::from_secs(20 * 60);
 
 /// Seconds after launch before the catch-up: the live poll and the sync go first.
 const CATCH_UP_AFTER: u64 = 8;

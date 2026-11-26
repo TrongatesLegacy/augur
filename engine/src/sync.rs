@@ -4,6 +4,9 @@
 //!     Augur Sync/devices/<device>.json    its name, app version and settings, each with when it last changed
 //!     Augur Sync/calls/<device>.jsonl     its calls (the calls file format), merged into the others' stores
 //!     Augur Sync/autobets/<device>.jsonl  its auto bets, so every computer knows which of your bets Augur placed
+//!     Augur Sync/snapshots/<device>.db    a copy of its whole store, written when a stream ends and once a day, and
+//!                                         merged into the others' like an imported backup: what the files above
+//!                                         don't carry (the stream's frames, duels, tapes) gets across this way
 //! Settings merge one at a time: the latest change wins. Calls merge without duplicates. What stays on each computer
 //! (its sign-in, launch at login, the public data it fetches itself) is the caller's to leave out.
 
@@ -86,6 +89,13 @@ pub struct SyncState {
     /// syncing it doesn't overwrite what the other computer set with this one's untouched default
     #[serde(skip)]
     pub defaults: BTreeMap<String, Value>,
+    /// when this computer last wrote its snapshot (ms)
+    pub snapshot_at: u64,
+    /// write the snapshot at the next sync (a stream just ended)
+    #[serde(skip)]
+    pub snapshot_now: bool,
+    /// each other computer's snapshot as last merged (its size and when it was written), so it's merged once
+    pub snapshots_merged: BTreeMap<String, String>,
 }
 
 /// A computer's file in the folder.
@@ -190,8 +200,7 @@ impl SyncState {
                     let _ = autobet::import(conn, &file, &o.device);
                 }
             }
-            // the frames their stream reads kept, from the folder's shared frames
-            let _ = pull_frames(conn, &dir);
+            self.merge_snapshots(conn, &dir, &others, now);
             if out.calls > 0 {
                 let from = if others.len() == 1 { others[0].name.clone() } else { format!("{} computers", others.len()) };
                 self.remember(Change { at: now, from, summary: format!("{} call{}", out.calls, if out.calls == 1 { "" } else { "s" }) });
@@ -217,8 +226,11 @@ impl SyncState {
             self.calls_written = calls::export(conn, &calls_file)?;
             self.calls_mark = mark;
         }
-        if self.what.calls {
-            push_frames(conn, dir)?;
+        if self.what.calls && (self.snapshot_now || now.saturating_sub(self.snapshot_at) >= SNAPSHOT_EVERY) {
+            let path = dir.join(SNAPSHOTS).join(format!("{}.db", self.device));
+            std::fs::create_dir_all(path.parent().unwrap())?;
+            db::backup_to(conn, &path)?;
+            (self.snapshot_at, self.snapshot_now) = (now, false);
         }
         let bets_file = dir.join("autobets").join(format!("{}.jsonl", self.device));
         let bets_mark = autobet::mark_now(conn)?;
@@ -255,40 +267,47 @@ impl SyncState {
     }
 }
 
-// --- the stream's frames ---
+// --- snapshots ---
 
-/// The frames go in a folder of their own, a file each, written once: in the calls file they'd go up again whenever
-/// a call changed. Every computer writes the ones it has and takes the ones it lacks, so the names are the same
-/// everywhere (`stream::frame_name`).
-const FRAMES: &str = "frames";
+/// A computer's snapshot folder in the sync folder, and how often it's written when no stream has ended.
+const SNAPSHOTS: &str = "snapshots";
+const SNAPSHOT_EVERY: u64 = 24 * 3_600_000;
 
-fn push_frames(conn: &Connection, dir: &Path) -> crate::Result<()> {
-    let folder = dir.join(FRAMES);
-    for name in crate::stream::frame_names(conn)?.into_iter().filter(|n| crate::stream::safe_name(n)) {
-        let path = folder.join(&name);
-        if path.exists() {
-            continue;
-        }
-        if let Some(jpeg) = crate::stream::frame(conn, &name)? {
-            std::fs::create_dir_all(&folder)?;
-            std::fs::write(path, jpeg)?;
-        }
-    }
-    Ok(())
-}
-
-fn pull_frames(conn: &Connection, dir: &Path) -> crate::Result<usize> {
-    let mut n = 0;
-    for name in crate::stream::frames_missing(conn)?.into_iter().filter(|n| crate::stream::safe_name(n)) {
-        // one still being written by a sync app is left for next time
-        if let Ok(jpeg) = std::fs::read(dir.join(FRAMES).join(&name)) {
-            if jpeg.starts_with(&[0xFF, 0xD8]) {
-                crate::stream::save_frame(conn, &name, &jpeg)?;
-                n += 1;
+impl SyncState {
+    /// Merges each other computer's snapshot that's new since the last merge, as an imported backup is merged: what's
+    /// missing here is added, nothing is overwritten. One still arriving (the sync app half way through it) doesn't
+    /// open as a store, and is tried again at the next sync.
+    fn merge_snapshots(&mut self, conn: &Connection, dir: &Path, others: &[DeviceFile], now: u64) {
+        for o in others {
+            let path = dir.join(SNAPSHOTS).join(format!("{}.db", o.device));
+            let Ok(meta) = std::fs::metadata(&path) else { continue };
+            let written = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis());
+            let mark = format!("{}:{written}", meta.len());
+            if self.snapshots_merged.get(&o.device) == Some(&mark) {
+                continue;
+            }
+            let Ok(m) = db::merge_from_as(conn, &path, &o.device, &self.device) else { continue };
+            self.snapshots_merged.insert(o.device.clone(), mark);
+            let parts: Vec<String> = [(m.calls, "call"), (m.duels, "duel"), (m.frames, "stream frame"), (m.auto_bets, "auto bet")]
+                .iter()
+                .filter(|(n, _)| *n > 0)
+                .map(|(n, w)| format!("{n} {w}{}", if *n == 1 { "" } else { "s" }))
+                .collect();
+            if !parts.is_empty() || m.filled > 0 {
+                let filled = if m.filled > 0 {
+                    format!("filled in {} call{}", m.filled, if m.filled == 1 { "" } else { "s" })
+                } else {
+                    String::new()
+                };
+                let summary = [format!("its snapshot: {}", parts.join(", ")), filled]
+                    .into_iter()
+                    .filter(|x| !x.ends_with(": ") && !x.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                self.remember(Change { at: now, from: o.name.clone(), summary });
             }
         }
     }
-    Ok(n)
 }
 
 /// The other computers' files, skipping half-synced and long-silent ones. One per computer: a sync app's leftover
@@ -563,11 +582,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(folder);
     }
 
-    /// A stream read and its frame on the Mac reach the PC: the read with its call, the frame from the folder.
+    /// A stream read on the Mac reaches the PC with its call straight away, and its frame with the Mac's next
+    /// snapshot (when a stream ends). The PC merges a snapshot once, and never takes its own bets back from it.
     #[test]
-    fn stream_reads_and_their_frames_reach_the_other_computer() {
+    fn snapshots_bring_the_frames_and_are_merged_once() {
         use crate::stream::{self, StreamRead};
-        let folder = temp("frames");
+        let folder = temp("snapshots");
         let (mac_db, pc_db) = (crate::seed::store(), db::open_memory().unwrap());
         let (mut mac, mut pc) = (computer("Mac", &folder), computer("PC", &folder));
         let none = BTreeMap::new();
@@ -583,15 +603,34 @@ mod tests {
         };
         stream::record(&mac_db, c.id, &read).unwrap();
         stream::save_frame(&mac_db, &name, &[0xFF, 0xD8, 1, 2, 3]).unwrap();
-        mac.sync(&mac_db, &none, "macOS", "0.1.0", 1_000);
-        assert!(folder.join(SUB).join(FRAMES).join(&name).exists(), "the frame goes in the folder once");
-        pc.sync(&pc_db, &none, "Windows", "0.1.0", 2_000);
+        // a first sync writes a snapshot (none written yet), as does a stream ending
+        mac.sync(&mac_db, &none, "macOS", "0.1.0", SNAPSHOT_EVERY + 1_000);
+        assert!(folder.join(SUB).join(SNAPSHOTS).join("dev-Mac.db").exists());
+        let got = pc.sync(&pc_db, &none, "Windows", "0.1.0", SNAPSHOT_EVERY + 2_000);
         let here = db::call_at(&pc_db, &c.home_owner, &c.away_owner, c.seen_at).unwrap().unwrap();
-        assert_eq!(stream::of_call(&pc_db, here).unwrap(), [read], "the read comes with its call");
-        assert_eq!(stream::frame(&pc_db, &name).unwrap().as_deref(), Some(&[0xFF, 0xD8, 1, 2, 3][..]), "and its frame");
-        // again: nothing twice
-        pc.sync(&pc_db, &none, "Windows", "0.1.0", 3_000);
-        assert_eq!(stream::of_call(&pc_db, here).unwrap().len(), 1);
+        assert!(got.calls > 0);
+        assert_eq!(stream::of_call(&pc_db, here).unwrap(), [read], "the read, once");
+        assert_eq!(stream::frame(&pc_db, &name).unwrap().as_deref(), Some(&[0xFF, 0xD8, 1, 2, 3][..]), "the frame from the snapshot");
+        assert!(db::get_duel(&pc_db, c.duel_id.unwrap()).unwrap().is_some(), "and the duels");
+        let merged = pc.snapshots_merged.clone();
+        pc.sync(&pc_db, &none, "Windows", "0.1.0", SNAPSHOT_EVERY + 3_000);
+        assert_eq!(pc.snapshots_merged, merged, "not merged again until it changes");
+        // the PC's own auto bet, synced to the Mac and back in the Mac's snapshot, isn't taken in twice
+        let bet = crate::autobet::AutoBet {
+            prediction_id: Some(here),
+            home_owner: c.home_owner.clone(),
+            away_owner: c.away_owner.clone(),
+            status: "confirmed".into(),
+            ..Default::default()
+        };
+        crate::autobet::claim(&pc_db, &bet).unwrap();
+        pc.sync(&pc_db, &none, "Windows", "0.1.0", SNAPSHOT_EVERY + 4_000);
+        mac.sync(&mac_db, &none, "macOS", "0.1.0", SNAPSHOT_EVERY + 5_000);
+        mac.snapshot_now = true;
+        mac.sync(&mac_db, &none, "macOS", "0.1.0", SNAPSHOT_EVERY + 6_000);
+        pc.snapshots_merged.clear();
+        pc.sync(&pc_db, &none, "Windows", "0.1.0", SNAPSHOT_EVERY + 7_000);
+        assert_eq!(crate::autobet::all(&pc_db).unwrap().len(), 1, "its own bet stays one bet");
         let _ = std::fs::remove_dir_all(folder);
     }
 

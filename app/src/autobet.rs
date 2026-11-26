@@ -61,6 +61,9 @@ pub struct AutoView {
     pub stream_live: Option<bool>,
     /// the stream above the chat, read for the stats the site hides
     pub stream: crate::stream::StreamView,
+    /// the chances a call is held to (the lowest chance, and the one for hidden stats): a chance near one shows its
+    /// tenth, so what you see matches what auto bet decides
+    pub bars: Vec<f64>,
 }
 
 /// Kick, as this computer is signed in to it.
@@ -720,6 +723,7 @@ pub fn refresh(app: &AppHandle, shared: &Shared) {
     v.other = other;
     v.today = today;
     v.window = window;
+    v.bars = s.bars();
     if !v.armed {
         v.phase = "off".into();
         v.countdown_until = None;

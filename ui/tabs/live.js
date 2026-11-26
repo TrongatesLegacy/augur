@@ -218,7 +218,7 @@ export function render(app) {
   main.innerHTML =
     header(`Live · ${esc(p.title || 'PalDuels')}`, status) +
     wrap(d
-      ? headline(d, { ...bet(p, live.stake, command, auto), chance: p.prob }).replace('class="stage cstage', 'class="stage cstage lhead') +
+      ? headline(d, { ...bet(p, live.stake, command, auto), chance: p.prob, bars: auto?.bars }).replace('class="stage cstage', 'class="stage cstage lhead') +
         `<div class="cgrid lgrid grow">
           <div class="stackc">${live.fight ? fightPanel(live, p) : hpRace(p)}${headToHead(p)}</div>
           <div class="stackc">${waterfall(d, '')}${chat}</div>

@@ -333,6 +333,8 @@ pub fn fixture_data() -> Value {
             latency: Some(1.6),
             ..Default::default()
         },
+        // a hidden-stats bar a hair over the call's chance, so Live shows the chance to a tenth (inside its ring)
+        bars: vec![0.65, live.prediction.as_ref().map_or(0.75, |p| p.prob + 0.002)],
         ..Default::default()
     };
     // Your bets once Augur has auto bet: two of the seed's bets were its (one confirmed, one you doubled up on),
@@ -1146,7 +1148,10 @@ fn every_tab_renders_headless() {
     );
     assert!(text("live").contains("projected hp race") && !text("live").contains("who’s ahead"), "before the bell, the projection");
     assert!(
-        text("liveauto").contains("auto bet")
+        text("liveauto").contains(&augur_engine::autobet::chance_text(
+            data["live"]["prediction"]["prob"].as_f64().unwrap(),
+            &serde_json::from_value::<Vec<f64>>(data["auto_on"]["bars"].clone()).unwrap()
+        )) && text("liveauto").contains("auto bet")
             && text("liveauto").contains("cancel")
             && text("liveauto").contains("into the-stream’s chat")
             && text("liveauto").contains("wumpo"),

@@ -4,9 +4,9 @@
 //!     Augur Sync/devices/<device>.json    its name, app version and settings, each with when it last changed
 //!     Augur Sync/calls/<device>.jsonl     its calls (the calls file format), merged into the others' stores
 //!     Augur Sync/autobets/<device>.jsonl  its auto bets, so every computer knows which of your bets Augur placed
-//!     Augur Sync/snapshots/<device>.db    a copy of its whole store, written when a stream ends and once a day, and
-//!                                         merged into the others' like an imported backup: what the files above
-//!                                         don't carry (the stream's frames, duels, tapes) gets across this way
+//!     Augur Sync/snapshots/<device>.db    a copy of its whole store, written hourly when it's changed and when a
+//!                                         stream ends, merged into the others' like an imported backup: what the
+//!                                         files above don't carry (the stream's frames, duels, tapes) gets across
 //! Settings merge one at a time: the latest change wins. Calls merge without duplicates. What stays on each computer
 //! (its sign-in, launch at login, the public data it fetches itself) is the caller's to leave out.
 
@@ -89,8 +89,9 @@ pub struct SyncState {
     /// syncing it doesn't overwrite what the other computer set with this one's untouched default
     #[serde(skip)]
     pub defaults: BTreeMap<String, Value>,
-    /// when this computer last wrote its snapshot (ms)
+    /// when this computer last looked at writing its snapshot (ms), and what its store held then (`store_mark`)
     pub snapshot_at: u64,
+    pub snapshot_mark: String,
     /// write the snapshot at the next sync (a stream just ended)
     #[serde(skip)]
     pub snapshot_now: bool,
@@ -226,10 +227,16 @@ impl SyncState {
             self.calls_written = calls::export(conn, &calls_file)?;
             self.calls_mark = mark;
         }
-        if self.what.calls && (self.snapshot_now || now.saturating_sub(self.snapshot_at) >= SNAPSHOT_EVERY) {
-            let path = dir.join(SNAPSHOTS).join(format!("{}.db", self.device));
-            std::fs::create_dir_all(path.parent().unwrap())?;
-            db::backup_to(conn, &path)?;
+        // hourly, but only when the store has changed since the last one (a stream's end writes one anyway)
+        let due = self.snapshot_now || now.saturating_sub(self.snapshot_at) >= SNAPSHOT_EVERY;
+        if self.what.calls && due {
+            let mark = store_mark(conn)?;
+            if self.snapshot_now || mark != self.snapshot_mark {
+                let path = dir.join(SNAPSHOTS).join(format!("{}.db", self.device));
+                std::fs::create_dir_all(path.parent().unwrap())?;
+                db::backup_to(conn, &path)?;
+                self.snapshot_mark = mark;
+            }
             (self.snapshot_at, self.snapshot_now) = (now, false);
         }
         let bets_file = dir.join("autobets").join(format!("{}.jsonl", self.device));
@@ -269,9 +276,24 @@ impl SyncState {
 
 // --- snapshots ---
 
-/// A computer's snapshot folder in the sync folder, and how often it's written when no stream has ended.
+/// A computer's snapshot folder in the sync folder, and how often it's written while the store keeps changing (each
+/// is a few MB, so not every minute; an idle hour writes nothing).
 const SNAPSHOTS: &str = "snapshots";
-const SNAPSHOT_EVERY: u64 = 24 * 3_600_000;
+const SNAPSHOT_EVERY: u64 = 3_600_000;
+
+/// What the store holds, roughly: enough to tell whether it changed since the last snapshot. Rows only ever get added
+/// to these tables, so counting them sees every change worth a snapshot.
+fn store_mark(conn: &Connection) -> crate::Result<String> {
+    let tables = ["predictions", "call_revisions", "stream_reads", "stream_frames", "auto_bets", "duels", "hits", "bets", "species"];
+    let mut parts = vec![];
+    for t in tables {
+        parts.push(conn.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get::<_, i64>(0))?.to_string());
+    }
+    // settling a call or a bet changes a row rather than adding one
+    let settled = "SELECT (SELECT COUNT(*) FROM predictions WHERE status = 'settled') || ':' || (SELECT COUNT(result) FROM bets)";
+    parts.push(conn.query_row(settled, [], |r| r.get::<_, String>(0))?);
+    Ok(parts.join("|"))
+}
 
 impl SyncState {
     /// Merges each other computer's snapshot that's new since the last merge, as an imported backup is merged: what's
@@ -615,6 +637,19 @@ mod tests {
         let merged = pc.snapshots_merged.clone();
         pc.sync(&pc_db, &none, "Windows", "0.1.0", SNAPSHOT_EVERY + 3_000);
         assert_eq!(pc.snapshots_merged, merged, "not merged again until it changes");
+        // hourly, and only with something new
+        let path = folder.join(SUB).join(SNAPSHOTS).join("dev-Mac.db");
+        let modified = || std::fs::metadata(&path).unwrap().modified().unwrap();
+        let first = modified();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        mac.sync(&mac_db, &none, "macOS", "0.1.0", 2 * SNAPSHOT_EVERY + 1_000);
+        assert_eq!(modified(), first, "an hour on with nothing new: not written");
+        stream::record(&mac_db, c.id, &StreamRead { at: 5_678, outcome: stream::AGREED.into(), side: "away".into(), ..Default::default() })
+            .unwrap();
+        mac.sync(&mac_db, &none, "macOS", "0.1.0", 2 * SNAPSHOT_EVERY + 2_000);
+        assert_eq!(modified(), first, "something new, but within the hour: it waits");
+        mac.sync(&mac_db, &none, "macOS", "0.1.0", 3 * SNAPSHOT_EVERY + 2_000);
+        assert_ne!(modified(), first, "an hour on with something new: written");
         // the PC's own auto bet, synced to the Mac and back in the Mac's snapshot, isn't taken in twice
         let bet = crate::autobet::AutoBet {
             prediction_id: Some(here),
@@ -624,12 +659,12 @@ mod tests {
             ..Default::default()
         };
         crate::autobet::claim(&pc_db, &bet).unwrap();
-        pc.sync(&pc_db, &none, "Windows", "0.1.0", SNAPSHOT_EVERY + 4_000);
-        mac.sync(&mac_db, &none, "macOS", "0.1.0", SNAPSHOT_EVERY + 5_000);
+        pc.sync(&pc_db, &none, "Windows", "0.1.0", 4 * SNAPSHOT_EVERY + 4_000);
+        mac.sync(&mac_db, &none, "macOS", "0.1.0", 4 * SNAPSHOT_EVERY + 5_000);
         mac.snapshot_now = true;
-        mac.sync(&mac_db, &none, "macOS", "0.1.0", SNAPSHOT_EVERY + 6_000);
+        mac.sync(&mac_db, &none, "macOS", "0.1.0", 4 * SNAPSHOT_EVERY + 6_000);
         pc.snapshots_merged.clear();
-        pc.sync(&pc_db, &none, "Windows", "0.1.0", SNAPSHOT_EVERY + 7_000);
+        pc.sync(&pc_db, &none, "Windows", "0.1.0", 4 * SNAPSHOT_EVERY + 7_000);
         assert_eq!(crate::autobet::all(&pc_db).unwrap().len(), 1, "its own bet stays one bet");
         let _ = std::fs::remove_dir_all(folder);
     }

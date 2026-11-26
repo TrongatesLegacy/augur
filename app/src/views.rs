@@ -484,6 +484,8 @@ pub struct CallDetail {
     pub auto_bet: Option<autobet::AutoBet>,
     /// each version of the call while its fight was up, first first (empty for a call that's up)
     pub revisions: Vec<revisions::Revision>,
+    /// the stream read for a hidden side: what it showed or why it couldn't, and the frame
+    pub stream_reads: Vec<augur_engine::stream::StreamRead>,
 }
 
 /// The duel as it was fought.
@@ -777,6 +779,7 @@ pub fn call_detail(conn: &Connection, id: i64, staking: &StakeSettings) -> R<Opt
         bets_read: synced_at.is_some(),
         auto_bet,
         revisions: revisions::of_call(conn, id)?,
+        stream_reads: augur_engine::stream::of_call(conn, id)?,
         call,
     }))
 }
@@ -831,6 +834,7 @@ pub fn live_detail(p: &Prediction, stake: Option<&Stake>) -> CallDetail {
         bets_read: false,
         auto_bet: None,
         revisions: vec![],
+        stream_reads: vec![],
         call,
     }
 }
@@ -1132,6 +1136,7 @@ mod tests {
             lookups: false,
             db_path: std::path::PathBuf::from("/nonexistent"),
             settings: Default::default(),
+            stream: None,
         };
         let p = augur_engine::predict::predict(&state, &opts).unwrap();
         let stake = augur_engine::stake::suggest(&p.pick, p.prob, &Default::default(), &Default::default());

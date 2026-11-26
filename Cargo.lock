@@ -321,6 +321,7 @@ name = "augur-engine"
 version = "0.1.29"
 dependencies = [
  "html-escape",
+ "png",
  "regex",
  "rusqlite",
  "serde",

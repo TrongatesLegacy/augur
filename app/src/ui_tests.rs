@@ -54,8 +54,11 @@ pub fn fixture_data() -> Value {
     let state = seed::state("state-leaflit-wumpo.json");
     // sync times two minutes ago, so they read like real ones
     let recent = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64 - 120_000;
-    let mut p = predict::predict(&state, &predict::Options { lookups: false, db_path: PathBuf::from("/nonexistent"), settings: s.clone() })
-        .unwrap();
+    let mut p = predict::predict(
+        &state,
+        &predict::Options { lookups: false, db_path: PathBuf::from("/nonexistent"), settings: s.clone(), stream: None },
+    )
+    .unwrap();
     // the head-to-heads the lookups would bring: the owners have met five times (a long pal name among them), the
     // pals three times
     let row = |when: &str, home: (&str, &str), away: (&str, &str), home_won: bool| site::DuelRow {
@@ -152,6 +155,17 @@ pub fn fixture_data() -> Value {
             v(3, 18, "picks", "bet", "bet", "", &pick, prob),
             v(4, 300, "bell", "seen", "bell,stats_shown", "home's stats shown; pick flipped", &late_pick, late_prob),
         ];
+        // the stream read for the hidden side (made up), with its frame, and the site agreeing at the bell
+        let read = |outcome: &str, shot: Option<&str>| augur_engine::stream::StreamRead {
+            at: recent,
+            outcome: outcome.into(),
+            side: "home".into(),
+            stats: "6270/464/797".into(),
+            latency: shot.map(|_| 1.6),
+            shot: shot.map(String::from),
+            ..Default::default()
+        };
+        d.stream_reads = vec![read("read", Some("1-1.jpg")), read("agreed", None)];
         d
     };
     let model_view = {
@@ -310,6 +324,14 @@ pub fn fixture_data() -> Value {
         command: stake.command.clone(),
         today: (3, 7_400),
         window: Some((128, 61)),
+        stream: crate::stream::StreamView {
+            status: "read".into(),
+            message: "Read the away side's stats off the stream: 5072/661/677".into(),
+            side: Some("away".into()),
+            stats: Some([5072, 661, 677]),
+            latency: Some(1.6),
+            ..Default::default()
+        },
         ..Default::default()
     };
     // Your bets once Augur has auto bet: two of the seed's bets were its (one confirmed, one you doubled up on),
@@ -475,6 +497,8 @@ pub fn fixture_data() -> Value {
         ("auto_arm", Value::Null),
         ("auto_cancel", Value::Null),
         ("chat_place", Value::Null),
+        // a stand-in for a kept frame of the stream
+        ("stream_shot", json!(data["pal_image"].clone())),
         ("kick_sign_in", Value::Null),
         ("kick_sign_out", Value::Null),
     ] {

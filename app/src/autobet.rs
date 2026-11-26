@@ -59,6 +59,8 @@ pub struct AutoView {
     pub blocking: bool,
     /// the channel is streaming, as Kick said at the last check (None before the first)
     pub stream_live: Option<bool>,
+    /// the stream above the chat, read for the stats the site hides
+    pub stream: crate::stream::StreamView,
 }
 
 /// Kick, as this computer is signed in to it.
@@ -119,7 +121,7 @@ pub fn signed_in(app: &AppHandle, shared: &Shared) -> bool {
 }
 
 /// Runs a script in a webview and waits for what it returns (as JSON), up to `wait`.
-fn eval(w: &tauri::Webview, js: String, wait: Duration) -> Option<serde_json::Value> {
+pub(crate) fn eval(w: &tauri::Webview, js: String, wait: Duration) -> Option<serde_json::Value> {
     let (tx, rx) = mpsc::channel();
     w.eval_with_callback(js, move |out| {
         let _ = tx.send(out);
@@ -233,8 +235,10 @@ pub async fn kick_sign_out(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>
 /// chat panel (so it moves, hides and comes back with the window). Shown only with auto betting on and Kick signed
 /// in; hidden on the other tabs.
 #[tauri::command]
-pub async fn chat_place(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>, spot: Spot) -> Cmd<()> {
+pub async fn chat_place(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>, spot: Spot, stream: Option<Spot>) -> Cmd<()> {
     let view = shared.auto.lock().unwrap().clone();
+    // the stream above the chat: shown whenever Live shows its spot
+    crate::stream::place(&app, &shared, stream);
     let show = spot.visible && view.enabled && view.signed_in && !view.channel.is_empty() && spot.w > 40.0 && spot.h > 40.0;
     if !show {
         if let Some(w) = app.get_webview(CHAT) {
@@ -922,6 +926,8 @@ pub fn auto_loop(app: AppHandle, shared: Arc<Shared>) {
             signed_in: signed,
             already_bet: (!user.is_empty() && autobet::own_bet(&t.lines, &user, since, None).is_some())
                 || bet_in_picks(&conn, &p.home.owner, &p.away.owner, now.saturating_sub(site_now.saturating_sub(first))),
+            // the stream may still show the hidden side's stats (it's read for them while picks are open)
+            stream_pending: s.read_stream && !s.channel.is_empty(),
         };
         match autobet::decide(&s, &m) {
             Decision::Wait { now, was } => {

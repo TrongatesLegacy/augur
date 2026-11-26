@@ -16,7 +16,24 @@ function headline(d) {
   const c = d.call;
   const right = c.winner === c.pick;
   const verdict = `<div class="cres ${right ? 'ok' : 'bad'}"><span class="res ${right ? 'o' : 'x'}">${right ? '✓' : '✕'}</span>${right ? 'Right' : 'Missed'}</div>`;
-  return callHeadline(d, { verdict, extra: ledger(d), lead: timeline(d) });
+  return callHeadline(d, { verdict, extra: ledger(d), lead: timeline(d), stream: streamReads(d) });
+}
+
+// The stream read for a hidden side, in a word on the call's line: ✓ read (and the site agreed at the bell), ✕ the
+// site differed, or couldn't read it. What it read, or why it couldn't, is on hover; its frame beside it (click to
+// enlarge, loaded once the page is up)
+function streamReads(d) {
+  const rs = d.stream_reads || [];
+  const first = rs.find((r) => r.outcome === 'read' || r.outcome === 'missed');
+  if (!first) return '';
+  const bell = rs.find((r) => r.outcome === 'agreed' || r.outcome === 'differed');
+  const behind = first.latency != null ? ` (${first.latency.toFixed(1)}s behind live)` : '';
+  const read = first.outcome === 'read';
+  const said = read ? `Read the ${first.side} side off the stream: ${first.stats}${behind}` : `Couldn't read the ${first.side} side off the stream: ${first.detail}${behind}`;
+  const atBell = !bell ? '' : bell.outcome === 'agreed' ? '. The site agreed at the bell' : `. At the bell ${bell.detail}`;
+  const ok = read && bell?.outcome !== 'differed';
+  const shot = first.shot ? `<img data-shot="${esc(first.shot)}" alt="The stream's frame">` : '';
+  return `<span class="ts sr ${ok ? 'ok' : 'bad'}" title="${esc(said + atBell)}">stream <b>${ok ? '✓' : '✕'}</b>${shot}</span>`;
 }
 
 // what changed a version of the call, in words (revisions::cause_words)
@@ -182,6 +199,19 @@ export async function render(app, back) {
     };
   });
   wireWorm(main);
+  main.querySelectorAll('img[data-shot]').forEach((img) => {
+    invoke('stream_shot', { name: img.dataset.shot })
+      .then((src) => (img.src = src))
+      .catch(() => img.remove());
+    // the frame at a size to read, over the page: a click closes it
+    img.onclick = () => {
+      const big = document.createElement('div');
+      big.className = 'shotbig';
+      big.innerHTML = `<img src="${img.src}" alt="The stream's frame">`;
+      big.onclick = () => big.remove();
+      document.body.appendChild(big);
+    };
+  });
   const b = document.getElementById('back');
   b.onclick = back;
   b.focus({ preventScroll: true });

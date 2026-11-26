@@ -183,6 +183,8 @@ pub struct Options {
     pub lookups: bool,
     pub db_path: PathBuf,
     pub settings: Settings,
+    /// the hidden side's HP, Attack and Defence as the stream showed them (`stream::check`): (side, stats)
+    pub stream: Option<(String, [u32; 3])>,
 }
 
 /// A pal's stats and passives as its box card shows them.
@@ -271,8 +273,37 @@ pub fn predict(state: &State, opts: &Options) -> Option<Prediction> {
     let build = |key: &str, me: &StateSide, op: &StateSide, hidden: HiddenMoves, owned: Option<Vec<site::BoxPal>>| {
         let (mut st, mut pas) = (stats.get(key).cloned().unwrap_or_default(), passives.get(key).cloned().unwrap_or_default());
         let mut could_be = vec![];
+        let read = opts.stream.as_ref().filter(|(side, _)| side == key && !shown(key)).map(|(_, stats)| *stats);
         let stats_from = if shown(key) {
             "shown".to_string()
+        } else if let Some(read) = read {
+            // the stream showed the stats the site hides: the box card with those numbers (its talent rolls and
+            // passives too), or the numbers alone
+            let (cards, _) = box_stats(owned.as_deref(), &me.pal, &[]);
+            let n = cards.len();
+            let lv70 = |card: &HashMap<String, StatLine>, k: &str| card.get(k).and_then(|l| l.lv70).map(|v| v.round() as u32);
+            let found = cards.into_iter().find(|(card, _)| ["HP", "ATK", "DEF"].iter().zip(read).all(|(k, v)| lv70(card, k) == Some(v)));
+            match found {
+                Some((card, card_passives)) => {
+                    for (k, line) in card {
+                        let base = st.get(&k).and_then(|l| l.base);
+                        st.insert(k, StatLine { base, ..line });
+                    }
+                    pas = card_passives;
+                    if n > 1 {
+                        format!("read from the stream (one of {n} in their box)")
+                    } else {
+                        "read from the stream".into()
+                    }
+                }
+                None => {
+                    for (k, v) in ["HP", "ATK", "DEF"].iter().zip(read) {
+                        let line = st.entry(k.to_string()).or_default();
+                        line.lv70 = Some(v as f64);
+                    }
+                    "read from the stream (not matched to their box)".into()
+                }
+            }
         } else if !opts.lookups {
             "guessed".to_string()
         } else {
@@ -504,8 +535,11 @@ mod tests {
     #[test]
     fn predicts_the_saved_state_like_the_python_version() {
         let state = crate::seed::state("state-leaflit-wumpo.json");
-        let p =
-            predict(&state, &Options { lookups: false, db_path: PathBuf::from("/nonexistent"), settings: Settings::default() }).unwrap();
+        let p = predict(
+            &state,
+            &Options { lookups: false, db_path: PathBuf::from("/nonexistent"), settings: Settings::default(), stream: None },
+        )
+        .unwrap();
         assert_eq!(p.favourite().pal, "Wumpo");
         assert!(p.home.estimated, "the home side's stats were hidden until the bell");
         assert_eq!(p.away.fighter.fighter.hp, 8705.0);
@@ -575,8 +609,11 @@ mod tests {
     #[test]
     fn the_call_is_over_every_pal_it_could_be() {
         let state = crate::seed::state("state-leaflit-wumpo.json");
-        let p =
-            predict(&state, &Options { lookups: false, db_path: PathBuf::from("/nonexistent"), settings: Settings::default() }).unwrap();
+        let p = predict(
+            &state,
+            &Options { lookups: false, db_path: PathBuf::from("/nonexistent"), settings: Settings::default(), stream: None },
+        )
+        .unwrap();
         let (h, a) = (p.home.fighter.fighter.clone(), p.away.fighter.fighter.clone());
         let strong = Fighter { hp: h.hp * 1.5, atk: h.atk * 1.5, ..h.clone() };
         let weak = Fighter { hp: h.hp * 0.6, atk: h.atk * 0.6, ..h.clone() };
@@ -592,9 +629,28 @@ mod tests {
     #[test]
     fn a_hidden_side_says_it_was_guessed() {
         let state = crate::seed::state("state-leaflit-wumpo.json");
-        let p =
-            predict(&state, &Options { lookups: false, db_path: PathBuf::from("/nonexistent"), settings: Settings::default() }).unwrap();
+        let p = predict(
+            &state,
+            &Options { lookups: false, db_path: PathBuf::from("/nonexistent"), settings: Settings::default(), stream: None },
+        )
+        .unwrap();
         assert_eq!((p.home.stats_from.as_str(), p.away.stats_from.as_str()), ("guessed", "shown"));
         assert!(report(&p).contains("stats hidden until the bell: guessed"));
+    }
+
+    /// The stream showed the hidden side: the call uses those numbers and isn't a guess any more.
+    #[test]
+    fn a_hidden_side_read_from_the_stream() {
+        let state = crate::seed::state("state-leaflit-wumpo.json");
+        let opts = |stream| Options { lookups: false, db_path: PathBuf::from("/nonexistent"), settings: Settings::default(), stream };
+        let p = predict(&state, &opts(Some(("home".into(), [6100, 650, 720])))).unwrap();
+        let f = &p.home.fighter.fighter;
+        assert_eq!((f.hp, f.atk, f.def), (6100.0, 650.0, 720.0));
+        assert_eq!(p.home.stats_from, "read from the stream (not matched to their box)");
+        assert!(!p.estimated(), "known now, so auto bet treats it like any other call");
+        // a read of the side the site shows changes nothing
+        let shown = predict(&state, &opts(Some(("away".into(), [1, 2, 3])))).unwrap();
+        assert_eq!((shown.away.stats_from.as_str(), shown.away.fighter.fighter.hp), ("shown", 8705.0));
+        assert_eq!(shown.home.stats_from, "guessed");
     }
 }

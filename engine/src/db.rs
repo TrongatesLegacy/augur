@@ -162,6 +162,7 @@ pub fn open(path: &Path) -> Result<Connection> {
     conn.execute_batch(SCHEMA)?;
     conn.execute_batch(crate::autobet::SCHEMA)?;
     conn.execute_batch(crate::revisions::SCHEMA)?;
+    conn.execute_batch(crate::stream::SCHEMA)?;
     migrate(&conn)?;
     Ok(conn)
 }
@@ -171,6 +172,7 @@ pub fn open_memory() -> Result<Connection> {
     conn.execute_batch(SCHEMA)?;
     conn.execute_batch(crate::autobet::SCHEMA)?;
     conn.execute_batch(crate::revisions::SCHEMA)?;
+    conn.execute_batch(crate::stream::SCHEMA)?;
     migrate(&conn)?;
     Ok(conn)
 }

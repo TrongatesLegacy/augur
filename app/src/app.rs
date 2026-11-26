@@ -85,6 +85,8 @@ pub struct Shared {
     pub arm_item: Mutex<Option<MenuItem<tauri::Wry>>>,
     /// the main window's page zoom, to place the chat on Live
     pub zoom: Mutex<f64>,
+    /// the stream above the chat, and reading it for hidden stats
+    pub stream: Mutex<crate::stream::StreamState>,
 }
 
 impl Shared {
@@ -277,10 +279,14 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
                             .and_then(|h| h.lv70)
                             .is_none()
                     };
-                    let key = match (&state.home, &state.away) {
-                        (Some(h), Some(a)) => format!("{}|{}|{}|{}|{}|{}", h.actor, a.actor, h.pal, a.pal, est("home"), est("away")),
+                    let duel = match (&state.home, &state.away) {
+                        (Some(h), Some(a)) => format!("{}|{}|{}|{}", h.actor, a.actor, h.pal, a.pal),
                         _ => String::new(),
                     };
+                    // a hidden side read off the stream calls the fight again
+                    let read = crate::stream::reading_for(&shared, &duel);
+                    let key =
+                        if duel.is_empty() { String::new() } else { format!("{duel}|{}|{}|{}", est("home"), est("away"), read.is_some()) };
                     // once a fight is over ("Last duel") the site still shows both pals but not the tale of the
                     // tape, and the pal head-to-head already includes it: don't call it again from that
                     let callable = key.is_empty() || state.picks_open() || state.live;
@@ -288,7 +294,12 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
                         let settings = shared.settings.lock().unwrap().clone();
                         let p = predict::predict(
                             &state,
-                            &predict::Options { lookups: true, db_path: settings::db_path(&shared.dir), settings: shared.model() },
+                            &predict::Options {
+                                lookups: true,
+                                db_path: settings::db_path(&shared.dir),
+                                settings: shared.model(),
+                                stream: read,
+                            },
                         );
                         let stake = p.as_ref().map(|p| stake_for(&conn, &settings, p));
                         if let (Some(p), Some(st)) = (&p, &stake) {
@@ -1056,6 +1067,7 @@ pub fn run() {
         kick: Mutex::new(Default::default()),
         arm_item: Mutex::new(None),
         zoom: Mutex::new(1.0),
+        stream: Mutex::new(Default::default()),
     });
     tauri::Builder::default()
         // one Augur per computer: two copies importing the same calls file at once once stored a call twice. Opening
@@ -1124,6 +1136,7 @@ pub fn run() {
             crate::autobet::kick_sign_in,
             crate::autobet::kick_sign_out,
             crate::autobet::chat_place,
+            crate::stream::stream_shot,
             crate::autobet::auto_arm,
             crate::autobet::auto_cancel,
             crate::autobet::auto_view
@@ -1216,6 +1229,8 @@ pub fn run() {
             std::thread::spawn(move || learn_loop(h6, s6));
             let (h7, s7) = (app.handle().clone(), shared.clone());
             std::thread::spawn(move || crate::autobet::auto_loop(h7, s7));
+            let (h8, s8) = (app.handle().clone(), shared.clone());
+            std::thread::spawn(move || crate::stream::stream_loop(h8, s8));
             let started = crate::updates::UpdateView::at_start(&shared);
             if let Some(from) = &started.updated_from {
                 notify(

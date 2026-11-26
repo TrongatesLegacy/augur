@@ -14,5 +14,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = "3"
 
+[dev-dependencies]
+# the stream reader's saved frames
+png = "0.18"
+
 [lints]
 workspace = true

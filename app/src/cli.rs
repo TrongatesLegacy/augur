@@ -89,8 +89,10 @@ pub fn run(cli: Cli) -> CliResult {
                 println!("The last fight is over and the next isn't up yet ({}): nothing to call.", state.title);
                 return print_tally(&conn, &model);
             }
-            match predict::predict(&state, &predict::Options { lookups: !quick, db_path: settings::db_path(&dir), settings: model.clone() })
-            {
+            match predict::predict(
+                &state,
+                &predict::Options { lookups: !quick, db_path: settings::db_path(&dir), settings: model.clone(), stream: None },
+            ) {
                 None => println!("No duel up right now ({}).", if state.title.is_empty() { "idle" } else { &state.title }),
                 Some(p) => {
                     let st = stake::suggest(&p.pick, p.prob, &app.staking, &bets::odds(&conn)?);

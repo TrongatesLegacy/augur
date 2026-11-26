@@ -876,7 +876,16 @@ const MAIN_DRIVER: &str = r#"
           document.querySelector('#main tr[data-call]')?.click();
           await sleep(300);
           const sr = document.querySelector('#main .sr');
-          return sr ? { text: sr.innerText, title: sr.title, cls: sr.className, frame: !!sr.querySelector('img') } : null;
+          if (!sr) return null;
+          // hovering the chip shows the frame and what it read beside it, inside the window; leaving hides it
+          sr.dispatchEvent(new MouseEvent('mouseenter'));
+          await sleep(200);
+          const pop = document.querySelector('.shotpop');
+          const box = pop?.getBoundingClientRect();
+          const out = { text: sr.innerText, said: pop?.innerText || '', cls: sr.className, thumb: !!sr.querySelector('img'), frame: !!pop?.querySelector('img'), inside: !!box && box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, wide: box?.width || 0 };
+          sr.dispatchEvent(new MouseEvent('mouseleave'));
+          out.hidden = !document.querySelector('.shotpop');
+          return out;
         };
         out.callCheck = await check({ outcome: 'checked' });
         out.callMisread = await check({ outcome: 'misread', detail: 'the stream read 7484/885/1084 and 6902/941/1033, the site shows 7484/885/1034 and 6902/941/1033' });
@@ -1320,19 +1329,23 @@ fn every_tab_renders_headless() {
         "an old call without a tape or fighters still opens: {bare}"
     );
     assert!(r["callBack"].as_str().unwrap().to_lowercase().contains("calibration"), "Back returns to the calls");
-    // a fight with nothing hidden shows the reader's check on it, with its frame
+    // a fight with nothing hidden shows the reader's check on it, its frame (no thumbnail) on hover
     let (ok, bad) = (&r["callCheck"], &r["callMisread"]);
     assert!(
         ok["text"].as_str().unwrap().contains('✓')
             && ok["cls"].as_str().unwrap().contains("ok")
             && ok["frame"] == true
-            && ok["title"].as_str().unwrap().contains("both sides read as the site showed them"),
+            && ok["thumb"] == false
+            && ok["inside"] == true
+            && ok["wide"].as_f64().unwrap() >= 400.0
+            && ok["hidden"] == true
+            && ok["said"].as_str().unwrap().contains("both sides read as the site showed them"),
         "a check that agreed: {ok}"
     );
     assert!(
         bad["text"].as_str().unwrap().contains('✕')
             && bad["cls"].as_str().unwrap().contains("bad")
-            && bad["title"].as_str().unwrap().contains("the stream read 7484/885/1084"),
+            && bad["said"].as_str().unwrap().contains("the stream read 7484/885/1084"),
         "a misread: {bad}"
     );
     let doubt = r["callDoubt"].as_str().unwrap().to_lowercase();

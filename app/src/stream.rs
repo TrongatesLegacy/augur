@@ -3,7 +3,7 @@
 //! kept apart from the chat's and the sign-in's, so it watches logged out and never counts as your Kick account (Pear
 //! Drops watches as you). While a fight with a hidden side is up, the panel's part of a frame is read every few
 //! seconds (`augur_engine::stream`); a read the shown side agrees with goes into the call, and each fight's reads
-//! (and misses, with the frame) go into its history.
+//! (and misses, with the frame, kept in the store) go into its history.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -101,6 +101,7 @@ pub fn place(app: &AppHandle, shared: &Shared, spot: Option<Spot>) {
 
 /// Reads the stream while it's wanted, and keeps the player there while Live shows it. Runs for the app's life.
 pub fn stream_loop(app: AppHandle, shared: Arc<Shared>) {
+    adopt_files(&shared);
     while !shared.stop.load(Ordering::Relaxed) {
         std::thread::sleep(Duration::from_secs(1));
         let s = shared.settings.lock().unwrap().auto_bet.clone();
@@ -233,7 +234,7 @@ fn read_frame(
                 Check::Read { stats } => {
                     let at = p.seen_at.max(now_ms());
                     let call_id = shared.stream.lock().unwrap().attempt.as_ref().map(|a| a.call_id).unwrap_or(0);
-                    let shot = f.shot.as_deref().and_then(|b| save_shot(shared, call_id, at, b));
+                    let shot = f.shot.as_deref().and_then(|b| save_shot(conn, at, stream::READ, b));
                     let _ = stream::record(
                         conn,
                         call_id,
@@ -304,7 +305,7 @@ fn missed(app: &AppHandle, shared: &Shared, conn: &rusqlite::Connection, a: &Att
         .shot
         .as_deref()
         .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
-        .and_then(|b| save_shot(shared, a.call_id, at, &b));
+        .and_then(|b| save_shot(conn, at, stream::MISSED, &b));
     let _ = stream::record(
         conn,
         a.call_id,
@@ -493,13 +494,29 @@ fn words(read: &[Option<u32>; 3]) -> String {
     read.map(|v| v.map_or("?".to_string(), |n| n.to_string())).join("/")
 }
 
-/// Keeps a frame in the data folder's stream folder; returns its file name.
-fn save_shot(shared: &Shared, call_id: i64, at: u64, jpeg: &[u8]) -> Option<String> {
-    let dir = shared.dir.join("stream");
-    std::fs::create_dir_all(&dir).ok()?;
-    let name = format!("{call_id}-{at}.jpg");
-    std::fs::write(dir.join(&name), jpeg).ok()?;
+/// Keeps a frame in the store (so backups and the sync carry it); returns its name.
+fn save_shot(conn: &rusqlite::Connection, at: u64, outcome: &str, jpeg: &[u8]) -> Option<String> {
+    let name = stream::frame_name(at, outcome);
+    stream::save_frame(conn, &name, jpeg).ok()?;
     Some(name)
+}
+
+/// Frames kept as files in the data folder's stream folder (before they went in the store) move into it.
+fn adopt_files(shared: &Shared) {
+    let dir = shared.dir.join("stream");
+    let (Ok(files), Ok(conn)) = (std::fs::read_dir(&dir), shared.db()) else { return };
+    for f in files.flatten() {
+        let name = f.file_name().to_string_lossy().to_string();
+        if !name.ends_with(".jpg") || !stream::safe_name(&name) {
+            continue;
+        }
+        if let Ok(jpeg) = std::fs::read(f.path()) {
+            if stream::save_frame(&conn, &name, &jpeg).is_ok() {
+                let _ = std::fs::remove_file(f.path());
+            }
+        }
+    }
+    let _ = std::fs::remove_dir(dir);
 }
 
 fn set_view(app: &AppHandle, shared: &Shared, f: impl FnOnce(&mut StreamView)) {
@@ -516,12 +533,10 @@ fn set_view(app: &AppHandle, shared: &Shared, f: impl FnOnce(&mut StreamView)) {
     let _ = app.emit("autobet", &*shared.auto.lock().unwrap());
 }
 
-/// A kept frame, for the call's history: as a data URL. Only names in the stream folder.
+/// A kept frame, for the call's history: as a data URL.
 #[tauri::command]
 pub fn stream_shot(shared: tauri::State<'_, Arc<Shared>>, name: String) -> Result<String, String> {
-    if name.is_empty() || name.contains(['/', '\\']) || name.contains("..") {
-        return Err("not a frame".into());
-    }
-    let bytes = std::fs::read(shared.dir.join("stream").join(&name)).map_err(|e| e.to_string())?;
-    Ok(format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+    let conn = shared.db()?;
+    let jpeg = stream::frame(&conn, &name).map_err(|e| e.to_string())?.ok_or("not kept here")?;
+    Ok(format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(jpeg)))
 }

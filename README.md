@@ -91,13 +91,13 @@ Augur updates itself from this repository's GitHub releases:
 
 **Settings › Sync & data › Sync** works the way Stream Multiview's does:
 - **The folder:** you pick a folder a sync app already moves. Augur finds OneDrive, iCloud Drive, Dropbox and Google Drive, or you can choose another folder. It creates `Augur Sync/` inside it.
-- **No clashes:** each computer writes only its own files there (`devices/<id>.json`, `calls/<id>.jsonl` and `autobets/<id>.jsonl`) and reads the others' every minute, and within seconds of the sync app bringing a change in. Nothing needs a lock, and the sync app never makes "conflicted copies".
-- **What syncs:** your settings (the latest change to each one wins) and Augur's calls with their history (merged, never duplicated).
+- **No clashes:** each computer writes only its own files there (`devices/<id>.json`, `calls/<id>.jsonl` and `autobets/<id>.jsonl`; the stream's frames go in `frames/`, a file each, written once and the same on every computer) and reads the others' every minute, and within seconds of the sync app bringing a change in. Nothing needs a lock, and the sync app never makes "conflicted copies".
+- **What syncs:** your settings (the latest change to each one wins), Augur's calls with their history and stream reads (merged, never duplicated), the frames those reads kept, and auto bets.
 - **What stays on each computer:** the sign-ins (PalDuels' is encrypted for that computer; Kick's is in its browser storage), launch at login, start in the tray, background fetching, and whether auto betting is on or arms when Augur starts (only one computer can have it on; its other settings sync). A setting an update starts syncing keeps the value you set on either computer, rather than taking another computer's untouched default. Duels, species and your bets come from the site on each computer.
 
 **Back up… and Import…** cover setting up a new computer:
-- **Back up…** saves a complete copy of the store (calls, duels, tapes, species, bets) wherever you choose, such as OneDrive.
-- **Import…** merges one in, or a calls file. It adds what's missing and never overwrites, so a new PC skips the hour-long first fetch. Calls, duels and species it already has gain only what they lack, such as the pal ranks on calls made before Augur read them; sync fills those in the same way.
+- **Back up…** saves a complete copy of the store (calls with their history, stream reads and frames, auto bets, duels, tapes, species, bets) in one file wherever you choose, such as OneDrive.
+- **Import…** merges one in, or a calls file. It adds what's missing and never overwrites (another computer's auto bets come in as its, never as this one's), so a new PC skips the hour-long first fetch. Calls, duels and species it already has gain only what they lack, such as the pal ranks on calls made before Augur read them; sync fills those in the same way.
 
 Don't move the data folder itself into OneDrive: the app writes to its database every few seconds, and syncing a live SQLite file can corrupt it.
 

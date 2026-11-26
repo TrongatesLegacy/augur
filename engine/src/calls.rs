@@ -69,6 +69,9 @@ pub struct Details {
     /// rebuilt them, since every computer can rebuild them
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub revisions: Vec<crate::revisions::Revision>,
+    /// the stream read for a hidden side: what it found and the frame's name (the frames go apart: see `sync`)
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub stream_reads: Vec<crate::stream::StreamRead>,
 }
 
 /// Writes every settled call with full fighter data. Returns how many.
@@ -188,7 +191,7 @@ fn import_lines(conn: &Connection, text: &str) -> crate::Result<db::Merged> {
     Ok(db::Merged { calls: added, filled, ..Default::default() })
 }
 
-fn details(conn: &Connection, id: i64) -> crate::Result<Details> {
+pub(crate) fn details(conn: &Connection, id: i64) -> crate::Result<Details> {
     let revisions: Vec<_> = crate::revisions::of_call(conn, id)?;
     let revisions = if revisions.iter().any(|r| r.backfilled()) { vec![] } else { revisions };
     let mut d = conn.query_row(
@@ -211,16 +214,19 @@ fn details(conn: &Connection, id: i64) -> crate::Result<Details> {
                 stats_from: text(7)?,
                 app_version: text(8)?,
                 revisions: vec![],
+                stream_reads: vec![],
             })
         },
     )?;
     d.revisions = revisions;
+    // (a backup from before the stream was read hasn't the table)
+    d.stream_reads = crate::stream::of_call(conn, id).unwrap_or_default();
     Ok(d)
 }
 
 /// Fills in what a call here doesn't know yet from another computer's line, keeping what it has. Whether it gained
 /// anything.
-fn fill_details(conn: &Connection, id: i64, d: &Details) -> crate::Result<bool> {
+pub(crate) fn fill_details(conn: &Connection, id: i64, d: &Details) -> crate::Result<bool> {
     let [ps, psp, ph] = d.factors.map_or([None; 3], |f| f.map(Some));
     let n = conn.execute(
         "UPDATE predictions SET
@@ -246,7 +252,54 @@ fn fill_details(conn: &Connection, id: i64, d: &Details) -> crate::Result<bool> 
         rusqlite::params![id, d.estimated as i64, ps, psp, ph, d.closed_at, d.late_pick, d.late_prob, d.stats_from, d.app_version],
     )?;
     let history = crate::revisions::merge(conn, id, &d.revisions)?;
-    Ok(n > 0 || history)
+    let reads = crate::stream::merge(conn, id, &d.stream_reads)?;
+    Ok(n > 0 || history || reads)
+}
+
+/// Brings in what a backup (`other`, opened on its own) knows about its calls beyond what `db::merge_from` copies:
+/// for each of its calls that's here (the same fight seen at the same moment), its details, history and stream
+/// reads, its marks (overwritten after the fight, closed, first called after picks closed) and staking. Then its auto
+/// bets, tied to the calls here. A backup from an older Augur lacks some of these, and they're skipped. Returns how
+/// many calls that were here already (ids up to `before`) gained something, and how many auto bets came in.
+pub fn merge_backup(conn: &Connection, other: &Connection, before: i64) -> crate::Result<(usize, usize)> {
+    let theirs: Vec<(i64, String, String, i64)> = other
+        .prepare("SELECT id, home_owner, away_owner, seen_at FROM predictions WHERE seen_at > 0")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut ids = HashMap::new();
+    let mut gained = 0;
+    for (theirs_id, home, away, seen_at) in theirs {
+        let Some(here) = db::call_at(conn, &home, &away, seen_at)? else { continue };
+        ids.insert(theirs_id, here);
+        let mut more = details(other, theirs_id).ok().map(|d| fill_details(conn, here, &d)).transpose()?.unwrap_or(false);
+        let marks: Option<(i64, i64, i64, Option<String>)> = other
+            .query_row(
+                "SELECT COALESCE(damaged, 0), COALESCE(closed, 0), COALESCE(late_only, 0), staking FROM predictions WHERE id = ?",
+                [theirs_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .ok();
+        if let Some((damaged, closed, late_only, staking)) = marks {
+            more |= conn.execute(
+                "UPDATE predictions SET damaged = MAX(COALESCE(damaged, 0), ?2), closed = MAX(COALESCE(closed, 0), ?3),
+                     late_only = MAX(COALESCE(late_only, 0), ?4), staking = COALESCE(staking, ?5)
+                 WHERE id = ?1 AND (COALESCE(damaged, 0) < ?2 OR COALESCE(closed, 0) < ?3 OR COALESCE(late_only, 0) < ?4
+                     OR (staking IS NULL AND ?5 IS NOT NULL))",
+                rusqlite::params![here, damaged, closed, late_only, staking],
+            )? > 0;
+        }
+        gained += usize::from(more && here <= before);
+    }
+    let mut bets = 0;
+    for b in crate::autobet::all(other).unwrap_or_default() {
+        let call = b.prediction_id.and_then(|id| ids.get(&id).copied());
+        // one tied to a call here that already has its auto bet is that bet
+        if call.is_some_and(|id| crate::autobet::for_call(conn, id).ok().flatten().is_some()) {
+            continue;
+        }
+        bets += usize::from(crate::autobet::insert_copy(conn, &b, call, "backup")?);
+    }
+    Ok((gained, bets))
 }
 
 #[cfg(test)]
@@ -476,5 +529,61 @@ mod tests {
         assert_eq!(done.len(), n, "every synced call arrived, the one on the open fight too");
         assert!(done.iter().any(|c| c.seen_at == theirs.seen_at && c.pick == theirs.pick));
         let _ = std::fs::remove_file(out);
+    }
+
+    /// A backup brings in more than its calls: their history, stream reads and frames, marks, staking and auto bets.
+    #[test]
+    fn a_backup_brings_everything_its_calls_know() {
+        use crate::stream::{self, StreamRead};
+        let theirs = crate::seed::store();
+        let c = db::settled(&theirs).unwrap().pop().unwrap();
+        // a history kept live (the seed's are rebuilt ones, which every computer can rebuild for itself)
+        theirs.execute("DELETE FROM call_revisions WHERE prediction_id = ?", [c.id]).unwrap();
+        crate::revisions::record(&theirs, c.id, crate::revisions::Revision { pick: c.pick.clone(), prob: c.prob, ..Default::default() })
+            .unwrap();
+        let name = stream::frame_name(9, stream::READ);
+        let read = StreamRead { at: 9, outcome: stream::READ.into(), side: "home".into(), shot: Some(name.clone()), ..Default::default() };
+        stream::record(&theirs, c.id, &read).unwrap();
+        stream::save_frame(&theirs, &name, b"jpeg").unwrap();
+        theirs
+            .execute(
+                "UPDATE predictions SET damaged = 1, stats_from = 'home: read from the stream; away: shown', closed_at = 77 WHERE id = ?",
+                [c.id],
+            )
+            .unwrap();
+        let bet = crate::autobet::AutoBet {
+            prediction_id: Some(c.id),
+            home_owner: c.home_owner.clone(),
+            away_owner: c.away_owner.clone(),
+            side: c.pick.clone(),
+            amount: 500,
+            command: "!h".into(),
+            status: "confirmed".into(),
+            ..Default::default()
+        };
+        crate::autobet::claim(&theirs, &bet).unwrap();
+        let file = std::env::temp_dir().join(format!("augur-backup-test-{}.db", std::process::id()));
+        db::backup_to(&theirs, &file).unwrap();
+
+        let here = db::open_memory().unwrap();
+        let m = db::merge_from(&here, &file).unwrap();
+        let id = db::call_at(&here, &c.home_owner, &c.away_owner, c.seen_at).unwrap().unwrap();
+        assert_eq!((m.frames, m.auto_bets), (1, 1));
+        assert_eq!(stream::of_call(&here, id).unwrap(), [read]);
+        assert_eq!(stream::frame(&here, &name).unwrap().as_deref(), Some(&b"jpeg"[..]));
+        assert_eq!(crate::revisions::of_call(&here, id).unwrap().len(), 1, "its history");
+        let (damaged, from, closed): (i64, String, i64) = here
+            .query_row("SELECT damaged, stats_from, closed_at FROM predictions WHERE id = ?", [id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap();
+        assert_eq!((damaged, from.as_str(), closed), (1, "home: read from the stream; away: shown", 77));
+        let b = crate::autobet::for_call(&here, id).unwrap().unwrap();
+        assert_eq!((b.status.as_str(), b.device.as_deref()), ("confirmed", Some("backup")), "never sent out as this computer's own");
+        // merging it again adds nothing
+        let again = db::merge_from(&here, &file).unwrap();
+        assert_eq!((again.calls, again.frames, again.auto_bets), (0, 0, 0));
+        assert_eq!(stream::of_call(&here, id).unwrap().len(), 1);
+        let _ = std::fs::remove_file(file);
     }
 }

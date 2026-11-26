@@ -2,10 +2,11 @@
 //! stream's overlay shows both sides' (HP, Attack and Defence at level 70) while picks are still open. The app grabs
 //! the panel's part of a frame from Kick's player (`PANEL`, scaled to 1080p), and `read` turns it into numbers.
 //!
-//! The overlay has a fixed layout and font, so this reads it the simple way: each number sits in a known spot,
-//! its digits are split apart and matched against stored digit shapes (`DIGITS`, averaged from the stream's own
-//! frames). A read is only trusted when the side the site shows reads exactly as the site has it (`check`), which
-//! also proves the frame is of the duel being called.
+//! The overlay's font stays put but its layout has changed before, so this finds the layout from the middle column's
+//! lavender labels (which rows, where the middle is) and reads outward from them to the first white or grey number,
+//! ignoring anything coloured. Each number's digits are split apart and matched against stored digit shapes
+//! (`DIGITS`, averaged from the stream's own frames). A read is only trusted when the side the site shows reads
+//! exactly as the site has it (`check`), which also proves the frame is of the duel being called.
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -13,7 +14,9 @@ use serde::{Deserialize, Serialize};
 use crate::db::Result;
 
 /// The panel's part of a 1920×1080 frame: x, y, width, height. Frames of other sizes are scaled to 1080p first.
-pub const PANEL: (u32, u32, u32, u32) = (430, 305, 720, 155);
+/// It's roomier than the panel itself: the rows and the middle column are found from the labels, so a panel that sits
+/// a little higher, lower or to one side still reads (this covers the overlay before and after its late-2026 redesign).
+pub const PANEL: (u32, u32, u32, u32) = (430, 290, 720, 240);
 
 /// The part of a frame at `PANEL`, as RGBA (what a canvas gives).
 #[derive(Clone, Debug, Default)]
@@ -45,12 +48,25 @@ pub fn read(c: &Crop) -> Option<Panel> {
     if c.w != PANEL.2 as usize || c.h != PANEL.3 as usize || c.rgba.len() != c.w * c.h * 4 {
         return None;
     }
-    if !ROWS.iter().all(|&y| label_shows(c, y)) {
-        return None;
-    }
-    let lum: Vec<f64> = c.rgba.as_chunks::<4>().0.iter().map(|p| (p[0] as f64 + p[1] as f64 + p[2] as f64) / 3.0).collect();
+    let (rows, mid) = label_rows(c)?;
+    // the numbers are white or grey: coloured pixels (the markers, IV badges, bars and labels) count as dark
+    let lum: Vec<f64> = c
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|p| {
+            let (hi, lo) = (p[0].max(p[1]).max(p[2]) as f64, p[0].min(p[1]).min(p[2]) as f64);
+            if hi - lo > MAX_TINT * hi {
+                0.0
+            } else {
+                (p[0] as f64 + p[1] as f64 + p[2] as f64) / 3.0
+            }
+        })
+        .collect();
     let num = |x0: usize, x1: usize, y: usize, from_right: bool| number(&lum, c.w, x0, x1, y, from_right);
-    Some(Panel { home: ROWS.map(|y| num(HOME_X.0, HOME_X.1, y, true)), away: ROWS.map(|y| num(AWAY_X.0, AWAY_X.1, y, false)) })
+    let (home_end, away_start) = (mid.checked_sub(NUMBERS_FROM_MID)?, mid + NUMBERS_FROM_MID);
+    (away_start < c.w).then(|| Panel { home: rows.map(|y| num(0, home_end, y, true)), away: rows.map(|y| num(away_start, c.w, y, false)) })
 }
 
 /// What a read says about the hidden side.
@@ -225,34 +241,74 @@ pub fn safe_name(name: &str) -> bool {
 
 // --- the layout, in the panel's own pixels (1080p) ---
 
-/// The middle of each stat row: HP, Attack, Defence.
-const ROWS: [usize; 3] = [23, 78, 133];
-/// Where the home side's numbers end (right-aligned) and the away side's start (left-aligned).
-const HOME_X: (usize, usize) = (0, 162);
-const AWAY_X: (usize, usize) = (560, 720);
-/// The middle column's lavender labels (HP, ATTACK, DEFENCE), which say the panel is up.
-const LABEL_X: (usize, usize) = (270, 450);
+/// Where to look for the middle column's lavender labels (POWER, HP, ATTACK, DEFENCE), which say the panel is up and
+/// where its rows and middle are.
+const LABEL_X: (usize, usize) = (250, 464);
+/// The home side's numbers end (right-aligned) and the away side's start (left-aligned) at least this far from the
+/// middle. The redesigned labels are pale enough to pass for grey and DEFENCE reaches about 60 either side; the older,
+/// wider ones are coloured, so reading skips them anyway.
+const NUMBERS_FROM_MID: usize = 66;
+/// A pixel this far from grey (its brightest channel less its dimmest, as a share of the brightest) is coloured, not
+/// part of a number; dim pixels count too, so a coloured label's soft edges don't pass for a digit.
+const MAX_TINT: f64 = 0.3;
+/// A pixel row is part of a label from this many lavender pixels.
+const LABEL_HITS: usize = 4;
+/// No label reaches this close to the ends of `LABEL_X`.
+const LABEL_EDGE: usize = 4;
+/// A label's height: anything shorter or taller is something else.
+const LABEL_H: (usize, usize) = (14, 30);
+/// How far apart the stat rows are, give or take.
+const ROW_STEP: (usize, usize) = (50, 80);
+/// A row's numbers sit this far above the middle of its label.
+const LABEL_DROP: usize = 9;
 
-fn label_shows(c: &Crop, y: usize) -> bool {
-    let (mut hits, mut all) = (0usize, 0usize);
-    for yy in y.saturating_sub(14)..(y + 14).min(c.h) {
-        for x in LABEL_X.0..LABEL_X.1 {
-            let i = (yy * c.w + x) * 4;
-            let (r, g, b) = (c.rgba[i] as i32, c.rgba[i + 1] as i32, c.rgba[i + 2] as i32);
-            all += 1;
-            if b > 170 && r > 130 && g < 170 && b - g > 40 {
-                hits += 1;
+/// The middle of each stat row's numbers (HP, Attack, Defence), found from the last three labels (POWER above them is
+/// optional), and the middle of the labels' column; None when they aren't there.
+fn label_rows(c: &Crop) -> Option<([usize; 3], usize)> {
+    let lavender = |x: usize, y: usize| {
+        let i = (y * c.w + x) * 4;
+        let (r, g, b) = (c.rgba[i] as i32, c.rgba[i + 1] as i32, c.rgba[i + 2] as i32);
+        b > 190 && r > 150 && b - g > 20 && b >= r
+    };
+    let lit: Vec<bool> = (0..c.h).map(|y| (LABEL_X.0..LABEL_X.1).filter(|&x| lavender(x, y)).count() >= LABEL_HITS).collect();
+    // runs of lit rows, bridging the odd unlit row inside a word
+    let mut bands = vec![];
+    let mut y = 0;
+    while y < c.h {
+        if !lit[y] {
+            y += 1;
+            continue;
+        }
+        let (start, mut end) = (y, y);
+        while y < c.h && (lit[y] || (y + 1 < c.h && lit[y + 1]) || (y + 2 < c.h && lit[y + 2])) {
+            if lit[y] {
+                end = y;
             }
+            y += 1;
+        }
+        let h = end - start + 1;
+        // a label sits in the middle of the strip; lavender text running to its edges is the caption under the panel
+        let edges = |x: usize| (start..=end).any(|y| lavender(x, y));
+        let inside = !(LABEL_X.0..LABEL_X.0 + LABEL_EDGE).any(edges) && !(LABEL_X.1 - LABEL_EDGE..LABEL_X.1).any(edges);
+        if (LABEL_H.0..=LABEL_H.1).contains(&h) && inside {
+            bands.push((start, end));
         }
     }
-    hits as f64 / all.max(1) as f64 > 0.08
+    let [hp, atk, def] = *bands.last_chunk::<3>()?;
+    let middle = |(a, b): (usize, usize)| (a + b) / 2;
+    let steps_fit = [middle(atk) - middle(hp), middle(def) - middle(atk)].iter().all(|d| (ROW_STEP.0..=ROW_STEP.1).contains(d));
+    let rows = [hp, atk, def].map(|band| middle(band).saturating_sub(LABEL_DROP));
+    // DEFENCE is the widest label, so its ends give the column's middle
+    let xs: Vec<usize> = (def.0..=def.1).flat_map(|y| (LABEL_X.0..LABEL_X.1).filter(move |&x| lavender(x, y))).collect();
+    let mid = (xs.iter().min()? + xs.iter().max()?) / 2;
+    (steps_fit && rows[0] >= ABOVE && rows[2] + BELOW <= c.h).then_some((rows, mid))
 }
 
 // --- digits ---
 
 /// Rows above and below a stat row's middle that its numbers take.
 const ABOVE: usize = 15;
-const BELOW: usize = 12;
+const BELOW: usize = 14;
 /// A wider gap than this ends the number (the arrow and the species base come next).
 const GAP: usize = 8;
 /// A digit's shape is compared at this size.
@@ -270,6 +326,8 @@ fn number(lum: &[f64], w: usize, x0: usize, x1: usize, y: usize, from_right: boo
             vals.push(px(r, c));
         }
     }
+    // coloured pixels were set to 0: leave them out of the split, or they drag it down into the digits' soft edges
+    vals.retain(|v| *v > 0.0);
     let th = otsu(&vals).max(80.0);
     let on = |r: usize, c: usize| px(r, c) > th;
     let count: Vec<usize> = (0..cols).map(|c| (0..rows).filter(|&r| on(r, c)).count()).collect();
@@ -308,7 +366,7 @@ fn number(lum: &[f64], w: usize, x0: usize, x1: usize, y: usize, from_right: boo
         let h = btm - t + 1;
         if h >= 15 {
             kept.push((true, a, b, t, btm));
-        } else if started && h <= 10 && t >= 12 && b - a <= 8 {
+        } else if started && h <= 10 && t >= 12 && b - a <= 10 {
             kept.push((false, a, b, t, btm));
         } else if started {
             break;
@@ -442,6 +500,8 @@ mod tests {
     use super::*;
 
     /// A saved panel (a PNG crop of `PANEL` from a frame of the stream: numbers and labels only, no names or art).
+    /// `panel-*` are from before the late-2026 redesign (taken lower and shorter, padded out with black), `redesign-*`
+    /// after it.
     fn crop(name: &str) -> Crop {
         let path = format!("{}/tests/frames/{name}", env!("CARGO_MANIFEST_DIR"));
         let decoder = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(path).unwrap()));
@@ -470,6 +530,9 @@ mod tests {
             ("panel-465.png", [6270, 464, 797], [5072, 661, 677]),
             ("panel-466.png", [4986, 576, 706], [5778, 778, 691]),
             ("panel-481.png", [7688, 1044, 1145], [8826, 919, 1318]),
+            ("redesign-1.png", [7484, 885, 1034], [6902, 941, 1033]),
+            ("redesign-2.png", [5246, 563, 673], [4986, 582, 696]),
+            ("redesign-3.png", [5086, 510, 650], [5532, 550, 624]),
         ] {
             let p = read(&crop(name)).unwrap_or_else(|| panic!("{name}: the panel is up"));
             assert_eq!((p.home, p.away), (some(home), some(away)), "{name}");
@@ -480,11 +543,37 @@ mod tests {
     fn reads_a_720p_frame_scaled_up() {
         let p = read(&crop("panel-465-720p.png")).unwrap();
         assert_eq!((p.home, p.away), (some([6270, 464, 797]), some([5072, 661, 677])));
+        let p = read(&crop("redesign-1-720p.png")).unwrap();
+        assert_eq!((p.home, p.away), (some([7484, 885, 1034]), some([6902, 941, 1033])));
+    }
+
+    #[test]
+    fn reads_a_panel_that_has_moved() {
+        // the rows and middle are found from the labels, so a panel that sits a little off still reads
+        let c = crop("redesign-1.png");
+        let moved = |dx: isize, dy: isize| {
+            let mut rgba = vec![0; c.rgba.len()];
+            for y in 0..c.h {
+                for x in 0..c.w {
+                    let (sx, sy) = (x as isize - dx, y as isize - dy);
+                    if (0..c.w as isize).contains(&sx) && (0..c.h as isize).contains(&sy) {
+                        let (to, from) = ((y * c.w + x) * 4, (sy as usize * c.w + sx as usize) * 4);
+                        rgba[to..to + 4].copy_from_slice(&c.rgba[from..from + 4]);
+                    }
+                }
+            }
+            Crop { w: c.w, h: c.h, rgba }
+        };
+        for (dx, dy) in [(0, -20), (0, 25), (-12, 0), (10, 0), (8, -15), (-8, 15)] {
+            let p = read(&moved(dx, dy)).unwrap_or_else(|| panic!("moved {dx}, {dy}: the panel is up"));
+            assert_eq!((p.home, p.away), (some([7484, 885, 1034]), some([6902, 941, 1033])), "moved {dx}, {dy}");
+        }
     }
 
     #[test]
     fn no_panel_when_the_stream_shows_the_game() {
         assert_eq!(read(&crop("panel-472.png")), None);
+        assert_eq!(read(&crop("game-redesign.png")), None);
         assert_eq!(read(&Crop { w: 10, h: 10, rgba: vec![0; 400] }), None, "the wrong size");
     }
 

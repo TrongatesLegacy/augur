@@ -21,8 +21,8 @@ function headline(d) {
 
 // The stream read for a hidden side, in a word on the call's line: ✓ read (and the site agreed at the bell), ✕ the
 // site differed, or couldn't read it. A fight with nothing hidden shows the reader's check on it instead: ✓ both
-// sides read as the site showed them, ✕ a misread, or – no panel to check. What it read, or why it couldn't, is on
-// hover; its frame beside it (click to enlarge, loaded once the page is up)
+// sides read as the site showed them, ✕ a misread, or – no panel to check. Hovering it shows the frame with what it
+// read, or why it couldn't; a click opens the frame full size
 function streamReads(d) {
   const rs = d.stream_reads || [];
   const first = rs.find((r) => r.outcome === 'read' || r.outcome === 'missed');
@@ -34,8 +34,7 @@ function streamReads(d) {
   const said = read ? `Read the ${first.side} side off the stream: ${first.stats}${behind}` : `Couldn't read the ${first.side} side off the stream: ${first.detail}${behind}`;
   const atBell = !bell ? '' : bell.outcome === 'agreed' ? '. The site agreed at the bell' : `. At the bell ${bell.detail}`;
   const ok = read && bell?.outcome !== 'differed';
-  const shot = first.shot ? `<img data-shot="${esc(first.shot)}" alt="The stream's frame">` : '';
-  return `<span class="ts sr ${ok ? 'ok' : 'bad'}" title="${esc(said + atBell)}">stream <b>${ok ? '✓' : '✕'}</b>${shot}</span>`;
+  return chip(ok ? 'ok' : 'bad', ok ? '✓' : '✕', said + atBell, first.shot);
 }
 
 function streamCheck(rs) {
@@ -48,8 +47,63 @@ function streamCheck(rs) {
     misread: ['bad', '✕', `Nothing was hidden, so the reader was checked: ${c.detail}`],
     unchecked: ['', '–', `Nothing was hidden, and the reader couldn't be checked: ${c.detail}`],
   }[c.outcome];
-  const shot = c.shot ? `<img data-shot="${esc(c.shot)}" alt="The stream's frame">` : '';
-  return `<span class="ts sr ${tone}" title="${esc(said + behind)}">stream <b>${mark}</b>${shot}</span>`;
+  return chip(tone, mark, said + behind, c.shot);
+}
+
+// "stream ✓": with a frame kept, hovering shows it with `said` under it (see `wireShots`); without one, `said` is
+// the tooltip
+const chip = (tone, mark, said, shot) =>
+  shot
+    ? `<span class="ts sr ${tone} has" data-shot="${esc(shot)}" data-said="${esc(said)}" tabindex="0">stream <b>${mark}</b></span>`
+    : `<span class="ts sr ${tone}" title="${esc(said)}">stream <b>${mark}</b></span>`;
+
+// The frames behind "stream ✓": loaded on the first hover, shown beside the chip while it's hovered (below it, or
+// above when there's no room), and full size over the page on a click
+function wireShots(main) {
+  main.querySelectorAll('.sr[data-shot]').forEach((sr) => {
+    let src;
+    const load = () => (src ??= invoke('stream_shot', { name: sr.dataset.shot }).catch(() => null));
+    let pop;
+    const hide = () => {
+      pop?.remove();
+      pop = null;
+    };
+    const show = async () => {
+      hide();
+      pop = document.createElement('div');
+      pop.className = 'shotpop';
+      pop.innerHTML = `<div class="sp"></div><p>${esc(sr.dataset.said)}</p>`;
+      document.body.appendChild(pop);
+      place();
+      const url = await load();
+      if (!pop) return;
+      pop.querySelector('.sp').innerHTML = url ? `<img src="${url}" alt="The stream's frame">` : '<span>The frame couldn’t be loaded</span>';
+      place();
+    };
+    const place = () => {
+      if (!pop) return;
+      const r = sr.getBoundingClientRect();
+      const w = Math.min(480, innerWidth - 24);
+      pop.style.width = `${w}px`;
+      const h = pop.offsetHeight;
+      pop.style.left = `${Math.max(12, Math.min(r.left + r.width / 2 - w / 2, innerWidth - w - 12))}px`;
+      pop.style.top = `${r.bottom + 8 + h <= innerHeight - 12 ? r.bottom + 8 : Math.max(12, r.top - 8 - h)}px`;
+    };
+    sr.onmouseenter = show;
+    sr.onfocus = show;
+    sr.onmouseleave = hide;
+    sr.onblur = hide;
+    sr.onclick = async () => {
+      hide();
+      const url = await load();
+      if (!url) return;
+      const big = document.createElement('div');
+      big.className = 'shotbig';
+      big.innerHTML = `<img src="${url}" alt="The stream's frame">`;
+      big.onclick = () => big.remove();
+      document.body.appendChild(big);
+    };
+  });
 }
 
 // what changed a version of the call, in words (revisions::cause_words)
@@ -215,19 +269,7 @@ export async function render(app, back) {
     };
   });
   wireWorm(main);
-  main.querySelectorAll('img[data-shot]').forEach((img) => {
-    invoke('stream_shot', { name: img.dataset.shot })
-      .then((src) => (img.src = src))
-      .catch(() => img.remove());
-    // the frame at a size to read, over the page: a click closes it
-    img.onclick = () => {
-      const big = document.createElement('div');
-      big.className = 'shotbig';
-      big.innerHTML = `<img src="${img.src}" alt="The stream's frame">`;
-      big.onclick = () => big.remove();
-      document.body.appendChild(big);
-    };
-  });
+  wireShots(main);
   const b = document.getElementById('back');
   b.onclick = back;
   b.focus({ preventScroll: true });

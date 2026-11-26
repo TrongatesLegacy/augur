@@ -17,11 +17,13 @@ use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUr
 use crate::app::{notify, now_ms, Shared};
 use crate::autobet::{eval, Spot};
 use augur_engine::predict::{Prediction, Side};
-use augur_engine::stream::{self, Check, Crop, StreamRead};
+use augur_engine::stream::{self, BothCheck, Check, Crop, StreamRead};
 use augur_engine::{db, rusqlite};
 
 /// The player webview inside the main window.
 const STREAM: &str = "kickstream";
+/// The "side" a check of the reader reads: a fight with nothing hidden, read against both sides the site shows.
+const BOTH: &str = "both";
 /// How often a frame is read while a hidden side's stats are wanted.
 const READ_EVERY: Duration = Duration::from_secs(5);
 /// How often the player is asked how far behind live it is, whenever it's open.
@@ -35,7 +37,8 @@ pub fn is_player(label: &str) -> bool {
 /// What Live shows about the stream reader.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct StreamView {
-    /// what it's doing: off, idle, watching, read
+    /// what it's doing: off, idle, watching, read (a hidden side), checking, checked, misread (a fight with nothing
+    /// hidden)
     pub status: String,
     pub message: String,
     /// the hidden side it's reading, and what it read
@@ -61,6 +64,8 @@ pub struct StreamState {
     lag_asked: Option<Instant>,
     /// the fight the player was last loaded for: it's loaded again once a fight, between duels
     loaded_for: String,
+    /// the fight with nothing hidden the reader last checked itself on (once a fight)
+    checked_for: String,
 }
 
 #[derive(Clone, Debug)]
@@ -117,7 +122,12 @@ pub fn stream_loop(app: AppHandle, shared: Arc<Shared>) {
         let live = shared.live.lock().unwrap().clone();
         let p = live.prediction.as_ref();
         let key = p.map(duel_key).unwrap_or_default();
-        let hidden = p.filter(|_| live.picks_open).and_then(hidden_side);
+        let open = p.filter(|_| live.picks_open);
+        let hidden = open.and_then(hidden_side);
+        // with nothing hidden, the reader still reads the fight once, against both sides the site shows: every fight
+        // tests it and keeps a frame, not only the ones it's needed for
+        let checked = !key.is_empty() && shared.stream.lock().unwrap().checked_for == key;
+        let want = hidden.or_else(|| open.filter(|p| !checked && both_shown(p)).map(|_| BOTH));
         let shows = shared.stream.lock().unwrap().spot.is_some();
         let on = s.read_stream && !s.channel.is_empty();
         let Ok(conn) = shared.db() else { continue };
@@ -125,7 +135,7 @@ pub fn stream_loop(app: AppHandle, shared: Arc<Shared>) {
         // a fight the stream was being read for that's over, or whose picks closed, without a read
         let ended = {
             let st = shared.stream.lock().unwrap();
-            st.attempt.clone().filter(|a| a.key != key || hidden.is_none())
+            st.attempt.clone().filter(|a| a.key != key || want != Some(a.side.as_str()))
         };
         if let Some(a) = ended {
             shared.stream.lock().unwrap().attempt = None;
@@ -139,12 +149,15 @@ pub fn stream_loop(app: AppHandle, shared: Arc<Shared>) {
             compare_at_bell(&shared, &conn, p, &key);
         }
 
-        if !on || (hidden.is_none() && !shows) {
+        if !on || (want.is_none() && !shows) {
             if let Some(w) = app.get_webview(STREAM) {
                 let _ = w.close();
             }
-            let status = if on { "idle" } else { "off" };
-            set_view(&app, &shared, |v| (v.status, v.message, v.side, v.stats) = (status.into(), String::new(), None, None));
+            // the check stays on Live for the rest of its fight
+            if !(on && checked) {
+                let status = if on { "idle" } else { "off" };
+                set_view(&app, &shared, |v| (v.status, v.message, v.side, v.stats) = (status.into(), String::new(), None, None));
+            }
             continue;
         }
         let existed = app.get_webview(STREAM).is_some();
@@ -179,9 +192,9 @@ pub fn stream_loop(app: AppHandle, shared: Arc<Shared>) {
             continue;
         }
         ask_lag(&app, &shared, &w);
-        let (Some(p), Some(side)) = (p, hidden) else {
-            // the read stays up for the fight it was for
-            let read = reading_for(&shared, &key).is_some();
+        let (Some(p), Some(side)) = (p, want) else {
+            // the read (or the check) stays up for the fight it was for
+            let read = reading_for(&shared, &key).is_some() || checked;
             if !read {
                 set_view(&app, &shared, |v| (v.status, v.message, v.side, v.stats) = ("idle".into(), String::new(), None, None));
             }
@@ -210,6 +223,17 @@ pub fn stream_loop(app: AppHandle, shared: Arc<Shared>) {
             a.last.is_none_or(|l| l.elapsed() >= READ_EVERY)
         };
         if !due {
+            continue;
+        }
+        if side == BOTH {
+            set_view(&app, &shared, |v| {
+                if v.status != "checking" {
+                    (v.status, v.message, v.side, v.stats) =
+                        ("checking".into(), "Checking the reader against this fight's stats".into(), None, None);
+                }
+            });
+            let frame = capture(&w);
+            check_frame(&app, &shared, &conn, p, &key, frame);
             continue;
         }
         set_view(&app, &shared, |v| {
@@ -311,33 +335,109 @@ fn read_frame(
             (why, f.shot, f.latency, f.height)
         }
     };
-    // still trying: keep how it went (and the frame) for the record if picks close without a read
+    still_trying(shared, &why, shot, latency, height);
+    set_view(app, shared, |v| v.message = format!("Watching the stream for the hidden stats: {why}"));
+}
+
+/// Checks a frame of a fight with nothing hidden against both sides the site shows, and records how it went with
+/// the frame. A side that agrees proves it's this fight's panel, so the other side reading differently is a misread.
+fn check_frame(app: &AppHandle, shared: &Shared, conn: &rusqlite::Connection, p: &Prediction, key: &str, frame: Result<Frame, String>) {
+    let (home, away) = (stats_of(&p.home), stats_of(&p.away));
+    let (why, shot, latency, height) = match frame {
+        Err(e) => (format!("no picture from the stream ({e})"), None, None, None),
+        Ok(f) => {
+            let check = stream::check_both(stream::read(&f.crop).as_ref(), home, away);
+            let why = match &check {
+                BothCheck::NoPanel => "the stats panel wasn't on the stream".to_string(),
+                BothCheck::Other => "neither side read as the site has it, so not this fight's panel".to_string(),
+                BothCheck::Agreed | BothCheck::Misread { .. } => {
+                    let (outcome, detail) = match &check {
+                        BothCheck::Misread { home: h, away: a } => (
+                            stream::MISREAD,
+                            format!(
+                                "the stream read {} and {}, the site shows {} and {}",
+                                words(h),
+                                words(a),
+                                stream::stats_text(home),
+                                stream::stats_text(away)
+                            ),
+                        ),
+                        _ => (stream::CHECKED, String::new()),
+                    };
+                    let at = p.seen_at.max(now_ms());
+                    let call_id = shared.stream.lock().unwrap().attempt.as_ref().map(|a| a.call_id).unwrap_or(0);
+                    let shot = f.shot.as_deref().and_then(|b| save_shot(conn, at, outcome, b));
+                    let _ = stream::record(
+                        conn,
+                        call_id,
+                        &StreamRead {
+                            at,
+                            outcome: outcome.into(),
+                            side: BOTH.into(),
+                            stats: format!("{} and {}", stream::stats_text(home), stream::stats_text(away)),
+                            detail: detail.clone(),
+                            latency: f.latency,
+                            height: f.height,
+                            shot,
+                        },
+                    );
+                    let mut st = shared.stream.lock().unwrap();
+                    st.attempt = None;
+                    st.checked_for = key.into();
+                    drop(st);
+                    set_view(app, shared, |v| {
+                        v.status = if detail.is_empty() { "checked" } else { "misread" }.into();
+                        v.message = if detail.is_empty() {
+                            "Checked the reader on this fight: both sides read as the site shows them".into()
+                        } else {
+                            format!("The reader misread this fight: {detail}")
+                        };
+                        (v.side, v.stats) = (None, None);
+                    });
+                    return;
+                }
+            };
+            let why = match f.height.filter(|h| *h < 720) {
+                Some(h) => format!("{why} (the stream was only {h}p)"),
+                None => why,
+            };
+            (why, f.shot, f.latency, f.height)
+        }
+    };
+    still_trying(shared, &why, shot, latency, height);
+    set_view(app, shared, |v| v.message = format!("Checking the reader against this fight's stats: {why}"));
+}
+
+/// Still trying: keeps how the last frame went (and the frame) for the record if picks close first.
+fn still_trying(shared: &Shared, why: &str, shot: Option<Vec<u8>>, latency: Option<f64>, height: Option<u32>) {
     if let Some(a) = shared.stream.lock().unwrap().attempt.as_mut() {
-        a.why = why.clone();
+        a.why = why.to_string();
         (a.latency, a.height) = (latency, height);
         a.last = Some(Instant::now());
         if let Some(b) = shot {
             a.shot = Some(base64::engine::general_purpose::STANDARD.encode(b));
         }
     }
-    set_view(app, shared, |v| v.message = format!("Watching the stream for the hidden stats: {why}"));
 }
 
 /// Picks closed (or the fight went) without a read: into the call's history with why and the last frame, and Live
 /// warns once it keeps happening.
 fn missed(app: &AppHandle, shared: &Shared, conn: &rusqlite::Connection, a: &Attempt) {
     let at = now_ms();
+    // a check of the reader on a fight with nothing hidden isn't a miss: it's kept (with its frame), not warned about
+    let check = a.side == BOTH;
+    let outcome = if check { stream::UNCHECKED } else { stream::MISSED };
     let shot = a
         .shot
         .as_deref()
         .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
-        .and_then(|b| save_shot(conn, at, stream::MISSED, &b));
+        .and_then(|b| save_shot(conn, at, outcome, &b));
     let _ = stream::record(
         conn,
         a.call_id,
         &StreamRead {
             at,
-            outcome: stream::MISSED.into(),
+            outcome: outcome.into(),
             side: a.side.clone(),
             stats: String::new(),
             detail: a.why.clone(),
@@ -346,6 +446,9 @@ fn missed(app: &AppHandle, shared: &Shared, conn: &rusqlite::Connection, a: &Att
             shot,
         },
     );
+    if check {
+        return;
+    }
     let n = stream::misses_in_a_row(conn).unwrap_or(0);
     let warn = n >= stream::MISSES_TO_WARN;
     let was = shared.stream.lock().unwrap().view.warning.is_some();
@@ -539,6 +642,11 @@ fn hidden_side(p: &Prediction) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// The site shows both sides' stats, so a read can be checked against both.
+fn both_shown(p: &Prediction) -> bool {
+    p.home.stats_from == "shown" && p.away.stats_from == "shown"
 }
 
 fn stats_of(s: &Side) -> [u32; 3] {

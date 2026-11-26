@@ -99,6 +99,30 @@ pub fn check(panel: Option<&Panel>, shown: (&str, [u32; 3])) -> Check {
     }
 }
 
+/// What a read says when the site shows both sides: the reader checked against the site.
+#[derive(Clone, Debug, PartialEq)]
+pub enum BothCheck {
+    /// the panel wasn't on screen
+    NoPanel,
+    /// neither side read as the site has it: another duel's panel (the player runs behind), or not up yet
+    Other,
+    /// both sides read exactly as the site shows them
+    Agreed,
+    /// one side agreed (so it's this duel's panel) and the other read differently: a misread
+    Misread { home: [Option<u32>; 3], away: [Option<u32>; 3] },
+}
+
+/// Checks a read against both sides' stats as the site shows them (when it hides neither), so every fight tests
+/// the reader, not only the ones with a hidden side.
+pub fn check_both(panel: Option<&Panel>, home: [u32; 3], away: [u32; 3]) -> BothCheck {
+    let Some(p) = panel else { return BothCheck::NoPanel };
+    match (p.home == home.map(Some), p.away == away.map(Some)) {
+        (true, true) => BothCheck::Agreed,
+        (false, false) => BothCheck::Other,
+        _ => BothCheck::Misread { home: p.home, away: p.away },
+    }
+}
+
 /// What a read means for the hidden side's stats, in the call's words ("6270/464/797").
 pub fn stats_text(s: [u32; 3]) -> String {
     format!("{}/{}/{}", s[0], s[1], s[2])
@@ -130,6 +154,11 @@ pub const READ: &str = "read";
 pub const MISSED: &str = "missed";
 pub const AGREED: &str = "agreed";
 pub const DIFFERED: &str = "differed";
+/// A fight with nothing hidden, read to check the reader: both sides agreed with the site, one didn't, or picks
+/// closed without the panel reading (with the last frame either way). None of these count as misses.
+pub const CHECKED: &str = "checked";
+pub const MISREAD: &str = "misread";
+pub const UNCHECKED: &str = "unchecked";
 
 /// One line of a call's stream record.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -594,9 +623,23 @@ mod tests {
     }
 
     #[test]
+    fn a_fight_with_nothing_hidden_checks_both_sides() {
+        let p = read(&crop("redesign-1.png"));
+        let (home, away) = ([7484, 885, 1034], [6902, 941, 1033]);
+        assert_eq!(check_both(p.as_ref(), home, away), BothCheck::Agreed);
+        assert_eq!(
+            check_both(p.as_ref(), home, [6902, 941, 1034]),
+            BothCheck::Misread { home: some(home), away: some(away) },
+            "one side agrees, so it's this duel's panel and the other side misread"
+        );
+        assert_eq!(check_both(p.as_ref(), [1, 2, 3], [4, 5, 6]), BothCheck::Other, "another duel's panel");
+        assert_eq!(check_both(None, home, away), BothCheck::NoPanel);
+    }
+
+    #[test]
     fn the_record_counts_misses_in_a_row() {
         let conn = crate::db::open_memory().unwrap();
-        for id in 1..=5 {
+        for id in 1..=6 {
             conn.execute("INSERT INTO predictions (id, status) VALUES (?, 'settled')", [id]).unwrap();
         }
         let line = |outcome: &str| StreamRead { outcome: outcome.into(), side: "away".into(), ..Default::default() };
@@ -606,7 +649,9 @@ mod tests {
         record(&conn, 3, &line(MISSED)).unwrap();
         record(&conn, 4, &line(MISSED)).unwrap();
         assert_eq!(misses_in_a_row(&conn).unwrap(), 2, "back to the last one it read");
-        record(&conn, 5, &line(READ)).unwrap();
+        record(&conn, 5, &line(UNCHECKED)).unwrap();
+        assert_eq!(misses_in_a_row(&conn).unwrap(), 2, "a fight with nothing hidden is neither a read nor a miss");
+        record(&conn, 6, &line(READ)).unwrap();
         assert_eq!(misses_in_a_row(&conn).unwrap(), 0);
         assert_eq!(of_call(&conn, 2).unwrap().iter().map(|r| r.outcome.as_str()).collect::<Vec<_>>(), [READ, AGREED]);
     }

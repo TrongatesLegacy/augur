@@ -867,6 +867,20 @@ const MAIN_DRIVER: &str = r#"
         document.querySelector('#main tr[data-call]')?.click();
         await sleep(300);
         out.callDoubt = document.getElementById('main').innerText;
+        // a fight with nothing hidden: the reader's check on it, beside the call (and one that misread)
+        const check = async (r) => {
+          DATA.call_detail = { ...full, stream_reads: [{ at: 1, outcome: r.outcome, side: 'both', stats: '7484/885/1034 and 6902/941/1033', detail: r.detail || '', latency: 1.2, height: 1080, shot: '2-' + r.outcome + '.jpg' }] };
+          window.augur.state.call = null;
+          await window.augur.show('history');
+          await sleep(200);
+          document.querySelector('#main tr[data-call]')?.click();
+          await sleep(300);
+          const sr = document.querySelector('#main .sr');
+          return sr ? { text: sr.innerText, title: sr.title, cls: sr.className, frame: !!sr.querySelector('img') } : null;
+        };
+        out.callCheck = await check({ outcome: 'checked' });
+        out.callMisread = await check({ outcome: 'misread', detail: 'the stream read 7484/885/1084 and 6902/941/1033, the site shows 7484/885/1034 and 6902/941/1033' });
+        DATA.call_detail = full;
         // the money under the dial with auto betting: one that went through is your bet, said once; one that was
         // skipped isn't news; one that went wrong tags your bet, in a word
         const ledger = async (detail) => {
@@ -1306,6 +1320,21 @@ fn every_tab_renders_headless() {
         "an old call without a tape or fighters still opens: {bare}"
     );
     assert!(r["callBack"].as_str().unwrap().to_lowercase().contains("calibration"), "Back returns to the calls");
+    // a fight with nothing hidden shows the reader's check on it, with its frame
+    let (ok, bad) = (&r["callCheck"], &r["callMisread"]);
+    assert!(
+        ok["text"].as_str().unwrap().contains('✓')
+            && ok["cls"].as_str().unwrap().contains("ok")
+            && ok["frame"] == true
+            && ok["title"].as_str().unwrap().contains("both sides read as the site showed them"),
+        "a check that agreed: {ok}"
+    );
+    assert!(
+        bad["text"].as_str().unwrap().contains('✕')
+            && bad["cls"].as_str().unwrap().contains("bad")
+            && bad["title"].as_str().unwrap().contains("the stream read 7484/885/1084"),
+        "a misread: {bad}"
+    );
     let doubt = r["callDoubt"].as_str().unwrap().to_lowercase();
     assert!(doubt.contains("less sure ÷1.60") && doubt.contains("unlisted moves"), "a call made less sure says so in its sum: {doubt}");
     assert!(!call.contains("less sure"), "and one that wasn't doesn't: {call}");

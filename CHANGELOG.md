@@ -2,7 +2,11 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.31 (current)
+## 0.1.32 (current)
+- The stream's player holds its best quality, reloads between duels and shows its lag; a Kick sign-in can no longer look signed out
+- Read the stream's stats panel after the overlay's redesign
+
+## 0.1.31
 - Live's auto bet panel no longer wraps a word onto a line of its own
 
 ## 0.1.30

@@ -1180,7 +1180,8 @@ td.goar { width: 18px; padding-left: 0; color: var(--t3); font-size: 16px; text-
 .kpanel .ph { margin-bottom: 6px; }
 .kst { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12.5px; min-height: 28px; }
 .kst .btn { margin-left: auto; }
-.ksub { display: block; margin-top: 6px; color: var(--t3); font-size: 11px; }
+.ksub { display: grid; gap: 2px; margin-top: 8px; color: var(--t3); font-size: 12px; line-height: 1.45; }
+.ksub span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .ksub b { color: var(--t2); font-weight: 600; font-variant-numeric: tabular-nums; }
 .kstream { flex: 0 1 163px; min-height: 90px; padding: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; }
 .kstr { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 7px; margin-top: 8px; font-size: 12px; color: var(--t2); line-height: 1.45; }
 .kstr b { color: var(--t1); font-weight: 600; font-variant-numeric: tabular-nums; } .kstr i { font-style: normal; color: var(--t3); margin: 0 2px; }

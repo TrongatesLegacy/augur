@@ -20,12 +20,13 @@ function headline(d) {
 }
 
 // The stream read for a hidden side, in a word on the call's line: ✓ read (and the site agreed at the bell), ✕ the
-// site differed, or couldn't read it. What it read, or why it couldn't, is on hover; its frame beside it (click to
-// enlarge, loaded once the page is up)
+// site differed, or couldn't read it. A fight with nothing hidden shows the reader's check on it instead: ✓ both
+// sides read as the site showed them, ✕ a misread, or – no panel to check. What it read, or why it couldn't, is on
+// hover; its frame beside it (click to enlarge, loaded once the page is up)
 function streamReads(d) {
   const rs = d.stream_reads || [];
   const first = rs.find((r) => r.outcome === 'read' || r.outcome === 'missed');
-  if (!first) return '';
+  if (!first) return streamCheck(rs);
   const bell = rs.find((r) => r.outcome === 'agreed' || r.outcome === 'differed');
   const how = [first.height ? `${first.height}p` : '', first.latency != null ? `${first.latency.toFixed(1)}s behind live` : ''].filter(Boolean).join(', ');
   const behind = how ? ` (${how})` : '';
@@ -35,6 +36,20 @@ function streamReads(d) {
   const ok = read && bell?.outcome !== 'differed';
   const shot = first.shot ? `<img data-shot="${esc(first.shot)}" alt="The stream's frame">` : '';
   return `<span class="ts sr ${ok ? 'ok' : 'bad'}" title="${esc(said + atBell)}">stream <b>${ok ? '✓' : '✕'}</b>${shot}</span>`;
+}
+
+function streamCheck(rs) {
+  const c = rs.find((r) => ['checked', 'misread', 'unchecked'].includes(r.outcome));
+  if (!c) return '';
+  const how = [c.height ? `${c.height}p` : '', c.latency != null ? `${c.latency.toFixed(1)}s behind live` : ''].filter(Boolean).join(', ');
+  const behind = how ? ` (${how})` : '';
+  const [tone, mark, said] = {
+    checked: ['ok', '✓', `Nothing was hidden, so the reader was checked: both sides read as the site showed them, ${c.stats}`],
+    misread: ['bad', '✕', `Nothing was hidden, so the reader was checked: ${c.detail}`],
+    unchecked: ['', '–', `Nothing was hidden, and the reader couldn't be checked: ${c.detail}`],
+  }[c.outcome];
+  const shot = c.shot ? `<img data-shot="${esc(c.shot)}" alt="The stream's frame">` : '';
+  return `<span class="ts sr ${tone}" title="${esc(said + behind)}">stream <b>${mark}</b>${shot}</span>`;
 }
 
 // what changed a version of the call, in words (revisions::cause_words)

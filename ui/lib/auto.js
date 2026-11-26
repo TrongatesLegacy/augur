@@ -59,13 +59,19 @@ export function column(a) {
 }
 
 // What the stream reader is doing, under auto bet's status: a chip, then the hidden side and its stats (or what
-// it's waiting on, on hover), then how far behind live. A warning instead when it keeps missing. Nothing while idle.
+// it's waiting on, on hover), then how far behind live. With nothing hidden, its check on the fight instead. A
+// warning instead when it keeps missing. Nothing while idle.
 function streamLine(v) {
   if (!v || v.status === 'off') return '';
   if (v.warning) return `<div class="kstr"><span class="ast bad">Stream</span><span class="bad">${esc(v.warning)}</span></div>`;
-  if (v.status !== 'watching' && v.status !== 'read') return '';
+  if (!['watching', 'read', 'checking', 'checked', 'misread'].includes(v.status)) return '';
   const how = [v.height ? `${v.height}p` : '', v.latency != null ? `${v.latency.toFixed(1)}s behind live` : ''].filter(Boolean).join(' · ');
   const behind = how ? `<small>${how}</small>` : '';
+  if (v.status === 'checking') return `<div class="kstr" title="${esc(v.message)}"><span class="ast gold">Checking</span><span>the reader on this fight</span>${behind}</div>`;
+  if (v.status === 'checked' || v.status === 'misread') {
+    const ok = v.status === 'checked';
+    return `<div class="kstr" title="${esc(v.message)}"><span class="ast ${ok ? 'ok' : 'bad'}">${ok ? 'Checked' : 'Misread'}</span><span>${ok ? 'both sides read right' : 'a side read wrong'}</span>${behind}</div>`;
+  }
   const side = v.side ? `${esc(v.side)} side` : 'the hidden side';
   if (v.status === 'read' && v.stats) {
     const nums = v.stats.map((n) => `<b>${fmt(n)}</b>`).join('<i>/</i>');

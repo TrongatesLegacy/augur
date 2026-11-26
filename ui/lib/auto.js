@@ -40,7 +40,9 @@ export function column(a) {
     return `<div class="kcol"><div class="panel kpanel"><div class="ph"><h3>Auto bet</h3></div>
       <p class="small">Sign in to Kick to see the stream's chat here and bet by itself.</p>
       <button class="btn sm" id="kgo">Sign in in Settings</button></div></div>`;
-  const where = a.test ? `test mode: into your own chat (${esc(a.channel || 'set your Kick name')})` : a.channel ? `into ${esc(a.channel)}’s chat` : 'no channel set';
+  const where = a.test ? `Test mode: into your own chat (<b>${esc(a.channel || 'set your Kick name')}</b>)` : a.channel ? `Into <b>${esc(a.channel)}</b>’s chat` : 'No channel set';
+  // a line each, so neither breaks in the middle: where the bets go, then today's tally
+  const today = a.today?.[0] ? `Today <b>${fmt(a.today[0])}</b> bet${a.today[0] === 1 ? '' : 's'} · <b>${fmt(a.today[1])}</b> credits` : '';
   const cd = a.phase === 'countdown' && a.countdown_until;
   const status = !a.armed
     ? `<span class="dot idle"></span>Off · arm it for this session`
@@ -51,7 +53,7 @@ export function column(a) {
         : `<span class="dot ${a.phase === 'done' && a.bet && ['failed', 'unconfirmed'].includes(a.bet.status) ? 'bad' : a.phase === 'waiting' || a.phase === 'idle' ? 'idle' : ''}"></span>${a.bet ? `${statusChip(a.bet.status)} <b>${esc(a.bet.command)}</b> ` : ''}${esc(a.message || 'Armed')}`;
   return `<div class="kcol"><div class="panel kpanel"><div class="ph"><h3>Auto bet</h3><button class="tog ${a.armed ? 'on' : ''}" id="karm" aria-pressed="${!!a.armed}" aria-label="Arm auto bet"></button></div>
     <div class="kst">${status}</div>
-    <small class="ksub">${where}${a.today?.[0] ? ` · today ${fmt(a.today[0])} bet${a.today[0] === 1 ? '' : 's'}, ${fmt(a.today[1])} credits` : ''}</small>${streamLine(a.stream)}</div>
+    <div class="ksub"><span>${where}</span>${today ? `<span>${today}</span>` : ''}</div>${streamLine(a.stream)}</div>
     ${a.stream && a.stream.status !== 'off' ? '<div class="panel kstream" id="kstream"><span class="small">The stream</span></div>' : ''}
     <div class="panel kchat" id="kchat"><span class="small">Kick chat</span></div></div>`;
 }

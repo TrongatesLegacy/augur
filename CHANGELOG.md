@@ -2,7 +2,13 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.29 (current)
+## 0.1.30 (current)
+- The chat stays on the stream's chat when the stream raids another channel
+- Hidden stats are read off the stream, which now shows above the chat on Live
+- Backups and sync carry the stream's reads and frames, and a backup's call history and auto bets
+- Sync shares an hourly snapshot of each computer's store, bringing the stream's frames, duels and tapes across
+
+## 0.1.29
 - Your bets counts a bet under Today even when its fight has no clip yet
 
 ## 0.1.28

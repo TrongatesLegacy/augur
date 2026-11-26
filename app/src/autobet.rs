@@ -285,9 +285,22 @@ fn point_chat(
             pointed.is_empty() || !other_chat(u, &pointed)
         })
         .on_page_load(|w, p| {
+            if p.event() != PageLoadEvent::Finished {
+                return;
+            }
             // a page that isn't Kick's chat (a link clicked in it) goes back to the chat
-            if p.event() == PageLoadEvent::Finished && !on_kick(p.url()) {
+            if !on_kick(p.url()) {
                 let _ = w.eval("history.back()");
+                return;
+            }
+            // a raid loads the raided channel's whole page, which the check above lets through: straight back to the
+            // stream's chat (not while Augur is pointing the chat somewhere itself)
+            let shared = w.state::<Arc<Shared>>();
+            let Ok(pointed) = shared.chat_channel.try_lock() else { return };
+            if strayed(p.url(), &pointed) {
+                if let Ok(url) = tauri::Url::parse(&kick::popout_url(&pointed)) {
+                    let _ = w.navigate(url);
+                }
             }
         });
     let w = window.add_child(builder, pos, size).map_err(|e| e.to_string())?;
@@ -295,28 +308,31 @@ fn point_chat(
     Ok(w)
 }
 
-/// Kick's pages can move without loading a new one: the chat page isn't let move off the address it opened on (a
-/// raid moving it to the raided channel's chat, most of all).
+/// Kick's pages can move without loading a new one (a raid moving the chat to the raided channel, most of all). Only
+/// refusing the new address isn't enough: the page still draws the other channel under the old one, so the checks
+/// that go by the address never see it. Any move off the chat it opened on loads that chat again instead.
 const STAY_PUT: &str = r#"(function () {
   var path = function (u) { return u.pathname.toLowerCase().replace(/\/+$/, ''); };
-  var home = path(location);
+  var home = path(location), homeUrl = location.href;
   if (!/^\/popout\/[^/]+\/chat$/.test(home)) return;
+  var back = function () { location.replace(homeUrl); };
   ['pushState', 'replaceState'].forEach(function (k) {
     var f = history[k];
     history[k] = function (state, title, url) {
       try {
         if (url != null) {
           var to = new URL(url, location.href);
-          if (to.host === location.host && path(to) !== home) return;
+          if (to.host === location.host && path(to) !== home) return back();
         }
       } catch (e) {}
       return f.apply(this, arguments);
     };
   });
+  window.addEventListener('popstate', function () { if (path(location) !== home) back(); });
 })();"#;
 
 /// How often the chat's address is checked for having wandered off the stream's chat.
-const STRAY_CHECK: Duration = Duration::from_secs(30);
+const STRAY_CHECK: Duration = Duration::from_secs(5);
 
 /// The backstop for a raid that got past the two guards above: a chat on another Kick page is sent back to the
 /// channel's chat. Called every second; looks every `STRAY_CHECK`.
@@ -328,7 +344,7 @@ fn bring_chat_back(app: &AppHandle, shared: &Shared, last: &mut Instant) {
     let Some(w) = app.get_webview(CHAT) else { return };
     let channel = shared.chat_channel.lock().unwrap().clone();
     let Ok(at) = w.url() else { return };
-    if channel.is_empty() || !on_kick(&at) || is_chat(&at, &channel) {
+    if !strayed(&at, &channel) {
         return;
     }
     if let Ok(url) = tauri::Url::parse(&kick::popout_url(&channel)) {
@@ -349,6 +365,12 @@ fn is_chat(u: &tauri::Url, channel: &str) -> bool {
 /// chat page loads (sign-in checks, frames) goes through the same check.
 fn other_chat(u: &tauri::Url, channel: &str) -> bool {
     on_kick(u) && u.path().to_ascii_lowercase().starts_with("/popout/") && !is_chat(u, channel)
+}
+
+/// Has the chat, loaded at `u`, wandered off `channel`'s chat onto another Kick page (a raid's channel page, most of
+/// all)? Cloudflare's checks, which keep their own paths on Kick for a moment, are left to finish.
+fn strayed(u: &tauri::Url, channel: &str) -> bool {
+    !channel.is_empty() && on_kick(u) && !u.path().starts_with("/cdn-cgi/") && !is_chat(u, channel)
 }
 
 /// The main window closed to the tray: the chat is hidden with it, and bets go in with Kick's own request.
@@ -1142,6 +1164,14 @@ mod tests {
         assert!(!other_chat(&url("https://kick.com/popout/the-stream/chat?x=1"), "the-stream"));
         assert!(!other_chat(&url("https://kick.com/api/v2/channels/player-01"), "the-stream"), "the page's own loads");
         assert!(!other_chat(&url("https://challenges.cloudflare.com/popout/x/chat"), "the-stream"), "not Kick's");
+        // a raid loads the raided channel's page, not its popout: that's strayed too, and goes back
+        assert!(strayed(&url("https://kick.com/player-01"), "the-stream"), "a raid's channel page");
+        assert!(strayed(&url("https://kick.com/popout/player-01/chat"), "the-stream"));
+        assert!(strayed(&url("https://kick.com/the-stream"), "the-stream"), "the stream's own page isn't its chat");
+        assert!(!strayed(&url("https://kick.com/popout/The-Stream/chat/"), "the-stream"));
+        assert!(!strayed(&url("https://kick.com/cdn-cgi/challenge-platform/h/b"), "the-stream"), "a Cloudflare check");
+        assert!(!strayed(&url("https://example.com/"), "the-stream"), "not Kick's: the page load goes back itself");
+        assert!(!strayed(&url("https://kick.com/player-01"), ""), "nowhere to go back to");
         assert!(!on_kick(&url("https://notkick.com/popout/the-stream/chat")));
     }
 

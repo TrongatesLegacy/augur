@@ -962,6 +962,12 @@ pub struct Merged {
 /// duels and tapes, species and moves, bets. Rows already here only gain what they're missing; nothing set is changed
 /// or removed, so it's safe to run again.
 pub fn merge_from(conn: &Connection, other: &Path) -> Result<Merged> {
+    merge_from_as(conn, other, "backup", "")
+}
+
+/// `merge_from`, knowing whose store it is: its own auto bets come in as `theirs` (a computer's sync id, or "backup"
+/// when it isn't known), and the ones it holds from `me` (this computer's sync id) are this computer's already.
+pub fn merge_from_as(conn: &Connection, other: &Path, theirs: &str, me: &str) -> Result<Merged> {
     if !other.is_file() {
         return Err(crate::Error::Parse(format!("{}: not a file", other.display())));
     }
@@ -973,8 +979,8 @@ pub fn merge_from(conn: &Connection, other: &Path) -> Result<Merged> {
     let mut m = out?;
     // what the calls know beyond themselves (their history, stream reads, auto bets...), read from the backup as a
     // store of its own, never written to
-    let theirs = Connection::open_with_flags(other, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let (gained, bets) = crate::calls::merge_backup(conn, &theirs, before)?;
+    let store = Connection::open_with_flags(other, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let (gained, bets) = crate::calls::merge_backup(conn, &store, before, (theirs, me))?;
     m.filled += gained;
     m.auto_bets = bets;
     Ok(m)

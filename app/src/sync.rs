@@ -220,7 +220,9 @@ pub async fn import_file(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>) 
     let merged = if path.extension().is_some_and(|x| x == "jsonl") {
         augur_engine::calls::import_all(&conn, &path).map_err(|e| e.to_string())?
     } else {
-        db::merge_from(&conn, &path).map_err(|e| e.to_string())?
+        // the auto bets it holds from this computer (synced to the one it came from) are this computer's already
+        let me = shared.sync.lock().unwrap().device.clone();
+        db::merge_from_as(&conn, &path, "backup", &me).map_err(|e| e.to_string())?
     };
     *shared.backtest.lock().unwrap() = None;
     crate::app::finish_setup(&app, &shared);

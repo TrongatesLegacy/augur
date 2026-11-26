@@ -2,7 +2,12 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.32 (current)
+## 0.1.33 (current)
+- Show a chance's tenth when it's near an auto bet setting
+- Read the stream on every fight, as a check on the reader
+- Show a fight's stream frame when you hover "stream ✓"
+
+## 0.1.32
 - The stream's player holds its best quality, reloads between duels and shows its lag; a Kick sign-in can no longer look signed out
 - Read the stream's stats panel after the overlay's redesign
 

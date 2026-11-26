@@ -2,7 +2,7 @@
 //! prediction model (`model`), the SQLite store (`db`), a whole prediction from the live state (`predict`), the
 //! gentle background backfill (`backfill`), the chat voices (`voices`), the calls file (`calls`), and the developer's
 //! bets (`bets`) with the stake Augur suggests (`stake`), whether a pal's IVs are worth rerolling (`reroll`), each call's history
-//! (`revisions`) and sync across computers (`sync`).
+//! (`revisions`), reading the stream's stats panel (`stream`) and sync across computers (`sync`).
 
 pub mod error;
 pub mod model;
@@ -20,6 +20,7 @@ pub mod reroll;
 pub mod revisions;
 pub mod site;
 pub mod stake;
+pub mod stream;
 pub mod sync;
 pub mod voices;
 

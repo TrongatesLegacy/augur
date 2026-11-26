@@ -791,7 +791,7 @@ mod tests {
     /// The seed's duel: the home side's stats hidden until the bell (guessed), the away side's shown.
     fn prediction() -> Prediction {
         let state = crate::seed::state("state-leaflit-wumpo.json");
-        let opts = Options { lookups: false, db_path: "/nonexistent".into(), settings: Default::default() };
+        let opts = Options { lookups: false, db_path: "/nonexistent".into(), settings: Default::default(), stream: None };
         predict(&state, &opts).unwrap()
     }
 

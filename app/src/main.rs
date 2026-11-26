@@ -6,6 +6,7 @@ mod autobet;
 mod cli;
 mod secure;
 mod settings;
+mod stream;
 mod sync;
 mod updates;
 mod views;

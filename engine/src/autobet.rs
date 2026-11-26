@@ -43,6 +43,8 @@ pub struct AutoBetSettings {
     /// arm it each time Augur starts (once it can: signed in, a channel set, no other computer betting), instead of
     /// on Live or from the tray each session
     pub arm_at_start: bool,
+    /// watch the stream (logged out) for the stats the site hides until the bell, and call those fights on them
+    pub read_stream: bool,
 }
 
 impl Default for AutoBetSettings {
@@ -63,6 +65,7 @@ impl Default for AutoBetSettings {
             // lock, where three gave up on calls that were ready with two minutes to go
             latest_secs: 240,
             arm_at_start: false,
+            read_stream: true,
         }
     }
 }
@@ -96,7 +99,13 @@ pub struct Moment {
     pub signed_in: bool,
     /// you've bet on this fight yourself
     pub already_bet: bool,
+    /// the stream is being read for the stats the site hides, and may still show them
+    pub stream_pending: bool,
 }
+
+/// How long before the latest time to bet auto betting stops waiting for the stream and goes by the hidden-stats rule
+/// (the streamer can be opening eggs or the like while picks are open, so the stats can come late or not at all).
+pub const STREAM_FALLBACK_MS: u64 = 30_000;
 
 pub fn decide(s: &AutoBetSettings, m: &Moment) -> Decision {
     if m.already_bet {
@@ -160,6 +169,8 @@ fn waiting_on(s: &AutoBetSettings, m: &Moment) -> Option<(String, String)> {
     } else if m.prob < s.min_chance {
         let (p, min) = (m.prob * 100.0, s.min_chance * 100.0);
         (format!("{p:.0}% is under your {min:.0}% minimum"), format!("{p:.0}% was still under your {min:.0}% minimum"))
+    } else if m.estimated && m.stream_pending && m.open_ms + STREAM_FALLBACK_MS < s.latest_secs * 1000 {
+        ("waiting for the stream to show the hidden stats".into(), "the stream hadn't shown the hidden stats".into())
     } else if m.estimated && s.hidden_stats_from.is_none_or(|from| m.prob < from) {
         match s.hidden_stats_from {
             None => ("some stats are still hidden".into(), "some stats were still hidden".into()),
@@ -577,6 +588,18 @@ mod tests {
             decide(&never, &Moment { open_ms: 241_000, ..hidden }),
             Decision::Skip("some stats were still hidden 240s into picks, too late to bet".into())
         );
+    }
+
+    #[test]
+    fn hidden_stats_wait_for_the_stream_then_go_by_the_bar() {
+        let s = AutoBetSettings::default();
+        let reading = Moment { estimated: true, stream_pending: true, prob: 0.80, ..moment() };
+        let Decision::Wait { now, .. } = decide(&s, &reading) else { panic!("waits for the stream") };
+        assert_eq!(now, "waiting for the stream to show the hidden stats");
+        // 30 seconds before the latest time to bet it goes by the hidden-stats bar instead
+        assert_eq!(decide(&s, &Moment { open_ms: 211_000, ..reading.clone() }), Decision::Go);
+        // read: the call isn't estimated any more, so it's like any other
+        assert_eq!(decide(&s, &Moment { estimated: false, ..reading }), Decision::Go);
     }
 
     #[test]

@@ -51,17 +51,39 @@ export function column(a) {
         : `<span class="dot ${a.phase === 'done' && a.bet && ['failed', 'unconfirmed'].includes(a.bet.status) ? 'bad' : a.phase === 'waiting' || a.phase === 'idle' ? 'idle' : ''}"></span>${a.bet ? `${statusChip(a.bet.status)} <b>${esc(a.bet.command)}</b> ` : ''}${esc(a.message || 'Armed')}`;
   return `<div class="kcol"><div class="panel kpanel"><div class="ph"><h3>Auto bet</h3><button class="tog ${a.armed ? 'on' : ''}" id="karm" aria-pressed="${!!a.armed}" aria-label="Arm auto bet"></button></div>
     <div class="kst">${status}</div>
-    <small class="ksub">${where}${a.today?.[0] ? ` · today ${fmt(a.today[0])} bet${a.today[0] === 1 ? '' : 's'}, ${fmt(a.today[1])} credits` : ''}</small></div>
+    <small class="ksub">${where}${a.today?.[0] ? ` · today ${fmt(a.today[0])} bet${a.today[0] === 1 ? '' : 's'}, ${fmt(a.today[1])} credits` : ''}</small>${streamLine(a.stream)}</div>
+    ${a.stream && a.stream.status !== 'off' ? '<div class="panel kstream" id="kstream"><span class="small">The stream</span></div>' : ''}
     <div class="panel kchat" id="kchat"><span class="small">Kick chat</span></div></div>`;
 }
 
+// What the stream reader is doing, under auto bet's status: a chip, then the hidden side and its stats (or what
+// it's waiting on, on hover), then how far behind live. A warning instead when it keeps missing. Nothing while idle.
+function streamLine(v) {
+  if (!v || v.status === 'off') return '';
+  if (v.warning) return `<div class="kstr"><span class="ast bad">Stream</span><span class="bad">${esc(v.warning)}</span></div>`;
+  if (v.status !== 'watching' && v.status !== 'read') return '';
+  const behind = v.latency != null ? `<small>${v.latency.toFixed(1)}s behind live</small>` : '';
+  const side = v.side ? `${esc(v.side)} side` : 'the hidden side';
+  if (v.status === 'read' && v.stats) {
+    const nums = v.stats.map((n) => `<b>${fmt(n)}</b>`).join('<i>/</i>');
+    return `<div class="kstr" title="${esc(v.message)}"><span class="ast ok">Read</span><span>${side} ${nums}</span>${behind}</div>`;
+  }
+  return `<div class="kstr" title="${esc(v.message)}"><span class="ast gold">Watching</span><span>for the ${side}’s stats</span>${behind}</div>`;
+}
+
+// The webviews' spot on Live: the page's CSS pixels, which the app scales by the window's zoom. None when it's not
+// on the page.
+const spotOf = (id) => {
+  const r = document.getElementById(id)?.getBoundingClientRect();
+  return r && r.width > 40 ? { x: r.left, y: r.top, w: r.width, h: r.height, visible: true } : null;
+};
+
 // Puts the chat webview over its spot on Live (or hides it, with no spot): the page's CSS pixels, which the app
 // scales by the window's zoom.
+// (and the stream's player over its spot above it)
 export function placeChat() {
-  const el = document.getElementById('kchat');
-  const r = el?.getBoundingClientRect();
-  const spot = r && r.width > 40 ? { x: r.left, y: r.top, w: r.width, h: r.height, visible: true } : { x: 0, y: 0, w: 0, h: 0, visible: false };
-  return invoke('chat_place', { spot }).catch(() => {});
+  const spot = spotOf('kchat') || { x: 0, y: 0, w: 0, h: 0, visible: false };
+  return invoke('chat_place', { spot, stream: spotOf('kstream') }).catch(() => {});
 }
 
 // Live's and the popover's Copy beside an armed auto bet: its status, and whether Copy is dimmed (an auto bet on this
@@ -76,7 +98,7 @@ export function besideCopy(a) {
 }
 
 // Hides the chat webview (another tab is showing)
-export const hideChat = () => invoke('chat_place', { spot: { x: 0, y: 0, w: 0, h: 0, visible: false } }).catch(() => {});
+export const hideChat = () => invoke('chat_place', { spot: { x: 0, y: 0, w: 0, h: 0, visible: false }, stream: null }).catch(() => {});
 
 let tick = null;
 

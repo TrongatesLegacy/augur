@@ -180,6 +180,7 @@ function autobetPage(s, v) {
     <div style="display:grid;gap:14px;align-content:start">
       <div class="panel"><div class="ph"><h3>When to bet</h3></div>
         ${num('min_chance', 'Lowest chance', 'sit out calls under this', '%', 50, 99, true)}
+        ${row('Read the stream', 'logged out, for the stats the site hides till the bell', toggle('data-ab="read_stream"', a.read_stream, 'Read the stream'))}
         ${row('Hidden stats', 'bet from this chance while some stats are hidden until the bell, at the default stake; blank: never', `<div class="st3"><input type="number" data-abn="hidden_stats_from" data-pct="1" data-blank="1" min="50" max="99" value="${a.hidden_stats_from == null ? '' : Math.round(a.hidden_stats_from * 100)}" placeholder="never" aria-label="Hidden stats"><span class="muted">%</span></div>`)}
         ${num('hold_secs', 'Let the call settle', 'the pick and stake must stay the same this long', 'seconds', 0, 120)}
         ${num('countdown_secs', 'Countdown', 'on Live, with Cancel, before it bets', 'seconds', 0, 30)}

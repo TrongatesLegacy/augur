@@ -445,6 +445,10 @@ fn watchdog(app: AppHandle, shared: Arc<Shared>) {
         let gen = shared.loop_gen.fetch_add(1, Ordering::Relaxed) + 1;
         *shared.beat.lock().unwrap() = (Instant::now(), "starting again".into());
         shared.live.lock().unwrap().stalled = Some(note);
+        // the stall goes into this computer's log, and the log into the sync folder with a snapshot now, so it can be
+        // read from another computer
+        shared.sync.lock().unwrap().snapshot_now = true;
+        shared.sync_now.store(true, Ordering::Relaxed);
         let view = shared.live.lock().unwrap().clone();
         let _ = app.emit("live", &view);
         let (h, s) = (app.clone(), shared.clone());

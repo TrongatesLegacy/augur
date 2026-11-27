@@ -129,7 +129,11 @@ listen('kick', async () => {
   app.state.auto = await invoke('auto_view');
   if (app.state.tab === 'settings' && app.state.settingsPage === 'autobet') settings.render(app);
 });
-window.addEventListener('resize', () => app.state.tab === 'live' && app.state.auto?.enabled && placeChat());
+const replace = () => app.state.tab === 'live' && app.state.auto?.enabled && placeChat();
+window.addEventListener('resize', replace);
+// the app set the page's zoom: once the page has laid itself out again (WebView2 takes a moment), the chat and the
+// stream go back over their boxes
+listen('zoomed', () => requestAnimationFrame(() => (replace(), setTimeout(replace, 300))));
 listen('settings', (s) => {
   // another computer's change arrived through sync
   app.state.settings = s;

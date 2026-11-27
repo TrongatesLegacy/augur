@@ -248,10 +248,17 @@ pub async fn kick_sign_out(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>
 /// chat panel (so it moves, hides and comes back with the window). Shown only with auto betting on and Kick signed
 /// in; hidden on the other tabs.
 #[tauri::command]
-pub async fn chat_place(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>, spot: Spot, stream: Option<Spot>) -> Cmd<()> {
+pub async fn chat_place(
+    app: AppHandle,
+    shared: tauri::State<'_, Arc<Shared>>,
+    spot: Spot,
+    stream: Option<Spot>,
+    page_width: Option<f64>,
+) -> Cmd<()> {
     let view = shared.auto.lock().unwrap().clone();
+    let zoom = page_zoom(&app, &shared, page_width);
     // the stream above the chat: shown whenever Live shows its spot
-    crate::stream::place(&app, &shared, stream);
+    crate::stream::place(&app, &shared, stream, zoom);
     let show = spot.visible && view.enabled && view.signed_in && !view.channel.is_empty() && spot.w > 40.0 && spot.h > 40.0;
     if !show {
         if let Some(w) = app.get_webview(CHAT) {
@@ -260,7 +267,6 @@ pub async fn chat_place(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>, s
         shared.chat_shown.store(false, Ordering::Relaxed);
         return Ok(());
     }
-    let zoom = *shared.zoom.lock().unwrap();
     let (pos, size) = (LogicalPosition::new(spot.x * zoom, spot.y * zoom), LogicalSize::new(spot.w * zoom, spot.h * zoom));
     let w = point_chat(&app, &shared, &view.channel, pos, size)?;
     let _ = w.set_position(pos);
@@ -268,6 +274,25 @@ pub async fn chat_place(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>, s
     let _ = w.show();
     shared.chat_shown.store(true, Ordering::Relaxed);
     Ok(())
+}
+
+/// The main page's zoom as it is right now, to turn its CSS pixels into the window's: the window's width over the
+/// page's own (`page_width`, CSS pixels). WebView2 shows a page unzoomed for a while after it loads (and resets the zoom
+/// on each load), so the zoom Augur last set can be ahead of the page, which put the chat and the stream beside their
+/// boxes instead of in them.
+fn page_zoom(app: &AppHandle, shared: &Shared, page_width: Option<f64>) -> f64 {
+    let set = *shared.zoom.lock().unwrap();
+    let window = crate::app::main_window(app).and_then(|w| Some(w.inner_size().ok()?.to_logical::<f64>(w.scale_factor().ok()?).width));
+    zoom_from(window, page_width, set)
+}
+
+/// The zoom a window `window` wide (logical pixels) shows a page `page` wide (CSS pixels) at, or `set` without both
+/// or for an unlikely answer.
+fn zoom_from(window: Option<f64>, page: Option<f64>, set: f64) -> f64 {
+    match (window, page.filter(|p| *p > 100.0)) {
+        (Some(w), Some(p)) if (0.25..=4.0).contains(&(w / p)) => w / p,
+        _ => set,
+    }
 }
 
 /// The chat, made if it isn't there yet and sent to `channel` if it was last pointed somewhere else. Goes by the
@@ -1163,6 +1188,18 @@ fn finish(app: &AppHandle, shared: &Shared, conn: &rusqlite::Connection, id: i64
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_chat_is_placed_at_the_zoom_the_page_is_really_at() {
+        // a 1600-wide window showing a 1280-wide page is at 1.25, whatever zoom was last set
+        assert_eq!(zoom_from(Some(1600.0), Some(1280.0), 1.0), 1.25);
+        // the page still unzoomed (WebView2 just after a load): 1, not the 1.25 that's on its way
+        assert_eq!(zoom_from(Some(1600.0), Some(1600.0), 1.25), 1.0);
+        // without the page's width, or with a nonsense one, the zoom last set
+        assert_eq!(zoom_from(Some(1600.0), None, 1.25), 1.25);
+        assert_eq!(zoom_from(Some(1600.0), Some(0.0), 1.25), 1.25);
+        assert_eq!(zoom_from(None, Some(1280.0), 1.25), 1.25);
+    }
 
     #[test]
     fn bets_go_into_the_right_chat() {

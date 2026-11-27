@@ -532,8 +532,10 @@ fn fit_zoom(app: &AppHandle) {
     let (Ok(size), Ok(scale)) = (w.inner_size(), w.scale_factor()) else { return };
     let size = size.to_logical::<f64>(scale);
     let zoom = (size.width / 1280.0).min(size.height / 720.0).clamp(0.8, 2.0);
-    let _ = page.set_zoom(zoom);
     *app.state::<Arc<Shared>>().zoom.lock().unwrap() = zoom;
+    let _ = page.set_zoom(zoom);
+    // the page re-lays itself out at the new zoom: Live puts the chat and the stream back over their boxes
+    let _ = page.emit("zoomed", zoom);
 }
 
 /// What each staking choice would suggest at a spread of chances, for Settings › Staking.

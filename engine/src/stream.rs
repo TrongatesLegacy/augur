@@ -273,8 +273,8 @@ pub fn safe_name(name: &str) -> bool {
 /// The middle column's labels (POWER, HP, ATTACK, DEFENCE), which say the panel is up and where its rows and middle
 /// are, as each version of the overlay has drawn them: where to look, and their colour. Tried newest first.
 const LABEL_STYLES: [LabelStyle; 2] = [
-    // from 27 November 2026: white, between numbers that come close to the middle
-    LabelStyle { x: (312, 448), colour: white },
+    // from 27 November 2026: white or pale lavender-white, between numbers that come close to the middle
+    LabelStyle { x: (315, 448), colour: pale },
     // before: lavender, deep or pale, in a wider strip (the numbers sat further out)
     LabelStyle { x: (280, 494), colour: lavender },
 ];
@@ -284,9 +284,10 @@ struct LabelStyle {
     colour: fn(i32, i32, i32) -> bool,
 }
 
-/// White, near grey (the badges' text under the labels is tinted mint or pink).
-fn white(r: i32, g: i32, b: i32) -> bool {
-    g > 190 && (r - g).abs() < 20 && (g - b).abs() < 20
+/// White or a pale lavender-white: light, with blue at least level with red and green (the text tinted mint, pink or
+/// salmon under the labels, "+23%", isn't).
+fn pale(r: i32, g: i32, b: i32) -> bool {
+    b > 190 && r > 150 && b >= r - 10 && b >= g - 10
 }
 
 fn lavender(r: i32, g: i32, b: i32) -> bool {
@@ -649,7 +650,8 @@ mod tests {
 
     /// A saved panel (a PNG crop of `PANEL` from a frame of the stream: numbers and labels only, no names or art).
     /// One file per overlay version: `nov25-*` the first (cut lower and shorter at the time, padded out with black),
-    /// `nov26-*` its redesign of 26 November 2026 (`-2` and `-3` padded too), `nov27-*` the one from 27 November.
+    /// `nov26-*` its redesign of 26 November 2026 (`-2` and `-3` padded too), `nov27-*` the one from 27 November, and
+    /// `nov27b-*` its change later that day (no POWER row, pale labels, the gaps as plain text, a see-through panel).
     fn crop(name: &str) -> Crop {
         let path = format!("{}/tests/frames/{name}", env!("CARGO_MANIFEST_DIR"));
         let decoder = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(path).unwrap()));
@@ -683,6 +685,7 @@ mod tests {
             ("nov26-3.png", [5086, 510, 650], [5532, 550, 624]),
             ("nov27-1.png", [5890, 655, 695], [4770, 612, 767]),
             ("nov27-2.png", [8336, 718, 1144], [6851, 778, 1280]),
+            ("nov27b-1.png", [5013, 604, 699], [5192, 608, 877]),
         ] {
             let p = read(&crop(name)).unwrap_or_else(|| panic!("{name}: the panel is up"));
             assert_eq!((p.home, p.away), (some(home), some(away)), "{name}");
@@ -715,7 +718,8 @@ mod tests {
         };
         for (name, home, away, shifts) in [
             ("nov26-1.png", [7484, 885, 1034], [6902, 941, 1033], [(0, -20), (0, 25), (-12, 0), (10, 0), (8, -15), (-8, 15)]),
-            ("nov27-1.png", [5890, 655, 695], [4770, 612, 767], [(0, -25), (0, 25), (-8, 0), (14, 0), (12, -15), (-6, 20)]),
+            ("nov27-1.png", [5890, 655, 695], [4770, 612, 767], [(0, -25), (0, 25), (-4, 0), (14, 0), (12, -15), (-4, 20)]),
+            ("nov27b-1.png", [5013, 604, 699], [5192, 608, 877], [(0, -25), (0, 25), (-12, 0), (4, 0), (-8, -15), (4, 20)]),
         ] {
             let c = crop(name);
             for (dx, dy) in shifts {
@@ -725,6 +729,7 @@ mod tests {
         }
         // further off to one side, today's numbers reach the labels' strip: no read, rather than the wrong rows
         assert_eq!(read(&moved(&crop("nov27-1.png"), -14, 0)), None);
+        assert_eq!(read(&moved(&crop("nov27b-1.png"), 12, 0)), None);
     }
 
     #[test]

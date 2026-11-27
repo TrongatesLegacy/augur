@@ -5,7 +5,7 @@
 //! The overlay's font stays put but its layout has changed before, so this finds the layout from the middle column's
 //! lavender labels (which rows, where the middle is) and reads outward from them to the first white or grey number,
 //! ignoring anything coloured. Each number's digits are split apart and matched against stored digit shapes
-//! (`DIGITS`, averaged from the stream's own frames). A read is only trusted when the side the site shows reads
+//! (`FONTS`, averaged from the stream's own frames). A read is only trusted when the side the site shows reads
 //! exactly as the site has it (`check`), which also proves the frame is of the duel being called.
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -15,8 +15,8 @@ use crate::db::Result;
 
 /// The panel's part of a 1920×1080 frame: x, y, width, height. Frames of other sizes are scaled to 1080p first.
 /// It's roomier than the panel itself: the rows and the middle column are found from the labels, so a panel that sits
-/// a little higher, lower or to one side still reads (this covers the overlay before and after its late-2026 redesign).
-pub const PANEL: (u32, u32, u32, u32) = (430, 290, 720, 240);
+/// a little higher, lower or to one side still reads (it covers the overlay's redesigns of 26 and 27 November 2026).
+pub const PANEL: (u32, u32, u32, u32) = (400, 170, 780, 380);
 
 /// The part of a frame at `PANEL`, as RGBA (what a canvas gives).
 #[derive(Clone, Debug, Default)]
@@ -48,7 +48,7 @@ pub fn read(c: &Crop) -> Option<Panel> {
     if c.w != PANEL.2 as usize || c.h != PANEL.3 as usize || c.rgba.len() != c.w * c.h * 4 {
         return None;
     }
-    let (rows, mid) = label_rows(c)?;
+    let (rows, half, mid) = label_rows(c)?;
     // the numbers are white or grey: coloured pixels (the markers, IV badges, bars and labels) count as dark
     let lum: Vec<f64> = c
         .rgba
@@ -64,7 +64,7 @@ pub fn read(c: &Crop) -> Option<Panel> {
             }
         })
         .collect();
-    let num = |x0: usize, x1: usize, y: usize, from_right: bool| number(&lum, c.w, x0, x1, y, from_right);
+    let num = |x0: usize, x1: usize, y: usize, from_right: bool| number(&lum, c.w, x0, x1, (y - half, y + half), from_right);
     let (home_end, away_start) = (mid.checked_sub(NUMBERS_FROM_MID)?, mid + NUMBERS_FROM_MID);
     (away_start < c.w).then(|| Panel { home: rows.map(|y| num(0, home_end, y, true)), away: rows.map(|y| num(away_start, c.w, y, false)) })
 }
@@ -270,9 +270,28 @@ pub fn safe_name(name: &str) -> bool {
 
 // --- the layout, in the panel's own pixels (1080p) ---
 
-/// Where to look for the middle column's lavender labels (POWER, HP, ATTACK, DEFENCE), which say the panel is up and
-/// where its rows and middle are.
-const LABEL_X: (usize, usize) = (250, 464);
+/// The middle column's labels (POWER, HP, ATTACK, DEFENCE), which say the panel is up and where its rows and middle
+/// are, as each version of the overlay has drawn them: where to look, and their colour. Tried newest first.
+const LABEL_STYLES: [LabelStyle; 2] = [
+    // from 27 November 2026: white, between numbers that come close to the middle
+    LabelStyle { x: (312, 448), colour: white },
+    // before: lavender, deep or pale, in a wider strip (the numbers sat further out)
+    LabelStyle { x: (280, 494), colour: lavender },
+];
+
+struct LabelStyle {
+    x: (usize, usize),
+    colour: fn(i32, i32, i32) -> bool,
+}
+
+/// White, near grey (the badges' text under the labels is tinted mint or pink).
+fn white(r: i32, g: i32, b: i32) -> bool {
+    g > 190 && (r - g).abs() < 20 && (g - b).abs() < 20
+}
+
+fn lavender(r: i32, g: i32, b: i32) -> bool {
+    b > 190 && r > 150 && b - g > 20 && b >= r
+}
 /// The home side's numbers end (right-aligned) and the away side's start (left-aligned) at least this far from the
 /// middle. The redesigned labels are pale enough to pass for grey and DEFENCE reaches about 60 either side; the older,
 /// wider ones are coloured, so reading skips them anyway.
@@ -282,26 +301,43 @@ const NUMBERS_FROM_MID: usize = 66;
 const MAX_TINT: f64 = 0.3;
 /// A pixel row is part of a label from this many lavender pixels.
 const LABEL_HITS: usize = 4;
-/// No label reaches this close to the ends of `LABEL_X`.
+/// No label reaches this close to the ends of its strip.
 const LABEL_EDGE: usize = 4;
 /// A label's height: anything shorter or taller is something else.
 const LABEL_H: (usize, usize) = (14, 30);
-/// How far apart the stat rows are, give or take.
+/// How far apart the stat rows are, give or take, and how much the two gaps may differ.
 const ROW_STEP: (usize, usize) = (50, 80);
-/// A row's numbers sit this far above the middle of its label.
-const LABEL_DROP: usize = 9;
+const ROW_EVEN: usize = 4;
+/// A row's numbers are looked for this share of the row spacing above and below the middle of its label (they've sat
+/// from 9px above it to 3px below).
+const ROW_REACH: f64 = 0.45;
 
-/// The middle of each stat row's numbers (HP, Attack, Defence), found from the last three labels (POWER above them is
-/// optional), and the middle of the labels' column; None when they aren't there.
-fn label_rows(c: &Crop) -> Option<([usize; 3], usize)> {
-    let lavender = |x: usize, y: usize| {
+/// The middle of each stat row's label (HP, Attack, Defence), found from the last three labels (POWER above them is
+/// optional), how far above and below it to look for its numbers, and the middle of the labels' column, in whichever
+/// of the overlay's styles finds them; None when none does.
+fn label_rows(c: &Crop) -> Option<([usize; 3], usize, usize)> {
+    LABEL_STYLES.iter().find_map(|style| label_rows_in(c, style))
+}
+
+fn label_rows_in(c: &Crop, style: &LabelStyle) -> Option<([usize; 3], usize, usize)> {
+    let label_x = style.x;
+    let rgb = |x: usize, y: usize| {
         let i = (y * c.w + x) * 4;
-        let (r, g, b) = (c.rgba[i] as i32, c.rgba[i + 1] as i32, c.rgba[i + 2] as i32);
-        b > 190 && r > 150 && b - g > 20 && b >= r
+        (c.rgba[i] as i32, c.rgba[i + 1] as i32, c.rgba[i + 2] as i32)
     };
-    let lit: Vec<bool> = (0..c.h).map(|y| (LABEL_X.0..LABEL_X.1).filter(|&x| lavender(x, y)).count() >= LABEL_HITS).collect();
+    let label = |x: usize, y: usize| {
+        let (r, g, b) = rgb(x, y);
+        (style.colour)(r, g, b)
+    };
+    // the green or red a badge (the gap between the sides, "+23%") is filled with: its white text isn't a label
+    let fill = |x: usize, y: usize| {
+        let (r, g, b) = rgb(x, y);
+        r.max(g) > 110 && r.max(g) > b + 40
+    };
+    let lit: Vec<bool> = (0..c.h).map(|y| (label_x.0..label_x.1).filter(|&x| label(x, y)).count() >= LABEL_HITS).collect();
     // runs of lit rows, bridging the odd unlit row inside a word
     let mut bands = vec![];
+    let mut at_edge = vec![];
     let mut y = 0;
     while y < c.h {
         if !lit[y] {
@@ -316,37 +352,60 @@ fn label_rows(c: &Crop) -> Option<([usize; 3], usize)> {
             y += 1;
         }
         let h = end - start + 1;
-        // a label sits in the middle of the strip; lavender text running to its edges is the caption under the panel
-        let edges = |x: usize| (start..=end).any(|y| lavender(x, y));
-        let inside = !(LABEL_X.0..LABEL_X.0 + LABEL_EDGE).any(edges) && !(LABEL_X.1 - LABEL_EDGE..LABEL_X.1).any(edges);
-        if (LABEL_H.0..=LABEL_H.1).contains(&h) && inside {
+        // a label sits in the middle of the strip: text across it, to both edges, is the caption under the panel, and
+        // a label at one edge means the panel is off to one side, where its numbers would read as labels too
+        let edges = |x: usize| (start..=end).any(|y| label(x, y));
+        let (left, right) = ((label_x.0..label_x.0 + LABEL_EDGE).any(edges), (label_x.1 - LABEL_EDGE..label_x.1).any(edges));
+        if left != right && (LABEL_H.0..=LABEL_H.1).contains(&h) {
+            at_edge.push((start, end));
+        }
+        let inside = !left && !right;
+        let count = |f: &dyn Fn(usize, usize) -> bool| {
+            (start..=end).flat_map(|y| (label_x.0..label_x.1).map(move |x| (x, y))).filter(|&(x, y)| f(x, y)).count()
+        };
+        let on_fill = count(&fill) > count(&label);
+        if (LABEL_H.0..=LABEL_H.1).contains(&h) && inside && !on_fill {
             bands.push((start, end));
         }
     }
-    let [hp, atk, def] = *bands.last_chunk::<3>()?;
+    // the last three evenly spaced: lines under the panel (a caption, the skills' heading) can pass for labels too
     let middle = |(a, b): (usize, usize)| (a + b) / 2;
-    let steps_fit = [middle(atk) - middle(hp), middle(def) - middle(atk)].iter().all(|d| (ROW_STEP.0..=ROW_STEP.1).contains(d));
-    let rows = [hp, atk, def].map(|band| middle(band).saturating_sub(LABEL_DROP));
+    let steps_of = |w: &[(usize, usize)]| [middle(w[1]) - middle(w[0]), middle(w[2]) - middle(w[1])];
+    let even = |w: &&[(usize, usize)]| {
+        let s = steps_of(w);
+        s.iter().all(|d| (ROW_STEP.0..=ROW_STEP.1).contains(d)) && s[0].abs_diff(s[1]) <= ROW_EVEN
+    };
+    let &[hp, atk, def] = bands.windows(3).rev().find(even)? else { return None };
+    let steps = steps_of(&[hp, atk, def]);
+    // a label at one edge a row below these (DEFENCE, off to one side) would make them the wrong three
+    let next = middle(def) + steps[1];
+    if at_edge.iter().any(|&b| middle(b).abs_diff(next) <= ROW_EVEN) {
+        return None;
+    }
+    let rows = [hp, atk, def].map(middle);
+    let half = ((steps[0] + steps[1]) as f64 / 2.0 * ROW_REACH) as usize;
     // DEFENCE is the widest label, so its ends give the column's middle
-    let xs: Vec<usize> = (def.0..=def.1).flat_map(|y| (LABEL_X.0..LABEL_X.1).filter(move |&x| lavender(x, y))).collect();
+    let xs: Vec<usize> = (def.0..=def.1).flat_map(|y| (label_x.0..label_x.1).filter(move |&x| label(x, y))).collect();
     let mid = (xs.iter().min()? + xs.iter().max()?) / 2;
-    (steps_fit && rows[0] >= ABOVE && rows[2] + BELOW <= c.h).then_some((rows, mid))
+    (rows[0] >= half && rows[2] + half <= c.h).then_some((rows, half, mid))
 }
 
 // --- digits ---
 
-/// Rows above and below a stat row's middle that its numbers take.
-const ABOVE: usize = 15;
-const BELOW: usize = 14;
+/// Digits are at least this tall (at 1080p); the first run this tall from the aligned edge sets the number's height,
+/// and the rest of it is judged against that.
+const MIN_DIGIT_H: usize = 15;
 /// A wider gap than this ends the number (the arrow and the species base come next).
 const GAP: usize = 8;
+/// How far a digit's top and bottom may sit from the first digit's (more for bigger digits).
+const DIGIT_ALIGN: usize = 2;
 /// A digit's shape is compared at this size.
 const GW: usize = 10;
 const GH: usize = 16;
 
 /// The number at a stat row, read from its aligned edge.
-fn number(lum: &[f64], w: usize, x0: usize, x1: usize, y: usize, from_right: bool) -> Option<u32> {
-    let (top, rows) = (y - ABOVE, ABOVE + BELOW);
+fn number(lum: &[f64], w: usize, x0: usize, x1: usize, (top, bottom): (usize, usize), from_right: bool) -> Option<u32> {
+    let rows = bottom - top;
     let cols = x1 - x0;
     let px = |r: usize, c: usize| lum[(top + r) * w + x0 + c];
     let mut vals: Vec<f64> = Vec::with_capacity(rows * cols);
@@ -358,7 +417,27 @@ fn number(lum: &[f64], w: usize, x0: usize, x1: usize, y: usize, from_right: boo
     // coloured pixels were set to 0: leave them out of the split, or they drag it down into the digits' soft edges
     vals.retain(|v| *v > 0.0);
     let th = otsu(&vals).max(80.0);
-    let on = |r: usize, c: usize| px(r, c) > th;
+    let lit = |r: usize, c: usize| px(r, c) > th;
+    // the number's own rows: the band of lit rows at least a digit tall nearest the window's middle, so a bar under
+    // it or the row above don't join onto its digits
+    let lit_rows: Vec<bool> = (0..rows).map(|r| (0..cols).filter(|&c| lit(r, c)).count() >= 2).collect();
+    let mut bands = vec![];
+    let mut r = 0;
+    while r < rows {
+        if !lit_rows[r] {
+            r += 1;
+            continue;
+        }
+        let start = r;
+        while r < rows && lit_rows[r] {
+            r += 1;
+        }
+        if r - start >= MIN_DIGIT_H {
+            bands.push((start, r - 1));
+        }
+    }
+    let (b0, b1) = bands.into_iter().min_by_key(|&(a, b)| (a + b).abs_diff(rows))?;
+    let on = |r: usize, c: usize| (b0..=b1).contains(&r) && lit(r, c);
     let count: Vec<usize> = (0..cols).map(|c| (0..rows).filter(|&r| on(r, c)).count()).collect();
     // runs of lit columns, each with the rows it spans
     let mut runs = vec![];
@@ -378,26 +457,35 @@ fn number(lum: &[f64], w: usize, x0: usize, x1: usize, y: usize, from_right: boo
     if from_right {
         runs.reverse();
     }
-    // digits (full height) and commas (low and narrow) from the aligned edge, until something else or a wide gap
+    // digits (full height) and commas (low and narrow) from the aligned edge, until something else or a wide gap;
+    // the first digit sets the height the rest are judged by
     let mut kept: Vec<(bool, usize, usize, usize, usize)> = vec![];
     let mut prev: Option<(usize, usize)> = None;
+    let mut first: Option<(usize, usize, usize)> = None;
     for (a, b, t, btm) in runs {
-        let started = kept.iter().any(|k| k.0);
-        if started {
-            if let Some((pa, pb)) = prev {
-                let gap = if from_right { pa.saturating_sub(b) } else { a.saturating_sub(pb) };
-                if gap > GAP {
-                    break;
-                }
+        let h = btm - t + 1;
+        let Some((dh, dt, db)) = first else {
+            if h >= MIN_DIGIT_H {
+                first = Some((h, t, btm));
+                kept.push((true, a, b, t, btm));
+                prev = Some((a, b));
+            }
+            continue;
+        };
+        if let Some((pa, pb)) = prev {
+            let gap = if from_right { pa.saturating_sub(b) } else { a.saturating_sub(pb) };
+            if gap > GAP {
+                break;
             }
         }
         prev = Some((a, b));
-        let h = btm - t + 1;
-        if h >= 15 {
+        // a digit lines up with the first one, top and bottom (a box beside the number, "BASE 82", doesn't)
+        let align = DIGIT_ALIGN.max(dh / 12);
+        if t.abs_diff(dt) <= align && btm.abs_diff(db) <= align {
             kept.push((true, a, b, t, btm));
-        } else if started && h <= 10 && t >= 12 && b - a <= 10 {
+        } else if h * 20 <= dh * 9 && t * 5 >= dt * 5 + dh * 2 && (b - a) * 20 <= dh * 9 {
             kept.push((false, a, b, t, btm));
-        } else if started {
+        } else {
             break;
         }
     }
@@ -469,7 +557,9 @@ fn classify(glyph: &[Vec<bool>]) -> char {
     let score = |(t_aspect, t): &(f64, [u8; GW * GH])| {
         shape.iter().zip(t.iter()).map(|(a, b)| (a - *b as f64 / 255.0).abs()).sum::<f64>() + 3.0 * (aspect - t_aspect).abs()
     };
-    let best = DIGITS.iter().enumerate().min_by(|a, b| score(a.1).total_cmp(&score(b.1))).map(|(i, _)| i).unwrap_or(0);
+    // the closest shape in any of the fonts the overlay has used
+    let best =
+        FONTS.iter().flat_map(|font| font.iter().enumerate()).min_by(|a, b| score(a.1).total_cmp(&score(b.1))).map(|(i, _)| i).unwrap_or(0);
     char::from(b'0' + best as u8)
 }
 
@@ -498,8 +588,11 @@ fn shrink(glyph: &[Vec<bool>]) -> [f64; GW * GH] {
     out
 }
 
+/// The overlay's fonts, each as its digits' shapes, 0 to 9.
+const FONTS: [&[(f64, [u8; GW * GH]); 10]; 2] = [&DIGITS, &DIGITS_27_NOV];
+
 /// Each digit's width over height and shape (GW × GH, 0-255), averaged from 647 digits in 32 of the stream's frames
-/// at 1080p, all read right whichever frame was left out. 0 to 9.
+/// at 1080p, all read right whichever frame was left out. 0 to 9. The overlay's font until 27 November 2026.
 #[rustfmt::skip]
 const DIGITS: [(f64, [u8; GW * GH]); 10] = [
     // 0
@@ -524,13 +617,39 @@ const DIGITS: [(f64, [u8; GW * GH]); 10] = [
     (0.746, [0, 21, 113, 206, 248, 248, 202, 80, 9, 0, 13, 132, 242, 255, 255, 255, 255, 235, 91, 1, 72, 235, 255, 255, 255, 255, 255, 255, 211, 31, 172, 255, 255, 253, 215, 223, 255, 255, 251, 108, 231, 255, 255, 245, 92, 116, 250, 255, 255, 184, 247, 255, 255, 244, 50, 73, 248, 255, 255, 237, 246, 255, 255, 252, 146, 169, 254, 255, 255, 249, 206, 255, 255, 255, 255, 255, 255, 255, 255, 252, 102, 248, 255, 255, 255, 255, 255, 255, 255, 246, 20, 157, 252, 255, 255, 255, 255, 255, 255, 226, 0, 21, 114, 194, 190, 187, 253, 255, 255, 164, 1, 39, 55, 67, 90, 206, 255, 255, 246, 90, 44, 205, 234, 237, 249, 255, 255, 255, 212, 27, 75, 242, 255, 255, 255, 255, 255, 243, 88, 1, 60, 234, 255, 255, 255, 255, 247, 120, 9, 0, 12, 167, 252, 255, 254, 211, 88, 9, 0, 0]),
 ];
 
+/// The font from 27 November 2026 (condensed; its 1 has a flag the first font's 7 is close to): averaged the same
+/// way, from the stream's frames that day, each labelled with the site's numbers.
+#[rustfmt::skip]
+const DIGITS_27_NOV: [(f64, [u8; GW * GH]); 10] = [
+    // 0 (42 samples)
+    (0.513, [0, 41, 153, 249, 255, 255, 255, 178, 70, 0, 52, 234, 255, 255, 255, 255, 255, 255, 248, 70, 186, 255, 255, 255, 232, 232, 255, 255, 255, 218, 255, 255, 255, 210, 21, 25, 215, 255, 255, 255, 255, 255, 255, 201, 0, 0, 201, 255, 255, 255, 255, 255, 255, 201, 0, 0, 201, 255, 255, 255, 255, 255, 255, 201, 0, 0, 201, 255, 255, 255, 255, 255, 255, 201, 0, 0, 201, 255, 255, 255, 255, 255, 255, 201, 0, 0, 201, 255, 255, 255, 255, 255, 255, 201, 0, 0, 201, 255, 255, 255, 255, 255, 255, 201, 0, 0, 201, 255, 255, 255, 255, 255, 255, 201, 0, 0, 201, 255, 255, 255, 255, 255, 255, 215, 25, 23, 215, 255, 255, 255, 186, 255, 255, 255, 232, 222, 255, 255, 255, 218, 52, 234, 255, 255, 255, 255, 255, 255, 248, 70, 0, 48, 154, 249, 255, 255, 255, 179, 77, 0]),
+    // 1 (66 samples)
+    (0.514, [4, 79, 130, 241, 255, 255, 215, 0, 0, 0, 236, 252, 255, 255, 255, 255, 215, 0, 0, 0, 255, 255, 255, 255, 255, 255, 215, 0, 0, 0, 255, 239, 158, 241, 255, 255, 215, 0, 0, 0, 32, 24, 9, 211, 255, 255, 215, 0, 0, 0, 0, 0, 9, 214, 255, 255, 215, 0, 0, 0, 0, 0, 9, 216, 255, 255, 215, 0, 0, 0, 0, 0, 9, 216, 255, 255, 215, 0, 0, 0, 0, 0, 9, 216, 255, 255, 215, 0, 0, 0, 0, 0, 9, 216, 255, 255, 215, 0, 0, 0, 0, 0, 9, 216, 255, 255, 215, 0, 0, 0, 0, 0, 9, 219, 255, 255, 215, 0, 0, 0, 0, 0, 10, 208, 255, 255, 217, 9, 1, 0, 151, 151, 159, 245, 255, 255, 249, 189, 157, 151, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]),
+    // 2 (26 samples)
+    (0.551, [0, 23, 135, 255, 255, 255, 255, 135, 29, 0, 40, 220, 255, 255, 255, 255, 255, 255, 237, 40, 159, 255, 255, 255, 227, 227, 255, 255, 255, 154, 252, 255, 255, 167, 18, 18, 158, 255, 255, 252, 188, 188, 188, 97, 0, 0, 138, 255, 255, 255, 0, 0, 0, 0, 0, 15, 243, 255, 255, 145, 0, 0, 0, 0, 0, 83, 255, 255, 247, 79, 0, 0, 0, 0, 58, 239, 255, 255, 182, 0, 0, 0, 0, 22, 195, 255, 255, 237, 50, 0, 0, 0, 7, 193, 255, 255, 239, 72, 0, 0, 0, 6, 135, 255, 255, 252, 122, 0, 0, 0, 0, 118, 255, 255, 255, 155, 5, 0, 0, 0, 54, 244, 255, 255, 221, 40, 0, 0, 0, 0, 239, 255, 255, 255, 219, 157, 157, 157, 157, 157, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255]),
+    // 3 (20 samples)
+    (0.556, [0, 14, 113, 227, 255, 255, 255, 170, 50, 0, 14, 184, 255, 255, 255, 255, 255, 255, 234, 25, 85, 255, 255, 255, 234, 212, 255, 255, 255, 135, 184, 255, 255, 227, 50, 14, 210, 255, 255, 191, 85, 113, 113, 85, 0, 0, 191, 255, 255, 191, 0, 0, 0, 0, 0, 20, 217, 255, 255, 163, 0, 0, 0, 50, 198, 218, 255, 255, 234, 43, 0, 0, 0, 64, 255, 255, 255, 255, 50, 0, 0, 0, 0, 57, 227, 234, 255, 255, 255, 78, 0, 0, 0, 0, 0, 21, 213, 255, 255, 197, 0, 0, 0, 0, 0, 0, 191, 255, 255, 234, 113, 113, 113, 85, 0, 0, 191, 255, 255, 251, 191, 255, 255, 198, 10, 14, 198, 255, 255, 203, 163, 255, 255, 255, 200, 212, 255, 255, 255, 177, 43, 234, 255, 255, 255, 255, 255, 255, 234, 57, 0, 50, 170, 255, 255, 255, 255, 170, 50, 0]),
+    // 4 (36 samples)
+    (0.581, [0, 0, 0, 28, 255, 255, 255, 57, 0, 0, 0, 0, 0, 165, 255, 255, 200, 20, 0, 0, 0, 0, 24, 206, 255, 255, 144, 0, 0, 0, 0, 0, 57, 255, 255, 255, 36, 0, 0, 0, 0, 0, 180, 255, 255, 156, 4, 0, 0, 0, 0, 57, 236, 255, 255, 96, 0, 0, 0, 0, 0, 126, 255, 255, 255, 0, 0, 0, 0, 0, 0, 227, 255, 255, 145, 29, 66, 66, 58, 0, 84, 248, 255, 249, 88, 113, 255, 255, 227, 0, 141, 255, 255, 227, 0, 113, 255, 255, 227, 0, 255, 255, 255, 211, 41, 136, 255, 255, 231, 41, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 107, 107, 107, 107, 107, 173, 255, 255, 239, 107, 0, 0, 0, 0, 0, 113, 255, 255, 227, 0, 0, 0, 0, 0, 0, 113, 255, 255, 227, 0]),
+    // 5 (74 samples)
+    (0.506, [116, 255, 255, 255, 255, 255, 255, 255, 255, 194, 107, 255, 255, 255, 255, 255, 255, 255, 255, 194, 107, 255, 255, 251, 190, 162, 162, 162, 162, 135, 107, 255, 255, 237, 38, 0, 0, 0, 0, 0, 107, 255, 255, 237, 34, 0, 0, 0, 0, 0, 107, 255, 255, 241, 122, 185, 185, 169, 47, 0, 107, 255, 255, 255, 255, 255, 255, 255, 228, 69, 107, 255, 255, 255, 255, 255, 255, 255, 255, 210, 96, 227, 228, 214, 87, 56, 226, 255, 255, 255, 14, 33, 34, 18, 0, 0, 201, 255, 255, 255, 0, 0, 0, 0, 0, 0, 214, 255, 255, 255, 131, 131, 131, 81, 0, 0, 214, 255, 255, 255, 250, 255, 255, 221, 21, 15, 218, 255, 255, 255, 156, 255, 255, 255, 224, 215, 255, 255, 255, 231, 64, 235, 255, 255, 255, 255, 255, 255, 248, 82, 0, 46, 152, 249, 255, 255, 255, 175, 67, 0]),
+    // 6 (84 samples)
+    (0.547, [0, 0, 0, 2, 188, 255, 255, 237, 30, 0, 0, 0, 0, 70, 252, 255, 255, 140, 0, 0, 0, 0, 3, 176, 255, 255, 235, 28, 0, 0, 0, 0, 59, 254, 255, 251, 122, 0, 0, 0, 0, 9, 187, 255, 255, 233, 10, 0, 0, 0, 0, 79, 252, 255, 255, 130, 0, 0, 0, 0, 7, 196, 255, 255, 248, 116, 80, 76, 7, 0, 73, 252, 255, 255, 255, 255, 255, 253, 188, 24, 172, 255, 255, 255, 255, 255, 255, 255, 255, 152, 236, 255, 255, 227, 91, 92, 231, 255, 255, 250, 255, 255, 252, 92, 0, 0, 120, 255, 255, 255, 255, 255, 250, 73, 0, 0, 115, 255, 255, 255, 245, 255, 253, 129, 15, 15, 145, 255, 255, 253, 192, 255, 255, 255, 217, 217, 255, 255, 255, 172, 48, 226, 255, 255, 255, 255, 255, 255, 226, 48, 0, 33, 144, 255, 255, 255, 255, 144, 33, 0]),
+    // 7 (94 samples)
+    (0.563, [245, 255, 255, 255, 255, 255, 255, 255, 255, 255, 250, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 254, 196, 160, 160, 222, 255, 255, 235, 255, 255, 253, 99, 0, 3, 221, 255, 255, 145, 237, 239, 238, 92, 0, 21, 249, 255, 252, 104, 18, 18, 18, 5, 0, 114, 255, 255, 241, 19, 0, 0, 0, 0, 0, 154, 255, 255, 217, 0, 0, 0, 0, 0, 6, 249, 255, 255, 113, 0, 0, 0, 0, 0, 63, 255, 255, 251, 79, 0, 0, 0, 0, 0, 138, 255, 255, 229, 2, 0, 0, 0, 0, 7, 205, 255, 255, 193, 0, 0, 0, 0, 0, 18, 254, 255, 255, 96, 0, 0, 0, 0, 0, 101, 255, 255, 252, 42, 0, 0, 0, 0, 1, 157, 255, 255, 215, 0, 0, 0, 0, 0, 7, 226, 255, 255, 158, 0, 0, 0, 0, 0, 29, 255, 255, 252, 80, 0, 0, 0]),
+    // 8 (66 samples)
+    (0.520, [0, 36, 146, 245, 255, 255, 248, 162, 30, 0, 46, 219, 255, 255, 255, 255, 255, 255, 217, 33, 153, 254, 255, 255, 218, 202, 255, 255, 254, 174, 166, 255, 255, 211, 30, 25, 215, 255, 255, 202, 166, 255, 255, 187, 0, 13, 193, 255, 255, 202, 136, 255, 255, 212, 36, 44, 220, 255, 254, 177, 27, 203, 255, 253, 227, 210, 251, 253, 199, 42, 0, 55, 207, 255, 255, 255, 255, 218, 46, 0, 54, 222, 255, 255, 240, 244, 255, 255, 221, 42, 193, 255, 255, 214, 53, 55, 204, 255, 255, 202, 255, 255, 255, 141, 0, 0, 118, 255, 255, 255, 255, 255, 255, 133, 0, 0, 118, 255, 255, 255, 255, 255, 255, 185, 15, 20, 168, 255, 255, 251, 195, 255, 255, 255, 216, 209, 255, 255, 255, 197, 54, 230, 255, 255, 255, 255, 255, 255, 237, 62, 0, 38, 146, 245, 255, 255, 248, 162, 56, 0]),
+    // 9 (32 samples)
+    (0.552, [0, 22, 136, 255, 255, 255, 255, 136, 22, 0, 38, 219, 255, 255, 255, 255, 255, 255, 219, 38, 208, 255, 255, 255, 218, 218, 255, 255, 255, 169, 255, 255, 253, 128, 16, 16, 162, 255, 255, 255, 255, 255, 248, 67, 0, 0, 131, 255, 255, 255, 255, 255, 248, 72, 0, 0, 131, 255, 255, 255, 255, 255, 254, 190, 47, 47, 198, 255, 255, 233, 190, 255, 255, 255, 239, 239, 255, 255, 255, 127, 69, 243, 255, 255, 255, 255, 255, 255, 250, 69, 0, 52, 150, 202, 209, 255, 255, 255, 175, 0, 0, 0, 0, 0, 99, 255, 255, 248, 57, 0, 0, 0, 0, 8, 235, 255, 255, 172, 0, 0, 0, 0, 1, 137, 255, 255, 248, 35, 0, 0, 0, 0, 12, 255, 255, 255, 145, 0, 0, 0, 0, 1, 147, 255, 255, 247, 41, 0, 0, 0, 0, 30, 252, 255, 255, 173, 0, 0, 0, 0]),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// A saved panel (a PNG crop of `PANEL` from a frame of the stream: numbers and labels only, no names or art).
-    /// `panel-*` are from before the late-2026 redesign (taken lower and shorter, padded out with black), `redesign-*`
-    /// after it.
+    /// One file per overlay version: `nov25-*` the first (cut lower and shorter at the time, padded out with black),
+    /// `nov26-*` its redesign of 26 November 2026 (`-2` and `-3` padded too), `nov27-*` the one from 27 November.
     fn crop(name: &str) -> Crop {
         let path = format!("{}/tests/frames/{name}", env!("CARGO_MANIFEST_DIR"));
         let decoder = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(path).unwrap()));
@@ -554,14 +673,16 @@ mod tests {
     fn reads_both_sides() {
         // each against the stats the site showed at the bell
         for (name, home, away) in [
-            ("panel-451.png", [4770, 612, 767], [4986, 582, 696]),
-            ("panel-452.png", [5890, 655, 695], [4807, 513, 776]),
-            ("panel-465.png", [6270, 464, 797], [5072, 661, 677]),
-            ("panel-466.png", [4986, 576, 706], [5778, 778, 691]),
-            ("panel-481.png", [7688, 1044, 1145], [8826, 919, 1318]),
-            ("redesign-1.png", [7484, 885, 1034], [6902, 941, 1033]),
-            ("redesign-2.png", [5246, 563, 673], [4986, 582, 696]),
-            ("redesign-3.png", [5086, 510, 650], [5532, 550, 624]),
+            ("nov25-451.png", [4770, 612, 767], [4986, 582, 696]),
+            ("nov25-452.png", [5890, 655, 695], [4807, 513, 776]),
+            ("nov25-465.png", [6270, 464, 797], [5072, 661, 677]),
+            ("nov25-466.png", [4986, 576, 706], [5778, 778, 691]),
+            ("nov25-481.png", [7688, 1044, 1145], [8826, 919, 1318]),
+            ("nov26-1.png", [7484, 885, 1034], [6902, 941, 1033]),
+            ("nov26-2.png", [5246, 563, 673], [4986, 582, 696]),
+            ("nov26-3.png", [5086, 510, 650], [5532, 550, 624]),
+            ("nov27-1.png", [5890, 655, 695], [4770, 612, 767]),
+            ("nov27-2.png", [8336, 718, 1144], [6851, 778, 1280]),
         ] {
             let p = read(&crop(name)).unwrap_or_else(|| panic!("{name}: the panel is up"));
             assert_eq!((p.home, p.away), (some(home), some(away)), "{name}");
@@ -570,17 +691,16 @@ mod tests {
 
     #[test]
     fn reads_a_720p_frame_scaled_up() {
-        let p = read(&crop("panel-465-720p.png")).unwrap();
+        let p = read(&crop("nov25-465-720p.png")).unwrap();
         assert_eq!((p.home, p.away), (some([6270, 464, 797]), some([5072, 661, 677])));
-        let p = read(&crop("redesign-1-720p.png")).unwrap();
+        let p = read(&crop("nov26-1-720p.png")).unwrap();
         assert_eq!((p.home, p.away), (some([7484, 885, 1034]), some([6902, 941, 1033])));
     }
 
     #[test]
     fn reads_a_panel_that_has_moved() {
         // the rows and middle are found from the labels, so a panel that sits a little off still reads
-        let c = crop("redesign-1.png");
-        let moved = |dx: isize, dy: isize| {
+        let moved = |c: &Crop, dx: isize, dy: isize| {
             let mut rgba = vec![0; c.rgba.len()];
             for y in 0..c.h {
                 for x in 0..c.w {
@@ -593,22 +713,30 @@ mod tests {
             }
             Crop { w: c.w, h: c.h, rgba }
         };
-        for (dx, dy) in [(0, -20), (0, 25), (-12, 0), (10, 0), (8, -15), (-8, 15)] {
-            let p = read(&moved(dx, dy)).unwrap_or_else(|| panic!("moved {dx}, {dy}: the panel is up"));
-            assert_eq!((p.home, p.away), (some([7484, 885, 1034]), some([6902, 941, 1033])), "moved {dx}, {dy}");
+        for (name, home, away, shifts) in [
+            ("nov26-1.png", [7484, 885, 1034], [6902, 941, 1033], [(0, -20), (0, 25), (-12, 0), (10, 0), (8, -15), (-8, 15)]),
+            ("nov27-1.png", [5890, 655, 695], [4770, 612, 767], [(0, -25), (0, 25), (-8, 0), (14, 0), (12, -15), (-6, 20)]),
+        ] {
+            let c = crop(name);
+            for (dx, dy) in shifts {
+                let p = read(&moved(&c, dx, dy)).unwrap_or_else(|| panic!("{name} moved {dx}, {dy}: the panel is up"));
+                assert_eq!((p.home, p.away), (some(home), some(away)), "{name} moved {dx}, {dy}");
+            }
         }
+        // further off to one side, today's numbers reach the labels' strip: no read, rather than the wrong rows
+        assert_eq!(read(&moved(&crop("nov27-1.png"), -14, 0)), None);
     }
 
     #[test]
     fn no_panel_when_the_stream_shows_the_game() {
-        assert_eq!(read(&crop("panel-472.png")), None);
-        assert_eq!(read(&crop("game-redesign.png")), None);
+        assert_eq!(read(&crop("game-nov25.png")), None);
+        assert_eq!(read(&crop("game.png")), None);
         assert_eq!(read(&Crop { w: 10, h: 10, rgba: vec![0; 400] }), None, "the wrong size");
     }
 
     #[test]
     fn a_read_counts_only_when_the_shown_side_agrees() {
-        let p = read(&crop("panel-465.png"));
+        let p = read(&crop("nov25-465.png"));
         // the away side was hidden: home is what the site showed
         assert_eq!(check(p.as_ref(), ("home", [6270, 464, 797])), Check::Read { stats: [5072, 661, 677] });
         assert_eq!(check(p.as_ref(), ("away", [5072, 661, 677])), Check::Read { stats: [6270, 464, 797] });
@@ -624,7 +752,7 @@ mod tests {
 
     #[test]
     fn a_fight_with_nothing_hidden_checks_both_sides() {
-        let p = read(&crop("redesign-1.png"));
+        let p = read(&crop("nov26-1.png"));
         let (home, away) = ([7484, 885, 1034], [6902, 941, 1033]);
         assert_eq!(check_both(p.as_ref(), home, away), BothCheck::Agreed);
         assert_eq!(

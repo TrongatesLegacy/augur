@@ -540,6 +540,25 @@ fn fit_zoom(app: &AppHandle) {
     let _ = page.emit("zoomed", zoom);
 }
 
+/// The page says how wide it is (CSS pixels) as it starts and whenever it's shown or resized: if the zoom Augur set
+/// hasn't taken (WebView2 ignores one set before a freshly opened window is ready, so the page first showed at its
+/// 1280x720 layout spread across a big window until it was hidden to the tray and shown again), it's set again.
+#[tauri::command]
+fn zoom_check(app: AppHandle, page_width: f64) {
+    let Some(w) = main_window(&app) else { return };
+    let (Ok(size), Ok(scale)) = (w.inner_size(), w.scale_factor()) else { return };
+    let set = *app.state::<Arc<Shared>>().zoom.lock().unwrap();
+    let real = crate::autobet::zoom_from(Some(size.to_logical::<f64>(scale).width), Some(page_width), set);
+    if zoom_off(real, set) {
+        fit_zoom(&app);
+    }
+}
+
+/// The page isn't at the zoom Augur set: more than 2% out.
+fn zoom_off(real: f64, set: f64) -> bool {
+    (real - set).abs() > set * 0.02
+}
+
 /// What each staking choice would suggest at a spread of chances, for Settings › Staking.
 #[tauri::command]
 fn stake_preview(shared: tauri::State<'_, Arc<Shared>>, staking: stake::StakeSettings) -> Cmd<Vec<(f64, Stake)>> {
@@ -1154,6 +1173,7 @@ pub fn run() {
             crate::autobet::kick_sign_in,
             crate::autobet::kick_sign_out,
             crate::autobet::chat_place,
+            zoom_check,
             crate::stream::stream_shot,
             crate::autobet::auto_arm,
             crate::autobet::auto_cancel,
@@ -1225,7 +1245,10 @@ pub fn run() {
                         crate::autobet::hide_chat(w2.app_handle());
                         in_dock(w2.app_handle(), false);
                     }
-                    WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => fit_zoom(w2.app_handle()),
+                    // shown again (from the tray) counts too: a zoom set while it was hidden may not have taken
+                    WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } | WindowEvent::Focused(true) => {
+                        fit_zoom(w2.app_handle())
+                    }
                     _ => {}
                 });
                 fit_zoom(app.handle());
@@ -1291,6 +1314,14 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_zoom_that_didnt_take_is_set_again() {
+        // the window opened at 1.56 but the page still at its own 1280 layout (WebView2, first open): set it again
+        assert!(super::zoom_off(1.0, 1.56));
+        // in step, or near enough (a scrollbar's width), it's left alone
+        assert!(!super::zoom_off(1.56, 1.56));
+        assert!(!super::zoom_off(1.55, 1.56));
+    }
 
     /// The popover opens above a bottom taskbar, below a top one, and never past the screen's edges.
     #[test]

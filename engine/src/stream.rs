@@ -273,8 +273,9 @@ pub fn safe_name(name: &str) -> bool {
 /// The middle column's labels (POWER, HP, ATTACK, DEFENCE), which say the panel is up and where its rows and middle
 /// are, as each version of the overlay has drawn them: where to look, and their colour. Tried newest first.
 const LABEL_STYLES: [LabelStyle; 2] = [
-    // from 27 November 2026: white or pale lavender-white, between numbers that come close to the middle
-    LabelStyle { x: (315, 448), colour: pale },
+    // from 27 November 2026: white or pale lavender-white, between numbers that come close to the middle (wide enough
+    // on the right for DEFENCE with its marker in front of it)
+    LabelStyle { x: (315, 462), colour: pale },
     // before: lavender, deep or pale, in a wider strip (the numbers sat further out)
     LabelStyle { x: (280, 494), colour: lavender },
 ];
@@ -686,6 +687,8 @@ mod tests {
             ("nov27-1.png", [5890, 655, 695], [4770, 612, 767]),
             ("nov27-2.png", [8336, 718, 1144], [6851, 778, 1280]),
             ("nov27b-1.png", [5013, 604, 699], [5192, 608, 877]),
+            // the markers before the labels (◀ HP), not after: the labels sit further right
+            ("nov27b-2.png", [7749, 669, 1003], [7484, 764, 940]),
         ] {
             let p = read(&crop(name)).unwrap_or_else(|| panic!("{name}: the panel is up"));
             assert_eq!((p.home, p.away), (some(home), some(away)), "{name}");
@@ -720,6 +723,7 @@ mod tests {
             ("nov26-1.png", [7484, 885, 1034], [6902, 941, 1033], [(0, -20), (0, 25), (-12, 0), (10, 0), (8, -15), (-8, 15)]),
             ("nov27-1.png", [5890, 655, 695], [4770, 612, 767], [(0, -25), (0, 25), (-4, 0), (14, 0), (12, -15), (-4, 20)]),
             ("nov27b-1.png", [5013, 604, 699], [5192, 608, 877], [(0, -25), (0, 25), (-12, 0), (4, 0), (-8, -15), (4, 20)]),
+            ("nov27b-2.png", [7749, 669, 1003], [7484, 764, 940], [(0, -25), (0, 25), (-16, 0), (4, 0), (-8, -15), (4, 20)]),
         ] {
             let c = crop(name);
             for (dx, dy) in shifts {

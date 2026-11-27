@@ -2,7 +2,11 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.34 (current)
+## 0.1.35 (current)
+- Read the stream's stats panel in its later 27 November layout
+- Read the stream's stats panel whichever side its markers are on
+
+## 0.1.34
 - Read the stream's stats panel after its 27 November redesign, and every version before it
 
 ## 0.1.33

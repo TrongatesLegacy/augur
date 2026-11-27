@@ -134,6 +134,13 @@ window.addEventListener('resize', replace);
 // the app set the page's zoom: once the page has laid itself out again (WebView2 takes a moment), the chat and the
 // stream go back over their boxes
 listen('zoomed', () => requestAnimationFrame(() => (replace(), setTimeout(replace, 300))));
+// the zoom the app set may not have taken yet (WebView2, a freshly opened window): say how wide the page is as it
+// starts, a few times while the window settles, and whenever it's shown or resized, and the app sets it again if not
+const zoomCheck = () => invoke('zoom_check', { pageWidth: window.innerWidth }).catch(() => {});
+for (const ms of [0, 300, 1000, 3000]) setTimeout(zoomCheck, ms);
+window.addEventListener('resize', zoomCheck);
+window.addEventListener('focus', zoomCheck);
+document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && zoomCheck());
 listen('settings', (s) => {
   // another computer's change arrived through sync
   app.state.settings = s;

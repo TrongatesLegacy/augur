@@ -288,7 +288,7 @@ fn page_zoom(app: &AppHandle, shared: &Shared, page_width: Option<f64>) -> f64 {
 
 /// The zoom a window `window` wide (logical pixels) shows a page `page` wide (CSS pixels) at, or `set` without both
 /// or for an unlikely answer.
-fn zoom_from(window: Option<f64>, page: Option<f64>, set: f64) -> f64 {
+pub(crate) fn zoom_from(window: Option<f64>, page: Option<f64>, set: f64) -> f64 {
     match (window, page.filter(|p| *p > 100.0)) {
         (Some(w), Some(p)) if (0.25..=4.0).contains(&(w / p)) => w / p,
         _ => set,

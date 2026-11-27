@@ -500,6 +500,7 @@ pub fn fixture_data() -> Value {
         ("auto_arm", Value::Null),
         ("auto_cancel", Value::Null),
         ("chat_place", Value::Null),
+        ("zoom_check", Value::Null),
         // a stand-in for a kept frame of the stream
         ("stream_shot", json!(data["pal_image"].clone())),
         ("kick_sign_in", Value::Null),

@@ -2,7 +2,12 @@
 
 Augur is in beta, so versions start with 0. Every update raises the last number (0.1.0 → 0.1.1 → 0.1.2 …). The middle number only goes up for a big milestone. Version 1.0 will be the first finished release.
 
-## 0.1.35 (current)
+## 0.1.36 (current)
+- Keep Live's stream and chat over their boxes on Windows
+- Keep You › Pals' cards in step with the reroll panel
+- Pages catch up without being opened again
+
+## 0.1.35
 - Read the stream's stats panel in its later 27 November layout
 - Read the stream's stats panel whichever side its markers are on
 

@@ -7,6 +7,7 @@ use crate::voices;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 /// Moves a species hit with in its latest fight tapes that its listed moveset doesn't have.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -157,14 +158,21 @@ pub fn hidden_moves(pal: &str, slug: &str, listed: &[String], db_path: &Path, n:
     HiddenMoves { share: if total > 0.0 { hidden / total } else { 0.0 }, moves }
 }
 
-/// Every past duel between these two species, from the smaller species' pages (by duels fought).
-pub fn pal_head_to_head(home: &StateSide, away: &StateSide, species_rec: [[f64; 2]; 2], max_pages: usize) -> PalHeadToHead {
+/// Every past duel between these two species, from the smaller species' pages (by duels fought), as many pages as
+/// are read by `deadline`.
+pub fn pal_head_to_head(
+    home: &StateSide,
+    away: &StateSide,
+    species_rec: [[f64; 2]; 2],
+    max_pages: usize,
+    deadline: Option<Instant>,
+) -> PalHeadToHead {
     if home.pal == away.pal {
         return PalHeadToHead::default();
     }
     let (scan, other) = if species_rec[0].iter().sum::<f64>() <= species_rec[1].iter().sum::<f64>() { (home, away) } else { (away, home) };
     let slug = site::slug_of(&scan.img).unwrap_or_else(|| site::slug_for(&scan.pal));
-    let Ok(pages) = site::pal_pages(&slug, max_pages) else { return PalHeadToHead::default() };
+    let Ok(pages) = site::pal_pages_by(&slug, max_pages, deadline) else { return PalHeadToHead::default() };
     let meetings: Vec<DuelRow> = pages
         .iter()
         .flat_map(|p| site::duel_rows(p))
@@ -175,6 +183,21 @@ pub fn pal_head_to_head(home: &StateSide, away: &StateSide, species_rec: [[f64; 
         .collect();
     let home_wins = meetings.iter().filter(|r| r.winner().pal == home.pal).count() as u32;
     PalHeadToHead { home_wins, away_wins: meetings.len() as u32 - home_wins, meetings, pages_scanned: pages.len() }
+}
+
+/// How long a call's lookups (the owners' rivalry, the pals' past meetings, hidden moves, the owners' boxes) are given:
+/// a slow or rate-limiting site makes for a call without some of them, as when one fails, not a call that never comes.
+/// On 27 November 2026 Augur made no calls for over an hour while the site was being read.
+pub const LOOKUP_LIMIT: Duration = Duration::from_secs(45);
+
+/// Runs `f` on its own thread; the closure it returns waits for the answer until `deadline`, and gives None after
+/// (the thread is left to finish on its own).
+fn by<T: Send + 'static>(deadline: Instant, f: impl FnOnce() -> T + Send + 'static) -> impl FnOnce() -> Option<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    move || rx.recv_timeout(deadline.saturating_duration_since(Instant::now())).ok()
 }
 
 /// Options for a prediction.
@@ -242,29 +265,32 @@ pub fn predict(state: &State, opts: &Options) -> Option<Prediction> {
     let species_rec = tale.species_records();
     let empty = Vec::new();
 
+    let deadline = Instant::now() + LOOKUP_LIMIT;
     let hid = |side: &StateSide, key: &str| {
         let listed: Vec<String> = skills.get(key).unwrap_or(&empty).iter().map(|m| m.name.clone()).collect();
         let slug = site::slug_of(&side.img).unwrap_or_else(|| site::slug_for(&side.pal));
-        hidden_moves(&side.pal, &slug, &listed, &opts.db_path, 3)
+        let (pal, db) = (side.pal.clone(), opts.db_path.clone());
+        by(deadline, move || hidden_moves(&pal, &slug, &listed, &db, 3))
     };
     // the site hides a side's stats until the bell ("STATS KNOWN AT THE BELL"): its owner's box may show them
     let shown = |key: &str| stats.get(key).and_then(|s| s.get("HP")).and_then(|l| l.lv70).is_some();
-    let boxed = |side: &StateSide, key: &str| (opts.lookups && !shown(key)).then(|| site::roster(&side.actor_key).ok()).flatten();
+    let boxed = |side: &StateSide, key: &str| {
+        let (want, owner) = (opts.lookups && !shown(key), side.actor_key.clone());
+        by(deadline, move || want.then(|| site::roster(&owner).ok()).flatten())
+    };
+    // all at once, each given until the deadline: one the site is slow with is left out, as one that failed would be
     let (owners, pal_h2h, hidden, boxes) = if opts.lookups {
-        std::thread::scope(|s| {
-            let owners = s.spawn(|| site::owner_rivalry(&h.actor_key, &a.actor_key).ok());
-            let pals = s.spawn(|| pal_head_to_head(h, a, species_rec, 40));
-            let hh = s.spawn(|| hid(h, "home"));
-            let ha = s.spawn(|| hid(a, "away"));
-            let bh = s.spawn(|| boxed(h, "home"));
-            let ba = s.spawn(|| boxed(a, "away"));
-            (
-                owners.join().ok().flatten(),
-                pals.join().unwrap_or_default(),
-                [hh.join().unwrap_or_default(), ha.join().unwrap_or_default()],
-                [bh.join().ok().flatten(), ba.join().ok().flatten()],
-            )
-        })
+        let (hk, ak) = (h.actor_key.clone(), a.actor_key.clone());
+        let owners = by(deadline, move || site::owner_rivalry(&hk, &ak).ok());
+        let (hs, as_) = (h.clone(), a.clone());
+        let pals = by(deadline, move || pal_head_to_head(&hs, &as_, species_rec, 40, Some(deadline)));
+        let (hh, ha, bh, ba) = (hid(h, "home"), hid(a, "away"), boxed(h, "home"), boxed(a, "away"));
+        (
+            owners().flatten(),
+            pals().unwrap_or_default(),
+            [hh().unwrap_or_default(), ha().unwrap_or_default()],
+            [bh().flatten(), ba().flatten()],
+        )
     } else {
         (None, PalHeadToHead::default(), [HiddenMoves::default(), HiddenMoves::default()], [None, None])
     };

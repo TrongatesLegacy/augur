@@ -81,7 +81,15 @@ fn run_once(app: &AppHandle, shared: &Shared) {
     // said in this computer's file, so another computer won't turn auto betting on too
     st.auto_bet = current.auto_bet.enabled;
     st.defaults = values(&AppSettings::default());
+    let snapshot_was = st.snapshot_at;
     let got = st.sync(&conn, &values(&current), OS, env!("CARGO_PKG_VERSION"), now_ms());
+    // the log goes with the snapshot (hourly while things change, at a stream's end, after a stall), not every line:
+    // Augur Sync/logs/<device>.log, one per computer, read where it is and never merged
+    if st.snapshot_at != snapshot_was {
+        if let Some(dir) = st.dir() {
+            copy_log(&shared.dir, &dir.join("logs").join(format!("{}.log", st.device)));
+        }
+    }
     if !got.settings.is_empty() {
         let mut v = serde_json::to_value(&current).unwrap_or_default();
         sync::apply(&mut v, &got.settings);
@@ -98,6 +106,14 @@ fn run_once(app: &AppHandle, shared: &Shared) {
     let _ = app.emit("sync", view(&st, &got.others));
     if got.calls > 0 {
         let _ = app.emit("calls", got.calls);
+    }
+}
+
+/// This computer's log (`journal`) into the sync folder, when it has one.
+fn copy_log(data: &std::path::Path, to: &std::path::Path) {
+    let from = data.join("augur.log");
+    if from.exists() && to.parent().is_some_and(|p| std::fs::create_dir_all(p).is_ok()) {
+        let _ = std::fs::copy(from, to);
     }
 }
 
@@ -230,4 +246,20 @@ pub async fn import_file(app: AppHandle, shared: tauri::State<'_, Arc<Shared>>) 
     shared.sync_now.store(true, Ordering::Relaxed);
     let file = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     Ok(Some(Imported { file, merged }))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_log_is_copied_when_there_is_one() {
+        let base = std::env::temp_dir().join(format!("augur-copy-log-{}", std::process::id()));
+        let (data, to) = (base.join("data"), base.join("sync").join("logs").join("pc.log"));
+        std::fs::create_dir_all(&data).unwrap();
+        super::copy_log(&data, &to);
+        assert!(!to.exists(), "no log yet: nothing copied");
+        std::fs::write(data.join("augur.log"), "2026-11-27 17:11:05Z the live loop was stuck\n").unwrap();
+        super::copy_log(&data, &to);
+        assert!(std::fs::read_to_string(&to).unwrap().contains("stuck"), "copied into the sync folder's logs");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

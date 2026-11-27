@@ -414,10 +414,18 @@ pub fn owner_rivalry(home_key: &str, away_key: &str) -> Result<Rivalry> {
 
 /// Every duel list page for a species (/pal/<slug>?p=N), up to max_pages.
 pub fn pal_pages(slug: &str, max_pages: usize) -> Result<Vec<String>> {
+    pal_pages_by(slug, max_pages, None)
+}
+
+/// `pal_pages`, stopping at `deadline` with the pages it has by then.
+pub fn pal_pages_by(slug: &str, max_pages: usize, deadline: Option<std::time::Instant>) -> Result<Vec<String>> {
     let first = fetch(&format!("{BASE}/pal/{slug}?p=1"))?;
     let pages = regex!(r"Page \d+ of (\d+)").captures(&first).and_then(|c| c[1].parse::<usize>().ok()).unwrap_or(1).min(max_pages);
     let mut out = vec![first];
     for n in 2..=pages {
+        if deadline.is_some_and(|d| std::time::Instant::now() >= d) {
+            break;
+        }
         out.push(fetch(&format!("{BASE}/pal/{slug}?p={n}"))?);
     }
     Ok(out)

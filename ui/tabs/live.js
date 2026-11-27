@@ -158,11 +158,13 @@ export function render(app) {
   const wrap = (body) => (auto ? `<div class="lwrap grow"><div class="lmain">${body}</div>${column(auto)}</div>` : body);
   const done = () => auto && wireColumn(app, () => render(app));
   const p = live?.prediction;
-  const status = live?.error
+  // the live loop stalled this session: fights went uncalled, said beside the status until Augur restarts
+  const stalled = live?.stalled ? `<div class="pill ml warn" title="${esc(live.stalled)}"><span class="dot bad"></span>Missed calls</div>` : '';
+  const status = stalled + (live?.error
     ? `<div class="pill ml" title="${esc(live.error)}"><span class="dot idle"></span>${feedProblem(live.error)[0]}</div>`
     : p
       ? `${upNext(live, true)}<div class="pill"><span class="dot"></span>${live.live ? 'Fight on' : 'Picks open'}</div>`
-      : `<div class="pill ml"><span class="dot idle"></span>${esc(live?.title || 'Waiting')}</div>`;
+      : `<div class="pill ml"><span class="dot idle"></span>${esc(live?.title || 'Waiting')}</div>`);
   if (!p) {
     const r = live?.last_result;
     const last = r

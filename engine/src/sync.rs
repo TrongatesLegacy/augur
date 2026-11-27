@@ -7,6 +7,8 @@
 //!     Augur Sync/snapshots/<device>.db    a copy of its whole store, written hourly when it's changed and when a
 //!                                         stream ends, merged into the others' like an imported backup: what the
 //!                                         files above don't carry (the stream's frames, duels, tapes) gets across
+//!     Augur Sync/logs/<device>.log        its log (the app's `augur.log`), copied when a snapshot is written: read
+//!                                         where it is, never merged
 //! Settings merge one at a time: the latest change wins. Calls merge without duplicates. What stays on each computer
 //! (its sign-in, launch at login, the public data it fetches itself) is the caller's to leave out.
 

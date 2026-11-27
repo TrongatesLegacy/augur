@@ -643,6 +643,8 @@ const MAIN_DRIVER: &str = r#"
       // "mypalsbusy" with the dice rolling, "mypalskept" with the new roll kept (both Swee's real reroll)
       DATA.reroll_sheet_before ||= DATA.reroll_open;
       if (tab.startsWith('mypals')) DATA.reroll_open = { mypalsroll: DATA.reroll_after, mypalsbusy: DATA.reroll_busy, mypalskept: DATA.reroll_kept }[tab] || DATA.reroll_sheet_before;
+      // "mypalsone": the panel, read fresh, says Maybe where the box as last read said otherwise
+      if (tab === 'mypalsone') DATA.reroll_open = { ...DATA.reroll_sheet_before, pal: { ...DATA.reroll_sheet_before.pal, advice: { ...DATA.reroll_sheet_before.pal.advice, tag: 'Maybe' } } };
       // "call" is History with the first call's breakdown opened from its row
       window.augur.state.call = null;
       // "offair" is Live with no duel up, after a stream
@@ -769,6 +771,8 @@ const MAIN_DRIVER: &str = r#"
         await sleep(300);
         if (confirm) document.getElementById('mrr-roll')?.click();
         await sleep(100);
+        // the card on the left says what the panel on the right says
+        if (tab === 'mypalsone') out.sameTag = [[...document.querySelectorAll('.bxp.own')].find((c) => c.innerText.includes('Jellroy'))?.querySelector('.tag')?.textContent.split(' ')[0], document.querySelector('.mrr-pal .tag')?.textContent];
         out.scrollers[tab] = scrolling();
         // "mypalssend": the credits spent, and the box is read again
         if (tab === 'mypalssend') {
@@ -1440,6 +1444,7 @@ fn every_tab_renders_headless() {
         "a roll waits for its second click: {one}"
     );
     assert_eq!(r["afterSend"], json!(["reroll_send", "own_box"]), "a roll sent reads the box again, so the cards catch up");
+    assert_eq!(r["sameTag"], json!(["Maybe", "Maybe"]), "the card takes the tag from the panel read fresh");
     let roll = text("mypalsroll");
     assert!(roll.contains("keep new") && roll.contains("stay with old") && roll.contains("augur’s pick"), "a roll made: {roll}");
     assert!(roll.contains("57.0%") && roll.contains("28.0%"), "each roll's win chance: {roll}");

@@ -729,11 +729,12 @@ fn signed_in(shared: &Shared) -> Option<(String, String)> {
 /// Your box with each pal's reroll advice. `prices`: also read the price of any pal whose panel hasn't been read
 /// lately (one at a time, gently), so the advice is at its real price.
 #[tauri::command]
-async fn own_box(shared: tauri::State<'_, Arc<Shared>>, prices: bool) -> Cmd<views::OwnBoxView> {
+async fn own_box(shared: tauri::State<'_, Arc<Shared>>, prices: bool, refresh: Option<bool>) -> Cmd<views::OwnBoxView> {
     let Some((name, cookie)) = signed_in(&shared) else { return Ok(views::OwnBoxView::default()) };
+    // `refresh`: read from the site whatever's cached (after a reroll the site's box is the only one to trust)
     let cached = {
         let own = shared.own.lock().unwrap();
-        own.pals.clone().filter(|(t, _)| t.elapsed() < OWN_FRESH && !own.stale).map(|(_, p)| p)
+        own.pals.clone().filter(|(t, _)| t.elapsed() < OWN_FRESH && !own.stale && refresh != Some(true)).map(|(_, p)| p)
     };
     let pals = match cached {
         Some(p) => Ok(p),

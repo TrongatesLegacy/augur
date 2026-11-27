@@ -20,6 +20,13 @@ const pts = (x) => `${(x * 100).toFixed(1)}%`;
 
 let view = null; // the box as last shown
 let sheet = null; // the selected pal's reroll panel
+
+// One pal, one answer: the selected pal's panel is read fresh (its price, the rolls the site has just shown), so its
+// tag and price go into the box too, and the card on the left says what the panel on the right says
+function fold() {
+  if (!view || !sheet) return;
+  view = { ...view, pals: view.pals.map((p) => (p.id === sheet.id ? { ...p, price: sheet.pal.price, advice: sheet.pal.advice } : p)) };
+}
 let selected = null;
 let confirming = false;
 let poll = null;
@@ -155,6 +162,7 @@ async function open(app, id) {
   if (right) right.innerHTML = `<div class="ph"><h3>Reroll</h3></div>${empty('egg', 'Reading its reroll panel…')}`;
   try {
     sheet = await invoke('reroll_open', { id });
+    fold();
   } catch (e) {
     app.flash(e);
     selected = null;
@@ -179,9 +187,10 @@ function keepPolling(app) {
       // next price are the new ones
       const settled = (((was.busy || was.wait) && !(now.busy || now.wait)) || (was.sync && !now.sync)) && now.rolls.length < 2;
       if (settled) {
-        view = await invoke('own_box', { prices: false });
+        view = await invoke('own_box', { prices: false, refresh: true });
         sheet = await invoke('reroll_open', { id });
       }
+      fold();
       draw(app);
       keepPolling(app);
     } catch (e) {
@@ -205,8 +214,9 @@ async function send(app, form, price) {
   }
   confirming = false;
   // anything sent may have changed the box (a roll spends credits and doubles the price, even one that went wrong
-  // partway), so read it again: the cards then show what the site has now
-  view = (await invoke('own_box', { prices: false }).catch(() => null)) || view;
+  // partway), so read it again from the site, not the copy cached before the roll: the cards then show what it has now
+  view = (await invoke('own_box', { prices: false, refresh: true }).catch(() => null)) || view;
+  fold();
   draw(app);
   keepPolling(app);
 }

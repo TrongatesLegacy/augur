@@ -54,6 +54,8 @@ pub struct LiveView {
     pub site_now: Option<u64>,
     /// the fight that's on (or just finished): its hits so far, for the "who's ahead" chart
     pub fight: Option<site::LiveFight>,
+    /// the live loop stalled this session and was started again: when, for how long and on what (calls were missed)
+    pub stalled: Option<String>,
 }
 
 /// What the popover and Live show when no duel is up.

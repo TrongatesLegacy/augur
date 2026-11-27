@@ -4,6 +4,7 @@
 mod app;
 mod autobet;
 mod cli;
+mod journal;
 mod secure;
 mod settings;
 mod stream;

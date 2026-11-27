@@ -653,11 +653,11 @@ const MAIN_DRIVER: &str = r#"
       // "offair" is Live with no duel up, after a stream
       if (tab === 'offair') window.augur.state.live = { ...DATA.live, prediction: null, queue: [], off_air: DATA.off_air, title: 'Last duel' };
       // "liveedge" is Live at its edges: a race too close to call (the favourite left with about 1.5% HP), owners
-      // meeting for the first time and pals that never have
+      // meeting for the first time and pals that never have, after the live loop stalled and was started again
       else if (tab === 'liveedge') {
         const p = DATA.live.prediction;
         const t = p.pick === 'home' ? { t_home: p.score.t_away * 0.985 } : { t_away: p.score.t_home * 0.985 };
-        window.augur.state.live = { ...DATA.live, prediction: { ...p, score: { ...p.score, ...t }, owners: { summary: 'first meeting', since: null, owners: [], meetings: [] }, pal_h2h: { home_wins: 0, away_wins: 0, meetings: [], pages_scanned: 1 } } };
+        window.augur.state.live = { ...DATA.live, stalled: 'Augur stopped following the site at 17:11 UTC (stuck working out the call on Korsche v Herbil) and started again: fights in between weren’t called', prediction: { ...p, score: { ...p.score, ...t }, owners: { summary: 'first meeting', since: null, owners: [], meetings: [] }, pal_h2h: { home_wins: 0, away_wins: 0, meetings: [], pages_scanned: 1 } } };
       } else if (tab === 'livefight') {
         // "livefight" is Live while the duel is fought: the first two thirds of a stored tape, still going
         const hits = DATA.call_detail.fight.hits;
@@ -1190,6 +1190,11 @@ fn every_tab_renders_headless() {
     let text = |tab: &str| r[tab].as_str().unwrap_or("").to_lowercase();
     assert!(text("live").contains("wumpo"), "Live: {}", text("live"));
     assert!(!text("live").contains("auto bet"), "auto betting off, Live is as it was: {}", text("live"));
+    assert!(
+        text("liveedge").contains("missed calls") && !text("live").contains("missed calls"),
+        "a stall this session says calls were missed: {}",
+        text("liveedge")
+    );
     assert!(
         text("livefight").contains("who’s ahead")
             && text("livefight").contains("live ·")

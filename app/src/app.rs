@@ -2,6 +2,7 @@
 //! window, the live sync loop, the background backfill, the bets import and the commands the pages call (Settings ›
 //! Sync & data's are in `sync.rs`).
 
+use crate::journal;
 use crate::secure;
 use crate::settings::{self, AppSettings};
 use crate::views::{self, civil_date, BetsView, HistoryView, LastResult, LiveView, ModelView, PlayerView};
@@ -18,7 +19,7 @@ use base64::Engine;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::image::Image;
@@ -85,6 +86,10 @@ pub struct Shared {
     pub arm_item: Mutex<Option<MenuItem<tauri::Wry>>>,
     /// the main window's page zoom, to place the chat on Live
     pub zoom: Mutex<f64>,
+    /// the live loop's heartbeat: when it last moved on, and what it was doing then
+    pub beat: Mutex<(Instant, String)>,
+    /// which live loop is the current one: a stalled one is replaced, and stops once it comes back
+    pub loop_gen: AtomicU64,
     /// the stream above the chat, and reading it for hidden stats
     pub stream: Mutex<crate::stream::StreamState>,
 }
@@ -225,16 +230,38 @@ pub(crate) fn notify(app: &AppHandle, title: &str, body: &str) {
     let _ = app.notification().builder().title(title).body(body).show();
 }
 
-/// Polls the live state, settles finished calls, makes the call for each new duel and keeps the tray current.
-fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
+/// Polls the live state, settles finished calls, makes the call for each new duel and keeps the tray current. `gen`
+/// is this loop's place in `loop_gen`: one the watchdog has replaced stops as soon as it comes back.
+fn sync_loop(app: AppHandle, shared: Arc<Shared>, gen: u64) {
     let mut last_key = String::new();
     // when a duel was last up: once none has been for a while the stream has ended, and the sync writes this
     // computer's snapshot (the frames it kept get across that way)
     let mut last_duel: Option<Instant> = None;
-    while !shared.stop.load(Ordering::Relaxed) {
+    let current = || shared.loop_gen.load(Ordering::Relaxed) == gen;
+    let beat = |what: &str| {
+        if current() {
+            *shared.beat.lock().unwrap() = (Instant::now(), what.to_string());
+        }
+    };
+    let mut last_error = String::new();
+    while !shared.stop.load(Ordering::Relaxed) && current() {
         let poll = shared.settings.lock().unwrap().poll_wait(roll());
         let mut has_duel = false;
-        match State::fetch() {
+        beat("reading the site's live state");
+        let fetched = State::fetch();
+        if !current() {
+            return;
+        }
+        // what went wrong reading the site, once each time it changes
+        let error = fetched.as_ref().err().map(|e| e.to_string()).unwrap_or_default();
+        if error != last_error {
+            journal::line(
+                &shared.dir,
+                &if error.is_empty() { "reading the site again".to_string() } else { format!("couldn't read the site: {error}") },
+            );
+            last_error = error;
+        }
+        match fetched {
             Ok(state) => {
                 shared.busy.store(state.busy(), Ordering::Relaxed);
                 has_duel = state.home.is_some() && state.away.is_some();
@@ -243,6 +270,7 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
                     if let (true, Some(h), Some(a)) = (has_duel && !state.picks_open(), &state.home, &state.away) {
                         let _ = db::close_call(&conn, &h.actor, &a.actor, state.now);
                     }
+                    beat("settling finished fights");
                     if let Ok(settled) = db::settle(&conn, &state.recent, |id| site::duel(id).ok()) {
                         if !settled.is_empty() {
                             shared.bets_now.store(true, Ordering::Relaxed);
@@ -297,6 +325,10 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
                     let callable = key.is_empty() || state.picks_open() || state.live;
                     if key != last_key && callable {
                         let settings = shared.settings.lock().unwrap().clone();
+                        let fight =
+                            state.home.as_ref().zip(state.away.as_ref()).map(|(h, a)| format!("{} v {}", h.pal, a.pal)).unwrap_or_default();
+                        beat(&format!("working out the call on {fight}"));
+                        let started = Instant::now();
                         let p = predict::predict(
                             &state,
                             &predict::Options {
@@ -306,24 +338,43 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
                                 stream: read,
                             },
                         );
+                        // replaced while it worked (a stall): the loop that took over calls this fight
+                        if !current() {
+                            return;
+                        }
+                        let took = started.elapsed();
+                        if took >= SLOW_CALL {
+                            journal::line(&shared.dir, &format!("the call on {fight} took {}s", took.as_secs()));
+                        }
+                        beat(&format!("saving the call on {fight}"));
                         let stake = p.as_ref().map(|p| stake_for(&conn, &settings, p));
+                        // a call that couldn't be saved is tried again at the next poll, not lost
+                        let mut saved = true;
                         if let (Some(p), Some(st)) = (&p, &stake) {
-                            if let Ok(id) = db::add_call(&conn, &p.to_call()) {
-                                let _ = db::set_call_stake(&conn, id, st.amount, &st.command, Some(&settings.staking));
-                                // nothing called yet since Augur started: it may have called this fight before
-                                let why = if last_key.is_empty() { Trigger::Launch } else { Trigger::Seen };
-                                let _ = revisions::record(&conn, id, Revision::of(p, Some(st), why, p.seen_at));
-                            }
-                            if settings.notify_new_pick && !last_key.starts_with(&format!("{}|{}|", p.home.owner, p.away.owner)) {
-                                let bet = if st.command.is_empty() { String::new() } else { format!(" · {}", st.command) };
-                                notify(&app, &format!("{} {:.0}%{bet}", p.favourite().pal, p.prob * 100.0), &p.lines[0]);
+                            match db::add_call(&conn, &p.to_call()) {
+                                Ok(id) => {
+                                    let _ = db::set_call_stake(&conn, id, st.amount, &st.command, Some(&settings.staking));
+                                    // nothing called yet since Augur started: it may have called this fight before
+                                    let why = if last_key.is_empty() { Trigger::Launch } else { Trigger::Seen };
+                                    let _ = revisions::record(&conn, id, Revision::of(p, Some(st), why, p.seen_at));
+                                    if settings.notify_new_pick && !last_key.starts_with(&format!("{}|{}|", p.home.owner, p.away.owner)) {
+                                        let bet = if st.command.is_empty() { String::new() } else { format!(" · {}", st.command) };
+                                        notify(&app, &format!("{} {:.0}%{bet}", p.favourite().pal, p.prob * 100.0), &p.lines[0]);
+                                    }
+                                }
+                                Err(e) => {
+                                    saved = false;
+                                    journal::line(&shared.dir, &format!("couldn't save the call on {fight}, trying again: {e}"));
+                                }
                             }
                         }
                         let mut live = shared.live.lock().unwrap();
                         live.detail = p.as_ref().map(|p| views::live_detail(p, stake.as_ref()));
                         live.prediction = p;
                         live.stake = stake;
-                        last_key = key;
+                        if saved {
+                            last_key = key;
+                        }
                     }
                     let today = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
                     let day = civil_date(today);
@@ -361,8 +412,43 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
         let wait = if has_duel { poll } else { Duration::from_secs(30) };
         let end = Instant::now() + wait;
         while Instant::now() < end && !shared.stop.load(Ordering::Relaxed) {
+            beat("waiting for the next look at the site");
             std::thread::sleep(Duration::from_millis(250));
         }
+    }
+}
+
+/// A call that takes longer than this goes in the log (most take a second or two).
+const SLOW_CALL: Duration = Duration::from_secs(10);
+/// The live loop hasn't moved on for this long: it's stuck (a call's lookups are cut off well before this, at
+/// `predict::LOOKUP_LIMIT`, and the waits between polls keep the heartbeat going).
+const STALLED_AFTER: Duration = Duration::from_secs(150);
+
+/// Watches the live loop's heartbeat. If it stops (on 27 November 2026 the loop made no calls for over an hour while
+/// the rest of Augur carried on), it's logged, Live says calls were missed, and a fresh loop takes over; the stuck one
+/// stops as soon as it comes back.
+fn watchdog(app: AppHandle, shared: Arc<Shared>) {
+    while !shared.stop.load(Ordering::Relaxed) {
+        std::thread::sleep(Duration::from_secs(15));
+        let (at, doing) = shared.beat.lock().unwrap().clone();
+        if at.elapsed() < STALLED_AFTER {
+            continue;
+        }
+        let since = now_ms().saturating_sub(at.elapsed().as_millis() as u64);
+        let t = (since / 1000) % 86_400;
+        let note = format!(
+            "Augur stopped following the site at {:02}:{:02} UTC (stuck {doing}) and started again: fights in between weren't called",
+            t / 3600,
+            t % 3600 / 60
+        );
+        journal::line(&shared.dir, &format!("the live loop was stuck for {}s {doing}: started a fresh one", at.elapsed().as_secs()));
+        let gen = shared.loop_gen.fetch_add(1, Ordering::Relaxed) + 1;
+        *shared.beat.lock().unwrap() = (Instant::now(), "starting again".into());
+        shared.live.lock().unwrap().stalled = Some(note);
+        let view = shared.live.lock().unwrap().clone();
+        let _ = app.emit("live", &view);
+        let (h, s) = (app.clone(), shared.clone());
+        std::thread::spawn(move || sync_loop(h, s, gen));
     }
 }
 
@@ -1104,6 +1190,8 @@ pub fn run() {
         kick: Mutex::new(Default::default()),
         arm_item: Mutex::new(None),
         zoom: Mutex::new(1.0),
+        beat: Mutex::new((Instant::now(), "starting".into())),
+        loop_gen: AtomicU64::new(0),
         stream: Mutex::new(Default::default()),
     });
     tauri::Builder::default()
@@ -1259,7 +1347,9 @@ pub fn run() {
                 let _ = shared.settings.lock().unwrap().save(&shared.dir);
             }
             let (h1, s1) = (app.handle().clone(), shared.clone());
-            std::thread::spawn(move || sync_loop(h1, s1));
+            std::thread::spawn(move || sync_loop(h1, s1, 0));
+            let (hw, sw) = (app.handle().clone(), shared.clone());
+            std::thread::spawn(move || watchdog(hw, sw));
             let (h2, s2) = (app.handle().clone(), shared.clone());
             std::thread::spawn(move || backfill_loop(h2, s2));
             let (h3, s3) = (app.handle().clone(), shared.clone());

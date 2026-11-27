@@ -523,8 +523,10 @@ window.addEventListener('unhandledrejection', (e) => window.__errors.push('rejec
 const DATA = {data};
 window.__TAURI__ = {{
   core: {{ invoke: (cmd) => (window.__calls = [...(window.__calls || []), cmd], cmd in DATA) ? Promise.resolve(JSON.parse(JSON.stringify(DATA[cmd]))) : Promise.reject(new Error('no stand-in for ' + cmd)) }},
-  event: {{ listen: () => Promise.resolve(() => {{}}) }},
+  // the app's events: the pages' listeners are kept, and `__emit` sends one as the app would
+  event: {{ listen: (name, fn) => (((window.__listeners ||= {{}})[name] ||= []).push(fn), Promise.resolve(() => {{}})) }},
 }};
+window.__emit = (name, payload) => (window.__listeners?.[name] || []).forEach((fn) => fn({{ payload }}));
 </script>"#
     );
     let page = page.replacen("<head>", &format!("<head>{stub}"), 1).replacen(
@@ -941,6 +943,27 @@ const MAIN_DRIVER: &str = r#"
       paused: line(activity({ fetch: { phase: 'duels', done: 1, total: 4, paused: true } }, now)),
       stopped: line(activity({ fetch: { phase: 'duels', done: 1, total: 4, gave_up: true } }, now)),
     };
+  }
+  if (!only) {
+    // an event redraws the page on screen that shows its data (what each page asks for when drawn), and leaves You ›
+    // Pals alone, so a reroll under way isn't dropped
+    const after = async (tab, youView, ev) => {
+      window.augur.state.youView = youView;
+      await window.augur.show(tab);
+      await sleep(300);
+      window.__calls = [];
+      window.__emit(ev, ev === 'bets' ? { phase: 'done', done: 0 } : 1);
+      await sleep(300);
+      return window.__calls;
+    };
+    out.redraws = {
+      model: await after('model', 'profile', 'model'),
+      callsModel: await after('model', 'profile', 'calls'),
+      callsYou: await after('you', 'profile', 'calls'),
+      callsPals: await after('you', 'pals', 'calls'),
+      betsPals: await after('you', 'pals', 'bets'),
+    };
+    window.augur.state.youView = 'profile';
   }
   out.upbar = document.getElementById('upbar')?.innerText || '';
   // a fresh install's welcome, over everything
@@ -1445,6 +1468,17 @@ fn every_tab_renders_headless() {
     );
     assert_eq!(r["afterSend"], json!(["reroll_send", "own_box"]), "a roll sent reads the box again, so the cards catch up");
     assert_eq!(r["sameTag"], json!(["Maybe", "Maybe"]), "the card takes the tag from the panel read fresh");
+    // the page on screen catches up with an event, without being opened again
+    let asked = |k: &str| r["redraws"][k].as_array().unwrap().iter().map(|c| c.as_str().unwrap().to_string()).collect::<Vec<_>>();
+    assert!(asked("model").contains(&"model_view".into()), "self-tuning finished: Model redraws: {:?}", asked("model"));
+    assert!(asked("callsModel").contains(&"model_view".into()), "a call settled: Model redraws: {:?}", asked("callsModel"));
+    assert!(asked("callsYou").contains(&"you_view".into()), "a call settled: You redraws: {:?}", asked("callsYou"));
+    assert!(
+        asked("callsPals").is_empty() && asked("betsPals").is_empty(),
+        "You › Pals is left alone: {:?} {:?}",
+        asked("callsPals"),
+        asked("betsPals")
+    );
     let roll = text("mypalsroll");
     assert!(roll.contains("keep new") && roll.contains("stay with old") && roll.contains("augur’s pick"), "a roll made: {roll}");
     assert!(roll.contains("57.0%") && roll.contains("28.0%"), "each roll's win chance: {roll}");

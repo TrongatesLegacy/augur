@@ -247,6 +247,8 @@ fn sync_loop(app: AppHandle, shared: Arc<Shared>) {
                         if !settled.is_empty() {
                             shared.bets_now.store(true, Ordering::Relaxed);
                             shared.learn_now.store(true, Ordering::Relaxed);
+                            // the pages that show the calls catch up without being opened again
+                            let _ = app.emit("calls", settled.len());
                             if let Some(c) = db::settled(&conn).ok().and_then(|all| all.into_iter().rev().find(|c| settled.contains(&c.id)))
                             {
                                 let winner_pal = if c.winner.as_deref() == Some("home") { c.home_pal.clone() } else { c.away_pal.clone() };

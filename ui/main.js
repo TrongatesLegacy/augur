@@ -151,9 +151,17 @@ listen('sync', (v) => {
   showActivity();
   if (app.state.tab === 'settings' && app.state.settingsPage === 'sync') settings.render(app);
 });
+// You › Pals is left alone by these: redrawing it would drop a reroll that's under way, and calls and bets don't
+// change your box
+const youShowsThem = () => app.state.tab === 'you' && app.state.youView !== 'pals';
+// a call settled here, or calls arrived from another computer: whichever page shows them catches up
 listen('calls', () => {
   if (app.state.tab === 'history') history.render(app);
+  if (youShowsThem()) you.render(app);
+  if (app.state.tab === 'model') model.render(app);
 });
+// self-tuning finished: Model shows the new settings
+listen('model', () => app.state.tab === 'model' && model.render(app));
 // Updates: a dot on the Settings icon while there's news, and a bar floating over the window when an update is ready
 // (Restart to update) or was just installed (what's new). "Later" hides the ready bar until the next start.
 const gear = document.querySelector('.nav.gear');
@@ -196,7 +204,7 @@ listen('update', (u) => {
 listen('bets', (p) => {
   // redraw Your bets (and You) when an import finishes or moves on a page
   if (app.state.tab === 'history' && app.state.view === 'bets' && (p.phase === 'done' || p.done % 25 === 0)) history.render(app);
-  if (app.state.tab === 'you' && p.phase === 'done') you.render(app);
+  if (youShowsThem() && p.phase === 'done') you.render(app);
 });
 listen('account', (name) => {
   showYou(!!name);

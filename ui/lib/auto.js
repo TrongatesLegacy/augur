@@ -87,12 +87,24 @@ const spotOf = (id) => {
   return r && r.width > 40 ? { x: r.left, y: r.top, w: r.width, h: r.height, visible: true } : null;
 };
 
-// Puts the chat webview over its spot on Live (or hides it, with no spot): the page's CSS pixels, which the app
-// scales by the window's zoom.
-// (and the stream's player over its spot above it)
+// Puts the chat webview over its spot on Live (or hides it, with no spot), and the stream's player over its spot
+// above it: the page's CSS pixels and its own width, which the app turns into the window's pixels at whatever zoom the
+// page is really at.
 export function placeChat() {
   const spot = spotOf('kchat') || { x: 0, y: 0, w: 0, h: 0, visible: false };
-  return invoke('chat_place', { spot, stream: spotOf('kstream') }).catch(() => {});
+  return invoke('chat_place', { spot, stream: spotOf('kstream'), pageWidth: window.innerWidth }).catch(() => {});
+}
+
+// The chat and the stream follow their boxes whenever those change size (the zoom landing late on Windows, the
+// column's contents changing), not just when Live is drawn
+let follow = null;
+function followBoxes() {
+  follow?.disconnect();
+  follow = new ResizeObserver(() => requestAnimationFrame(placeChat));
+  for (const id of ['kchat', 'kstream']) {
+    const el = document.getElementById(id);
+    if (el) follow.observe(el);
+  }
 }
 
 // Live's and the popover's Copy beside an armed auto bet: its status, and whether Copy is dimmed (an auto bet on this
@@ -107,7 +119,10 @@ export function besideCopy(a) {
 }
 
 // Hides the chat webview (another tab is showing)
-export const hideChat = () => invoke('chat_place', { spot: { x: 0, y: 0, w: 0, h: 0, visible: false }, stream: null }).catch(() => {});
+export const hideChat = () => {
+  follow?.disconnect();
+  return invoke('chat_place', { spot: { x: 0, y: 0, w: 0, h: 0, visible: false }, stream: null, pageWidth: null }).catch(() => {});
+};
 
 let tick = null;
 
@@ -128,4 +143,5 @@ export function wireColumn(app, rerender) {
   const cd = document.getElementById('kcd');
   if (cd) tick = setInterval(() => (cd.textContent = Math.max(1, Math.ceil((state.auto.countdown_until - Date.now()) / 1000))), 250);
   placeChat();
+  followBoxes();
 }

@@ -101,9 +101,8 @@ pub fn reading_for(shared: &Shared, key: &str) -> Option<(String, [u32; 3])> {
     shared.stream.lock().unwrap().reading.as_ref().filter(|r| r.key == key).map(|r| (r.side.clone(), r.stats))
 }
 
-/// Live's spot for the player (above the chat), or none when Live isn't showing it.
-pub fn place(app: &AppHandle, shared: &Shared, spot: Option<Spot>) {
-    let zoom = *shared.zoom.lock().unwrap();
+/// Live's spot for the player (above the chat), or none when Live isn't showing it, at the page's zoom.
+pub fn place(app: &AppHandle, shared: &Shared, spot: Option<Spot>, zoom: f64) {
     let at = spot
         .filter(|s| s.visible && s.w > 40.0 && s.h > 40.0)
         .map(|s| (LogicalPosition::new(s.x * zoom, s.y * zoom), LogicalSize::new(s.w * zoom, s.h * zoom)));
